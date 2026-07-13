@@ -102,8 +102,72 @@ func main() {
 		fmt.Printf("  %s: %s (%d raw terminals)\n", a.EquipmentID, a.Message, len(a.Terminals))
 	}
 
-	nodes, edges := common.BuildNodesAndEdges(resolved)
-	fmt.Printf("\nbuilt %d Nodes, %d Edges\n", len(nodes), len(edges))
+	contStart := time.Now()
+	containers, err := common.BuildContainers(store, result.Version, 1000, resolved)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "building containers: %v\n", err)
+		os.Exit(1)
+	}
+	byType := map[string]int{}
+	for _, c := range containers.Containers {
+		byType[string(c.Type)]++
+	}
+	fmt.Printf("\ncontainers: %d total (%s)\n", len(containers.Containers), time.Since(contStart))
+	for _, t := range []string{"substation", "bay", "busbar", "acline", "junction", "distribution-box"} {
+		fmt.Printf("  %-18s %d\n", t, byType[t])
+	}
+	fmt.Printf("equipment assigned to a container: %d / %d resolved\n", len(containers.EquipmentToCont), len(resolved))
+	fmt.Printf("container anomalies: %d\n", len(containers.Anomalies))
+	for i, a := range containers.Anomalies {
+		if i >= 15 {
+			fmt.Printf("  ... and %d more\n", len(containers.Anomalies)-i)
+			break
+		}
+		fmt.Printf("  %s: %s\n", a.ObjectID, a.Message)
+	}
+	fmt.Printf("cim:Line references kept as Sachdaten (untrusted): %d\n", len(containers.LineRefs))
+
+	// acline chain size distribution — sanity check for the topology-based
+	// grouping (see BuildContainers doc comment).
+	chainSize := map[string]int{}
+	for _, cid := range containers.EquipmentToCont {
+		chainSize[cid]++
+	}
+	sizeHist := map[int]int{}
+	for cid, n := range chainSize {
+		if byType["acline"] > 0 {
+			for _, c := range containers.Containers {
+				if c.ID == cid && c.Type == common.ContainerTypeACLine {
+					sizeHist[n]++
+				}
+			}
+		}
+	}
+	fmt.Printf("acline chain size histogram (segments per acline container): %v\n", sizeHist)
+
+	busbarContainerSet := map[string]bool{}
+	for _, c := range containers.Containers {
+		if c.Type == common.ContainerTypeBusbar {
+			busbarContainerSet[c.ID] = true
+		}
+	}
+	busbarSectionIDs := map[string]bool{}
+	for eqID, contID := range containers.EquipmentToCont {
+		if busbarContainerSet[contID] {
+			busbarSectionIDs[eqID] = true
+		}
+	}
+	mergedResolved := common.MergeBusbarSectionNodes(resolved, containers, busbarSectionIDs)
+	merges := 0
+	for eqID := range busbarSectionIDs {
+		if mergedResolved[eqID].Node1 != resolved[eqID].Node1 {
+			merges++
+		}
+	}
+	fmt.Printf("\nbusbar-section nodes remapped (previously disconnected, same busbar container): %d\n", merges)
+
+	nodes, edges := common.BuildNodesAndEdges(mergedResolved, busbarSectionIDs)
+	fmt.Printf("built %d Nodes, %d Edges\n", len(nodes), len(edges))
 	gndEdges := 0
 	for _, e := range edges {
 		if e.Terminal2NodeID == common.GNDNodeID {
@@ -180,49 +244,6 @@ func main() {
 		}
 	}
 
-	contStart := time.Now()
-	containers, err := common.BuildContainers(store, result.Version, 1000, resolved)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "building containers: %v\n", err)
-		os.Exit(1)
-	}
-	byType := map[string]int{}
-	for _, c := range containers.Containers {
-		byType[string(c.Type)]++
-	}
-	fmt.Printf("\ncontainers: %d total (%s)\n", len(containers.Containers), time.Since(contStart))
-	for _, t := range []string{"substation", "bay", "busbar", "acline", "junction", "distribution-box"} {
-		fmt.Printf("  %-18s %d\n", t, byType[t])
-	}
-	fmt.Printf("equipment assigned to a container: %d / %d resolved\n", len(containers.EquipmentToCont), len(resolved))
-	fmt.Printf("container anomalies: %d\n", len(containers.Anomalies))
-	for i, a := range containers.Anomalies {
-		if i >= 15 {
-			fmt.Printf("  ... and %d more\n", len(containers.Anomalies)-i)
-			break
-		}
-		fmt.Printf("  %s: %s\n", a.ObjectID, a.Message)
-	}
-	fmt.Printf("cim:Line references kept as Sachdaten (untrusted): %d\n", len(containers.LineRefs))
-
-	// acline chain size distribution — sanity check for the topology-based
-	// grouping (see BuildContainers doc comment).
-	chainSize := map[string]int{}
-	for _, cid := range containers.EquipmentToCont {
-		chainSize[cid]++
-	}
-	sizeHist := map[int]int{}
-	for cid, n := range chainSize {
-		if byType["acline"] > 0 {
-			for _, c := range containers.Containers {
-				if c.ID == cid && c.Type == common.ContainerTypeACLine {
-					sizeHist[n]++
-				}
-			}
-		}
-	}
-	fmt.Printf("acline chain size histogram (segments per acline container): %v\n", sizeHist)
-
 	equipmentIDs := map[string]bool{}
 	for eqID := range resolved {
 		equipmentIDs[eqID] = true
@@ -240,7 +261,7 @@ func main() {
 	fmt.Printf("\ngeometries resolved: %d (0 expected — Espheim ships no GL profile) (%s)\n", len(geometries), time.Since(geoStart))
 
 	phase3Start := time.Now()
-	phase3, err := common.CheckInvariants(store, result.Version, resolved, containers, nodes, edges)
+	phase3, err := common.CheckInvariants(store, result.Version, mergedResolved, containers, nodes, edges)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "phase3: %v\n", err)
 		os.Exit(1)

@@ -4,8 +4,20 @@
 // becomes a Node (see Konzept.md/model decision: "ConnectivityNode wird zu
 // Node", uniformly, no special-casing); every Equipment with two terminals
 // becomes an Edge; every Equipment with one terminal (single-terminal
-// source/sink) becomes an Edge whose second connection is the single,
-// shared GND node.
+// source/sink, e.g. EnergyConsumer/PowerElectronicsConnection/
+// SynchronousMachine) becomes an Edge whose second connection is the
+// single, shared GND node.
+//
+// BusbarSection is the one documented exception (found + fixed with the
+// user 2026-07-13): real CGMES data gives it exactly one Terminal too, but
+// it is NOT a source/sink — it is purely a Node-role marker for its own
+// ConnectivityNode (see Konzept.md, "individual BusbarSection objects ARE
+// Nodes"). Wiring it to GND like a genuine single-terminal source/sink was
+// a bug: it silently linked otherwise-unrelated busbars together through
+// the one shared GND node, masking real disconnected-busbar anomalies that
+// checkConnectivity (consistency.go) should have caught. BusbarSection IDs
+// (passed in via nodeOnlyIDs) contribute only their own Node1 to the Nodes
+// set — no Edge, no GND link.
 package common
 
 import (
@@ -23,9 +35,13 @@ const GNDNodeID = "GND"
 // BuildNodesAndEdges turns the resolved EquipmentTerminals map into
 // model.Node and model.Edge values. Nodes are deduplicated (a
 // ConnectivityNode referenced by many Equipments still yields one Node),
-// and the GND node is added exactly once, only if at least one
-// single-terminal Equipment actually needs it.
-func BuildNodesAndEdges(resolved map[string]EquipmentTerminals) ([]coremodel.Node, []coremodel.Edge) {
+// and the GND node is added exactly once, only if at least one genuine
+// single-terminal source/sink Equipment actually needs it. nodeOnlyIDs
+// marks Equipment (currently: BusbarSection) that has exactly one Terminal
+// but is NOT a source/sink — it contributes only its own Node1 to the
+// Nodes set, no Edge is created for it at all (see this file's doc
+// comment).
+func BuildNodesAndEdges(resolved map[string]EquipmentTerminals, nodeOnlyIDs map[string]bool) ([]coremodel.Node, []coremodel.Edge) {
 	nodeIDs := map[string]bool{}
 	needsGND := false
 
@@ -39,6 +55,10 @@ func BuildNodesAndEdges(resolved map[string]EquipmentTerminals) ([]coremodel.Nod
 	for _, eqID := range equipmentIDs {
 		et := resolved[eqID]
 		nodeIDs[et.Node1] = true
+
+		if et.Node2 == "" && nodeOnlyIDs[eqID] {
+			continue // BusbarSection: Node-role marker only, no Edge
+		}
 
 		terminal2 := et.Node2
 		if terminal2 == "" {
