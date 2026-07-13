@@ -30,6 +30,20 @@ var structuralClasses = map[string]bool{
 	"BaseVoltage":      true, // shared many-to-one hub (e.g. all 220kV equipment points to the same BaseVoltage object) — must not bridge unrelated equipment together
 }
 
+// irrelevantClasses are classes outside JAG's domain entirely — never
+// emitted as Sachdaten and never walked into as a satellite, regardless of
+// how they're reached. Currently this is the CGMES DL (Diagram Layout)
+// profile: Diagram/DiagramObject/DiagramObjectPoint are one-line-diagram
+// rendering hints (symbol position/rotation on a schematic canvas) with no
+// electrical or geographic meaning — not the same as the GL profile's real
+// WGS84 Location/PositionPoint, which JAG does model via Geometry. JAG has
+// no diagram-rendering use case, so this data is pure noise here.
+var irrelevantClasses = map[string]bool{
+	"Diagram":            true,
+	"DiagramObject":      true,
+	"DiagramObjectPoint": true,
+}
+
 // topologyAttributes are reference attributes already fully consumed by
 // Terminal/ConnectivityNode/Container resolution elsewhere — never
 // re-emitted as Sachdaten, and never walked as a satellite edge.
@@ -123,10 +137,10 @@ func collectAttributes(store staging.Store, version uint64, resolved map[string]
 	}
 
 	sort.Strings(neighbors)
-	if structuralClasses[class] && objID != ownerID {
-		// A structural object reached as a neighbor (shouldn't normally
-		// happen, since callers already filter structuralClasses before
-		// recursing, but guards against walking further from it).
+	if (structuralClasses[class] || irrelevantClasses[class]) && objID != ownerID {
+		// A structural/irrelevant object reached as a neighbor (shouldn't
+		// normally happen, since callers already filter these classes
+		// before recursing, but guards against walking further from it).
 		return out, nil
 	}
 	for _, n := range neighbors {
@@ -141,7 +155,7 @@ func collectAttributes(store staging.Store, version uint64, resolved map[string]
 		if len(nRecords) == 0 {
 			continue // dangling/external reference, see above
 		}
-		if structuralClasses[nRecords[0].Class] {
+		if structuralClasses[nRecords[0].Class] || irrelevantClasses[nRecords[0].Class] {
 			continue
 		}
 		if n != ownerID {
@@ -197,7 +211,7 @@ func collectAttributesFromRecords(store staging.Store, version uint64, resolved 
 		if len(nRecords) == 0 {
 			continue
 		}
-		if structuralClasses[nRecords[0].Class] {
+		if structuralClasses[nRecords[0].Class] || irrelevantClasses[nRecords[0].Class] {
 			continue
 		}
 		if n != ownerID {

@@ -7,7 +7,6 @@ import (
 	"sort"
 	"time"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
 	"gitlab.com/openk-nsc/jag/internal/impl/common"
 	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
 	"gitlab.com/openk-nsc/jag/internal/sqlite"
@@ -201,7 +200,7 @@ func main() {
 	for cid, n := range chainSize {
 		if byType["acline"] > 0 {
 			for _, c := range containers.Containers {
-				if c.ID == cid && c.Type == coremodel.ContainerTypeACLine {
+				if c.ID == cid && c.Type == common.ContainerTypeACLine {
 					sizeHist[n]++
 				}
 			}

@@ -6,29 +6,29 @@
 // logic that builds on these types lives in /internal/impl, never here.
 package model
 
-// ContainerType is the closed enum of allowed container types (see Konzept.md,
-// "Container / Hierarchie"). Umbrella term "substation" covers Substation,
-// Umschaltwerk, Mittelspannungsschaltanlage and Ortsnetzstation, distinguished
-// only via a Sachdaten key (e.g. station_kind), not separate container types.
+// ContainerType names a container's kind (e.g. "substation", "bay",
+// "busbar", "acline", "junction", "distribution-box"). The closed enum of
+// allowed values and the path-template validation rules (see Konzept.md,
+// "Container / Hierarchie") are deliberately NOT defined here — core has no
+// domain knowledge, not even in the form of which named constants exist.
+// They live in /internal/impl (business logic depending on core), so the
+// core stays a generic, domain-agnostic container tree; a semantic layer
+// above /internal/impl can later attach concrete meaning (e.g. typed
+// Ortsnetzstation/KVS/Trafo structs) without the core ever needing to know
+// about it.
 type ContainerType string
-
-const (
-	ContainerTypeSubstation      ContainerType = "substation"
-	ContainerTypeBay             ContainerType = "bay"
-	ContainerTypeBusbar          ContainerType = "busbar"
-	ContainerTypeACLine          ContainerType = "acline"
-	ContainerTypeJunction        ContainerType = "junction"
-	ContainerTypeDistributionBox ContainerType = "distribution-box"
-)
 
 // Container is a node in the strict container tree (exactly one immediate
 // parent, no multi-parenting). ParentID is empty for top-level containers
-// (e.g. Substation, ACLine, Junction).
+// (e.g. Substation, ACLine, Junction). Name/Label are deliberately not
+// struct fields here — like any other descriptive data they flow through
+// the generic Attribute (Sachdaten) mechanism instead, under reserved keys
+// (see /internal/impl/common's AttributeKeyName/AttributeKeyLabel), so
+// there is exactly one generic data channel for descriptive data rather
+// than two parallel ones. Historisation was dropped entirely (see
+// Konzept.md) — there is no Version field, Upsert always overwrites.
 type Container struct {
 	ID       string
-	Name     string
-	Label    string
-	Version  uint // currently always 1; historisation was dropped entirely
 	Type     ContainerType
 	ParentID string // empty for top-level containers
 }
@@ -46,12 +46,12 @@ const (
 // transformer, etc.). Node and Edge are not standalone objects — they are
 // composed roles of an Equipment (composition, not separate entities). Only
 // Equipment itself has a ContainerID; Node/Edge reference their Equipment via
-// EquipmentID and have no container membership of their own.
+// EquipmentID and have no container membership of their own. Name/Label are
+// deliberately not struct fields here — see Container's doc comment; they
+// flow through Attribute (Sachdaten) instead. Historisation was dropped
+// entirely (see Konzept.md) — there is no Version field.
 type Equipment struct {
 	ID          string
-	Name        string
-	Label       string
-	Version     uint // currently always 1; historisation was dropped entirely
 	ContainerID string
 }
 

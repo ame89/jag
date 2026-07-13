@@ -28,6 +28,7 @@ type ContainerAnomaly struct {
 type BuildContainersResult struct {
 	Containers      []coremodel.Container
 	EquipmentToCont map[string]string     // EquipmentID -> ContainerID
+	Attributes      []coremodel.Attribute // container name Sachdaten (AttributeKeyName), OwnerID = Container.ID — see core/model.Container's doc comment
 	LineRefs        []coremodel.Attribute // raw cim:Line reference kept as Sachdaten per equipment (untrusted, not used for container assignment)
 	Anomalies       []ContainerAnomaly
 }
@@ -93,8 +94,9 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 	for _, id := range subIDs {
 		subSet[id] = true
 		res.Containers = append(res.Containers, coremodel.Container{
-			ID: id, Name: subIdx.NameOf(id), Type: coremodel.ContainerTypeSubstation,
+			ID: id, Type: ContainerTypeSubstation,
 		})
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: subIdx.NameOf(id)})
 	}
 
 	vlIDs, vlIdx, err := scanClass(store, version, chunkSize, "VoltageLevel")
@@ -124,8 +126,9 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 			continue
 		}
 		res.Containers = append(res.Containers, coremodel.Container{
-			ID: id, Name: bayIdx.NameOf(id), Type: coremodel.ContainerTypeBay, ParentID: sub,
+			ID: id, Type: ContainerTypeBay, ParentID: sub,
 		})
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: bayIdx.NameOf(id)})
 		bayToContainer[id] = id
 	}
 
@@ -150,8 +153,9 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 	for _, vl := range vlKeys {
 		containerID := vl // busbar container ID derived from its VoltageLevel (no separate BusbarNode object exists in CGMES)
 		res.Containers = append(res.Containers, coremodel.Container{
-			ID: containerID, Name: vlIdx.NameOf(vl), Type: coremodel.ContainerTypeBusbar, ParentID: vlToSubstation[vl],
+			ID: containerID, Type: ContainerTypeBusbar, ParentID: vlToSubstation[vl],
 		})
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: containerID, Key: AttributeKeyName, Value: vlIdx.NameOf(vl)})
 		for _, bbID := range busbarByVL[vl] {
 			res.EquipmentToCont[bbID] = containerID
 		}
@@ -256,11 +260,12 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 			}
 		}
 	}
-	aclineContainers, aclineOf, err := buildACLineChains(aclIDs, resolved)
+	aclineContainers, aclineOf, aclineNames, err := buildACLineChains(aclIDs, resolved)
 	if err != nil {
 		return nil, err
 	}
 	res.Containers = append(res.Containers, aclineContainers...)
+	res.Attributes = append(res.Attributes, aclineNames...)
 	for segID, containerID := range aclineOf {
 		res.EquipmentToCont[segID] = containerID
 	}
@@ -277,7 +282,7 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 // the resulting chain — a stable, deterministic stand-in for "first and
 // last element" (Konzept.md), since true physical start/end ordering isn't
 // needed for a synthetic ID.
-func buildACLineChains(aclIDs []string, resolved map[string]EquipmentTerminals) ([]coremodel.Container, map[string]string, error) {
+func buildACLineChains(aclIDs []string, resolved map[string]EquipmentTerminals) ([]coremodel.Container, map[string]string, []coremodel.Attribute, error) {
 	parent := map[string]string{}
 	var find func(string) string
 	find = func(x string) string {
@@ -332,17 +337,19 @@ func buildACLineChains(aclIDs []string, resolved map[string]EquipmentTerminals) 
 	sort.Strings(roots)
 
 	var containers []coremodel.Container
+	var names []coremodel.Attribute
 	aclineOf := map[string]string{}
 	for _, root := range roots {
 		members := groups[root]
 		sort.Strings(members)
 		containerID := "acline:" + members[0] + ":" + members[len(members)-1]
 		containers = append(containers, coremodel.Container{
-			ID: containerID, Name: "ACLine " + members[0][:8], Type: coremodel.ContainerTypeACLine,
+			ID: containerID, Type: ContainerTypeACLine,
 		})
+		names = append(names, coremodel.Attribute{OwnerID: containerID, Key: AttributeKeyName, Value: "ACLine " + members[0][:8]})
 		for _, m := range members {
 			aclineOf[m] = containerID
 		}
 	}
-	return containers, aclineOf, nil
+	return containers, aclineOf, names, nil
 }
