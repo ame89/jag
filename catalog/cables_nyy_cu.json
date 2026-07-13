@@ -1,0 +1,227 @@
+[
+  {
+    "id": "cable.nyy.4x1.5",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x1.5",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 1.5,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 12.1,
+      "x_ohm_per_km": 0.09,
+      "max_i_a": 21
+    }
+  },
+  {
+    "id": "cable.nyy.4x2.5",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x2.5",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 2.5,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 7.41,
+      "x_ohm_per_km": 0.09,
+      "max_i_a": 28
+    }
+  },
+  {
+    "id": "cable.nyy.4x4",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x4",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 4,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 4.61,
+      "x_ohm_per_km": 0.09,
+      "max_i_a": 37
+    }
+  },
+  {
+    "id": "cable.nyy.4x6",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x6",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 6,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 3.08,
+      "x_ohm_per_km": 0.085,
+      "max_i_a": 47
+    }
+  },
+  {
+    "id": "cable.nyy.4x10",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x10",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 10,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 1.83,
+      "x_ohm_per_km": 0.085,
+      "max_i_a": 65
+    }
+  },
+  {
+    "id": "cable.nyy.4x16",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x16",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 16,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 1.15,
+      "x_ohm_per_km": 0.085,
+      "max_i_a": 85
+    }
+  },
+  {
+    "id": "cable.nyy.4x25",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x25",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 25,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.727,
+      "x_ohm_per_km": 0.083,
+      "max_i_a": 112
+    }
+  },
+  {
+    "id": "cable.nyy.4x35",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x35",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 35,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.524,
+      "x_ohm_per_km": 0.083,
+      "max_i_a": 136
+    }
+  },
+  {
+    "id": "cable.nyy.4x50",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity, interpolated)",
+      "designation": "NYY-J 4x50",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 50,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.387,
+      "x_ohm_per_km": 0.083,
+      "max_i_a": 156
+    }
+  },
+  {
+    "id": "cable.nyy.4x70",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x70",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 70,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.268,
+      "x_ohm_per_km": 0.08,
+      "max_i_a": 208
+    }
+  },
+  {
+    "id": "cable.nyy.4x95",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity, interpolated)",
+      "designation": "NYY-J 4x95",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 95,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.193,
+      "x_ohm_per_km": 0.08,
+      "max_i_a": 249
+    }
+  },
+  {
+    "id": "cable.nyy.4x120",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x120",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 120,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.153,
+      "x_ohm_per_km": 0.08,
+      "max_i_a": 282
+    }
+  },
+  {
+    "id": "cable.nyy.4x150",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity, interpolated)",
+      "designation": "NYY-J 4x150",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 150,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.124,
+      "x_ohm_per_km": 0.08,
+      "max_i_a": 320
+    }
+  },
+  {
+    "id": "cable.nyy.4x185",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity)",
+      "designation": "NYY-J 4x185",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 185,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.0991,
+      "x_ohm_per_km": 0.075,
+      "max_i_a": 363
+    }
+  },
+  {
+    "id": "cable.nyy.4x240",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "IEC 60228 (resistance) + VDE 0298-4 Tab.11 Verlegeart D (ampacity, interpolated)",
+      "designation": "NYY-J 4x240",
+      "material": "cu",
+      "cores": 4,
+      "cross_section_mm2": 240,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.0754,
+      "x_ohm_per_km": 0.065,
+      "max_i_a": 415
+    }
+  }
+]

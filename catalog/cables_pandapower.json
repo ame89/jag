@@ -1,0 +1,287 @@
+[
+  {
+    "id": "cable.pandapower.nayy-4x50-se",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NAYY 4x50 SE",
+      "material": "al",
+      "cross_section_mm2": 50,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.642,
+      "x_ohm_per_km": 0.083,
+      "c_nf_per_km": 210,
+      "max_i_a": 142.0
+    }
+  },
+  {
+    "id": "cable.pandapower.nayy-4x120-se",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NAYY 4x120 SE",
+      "material": "al",
+      "cross_section_mm2": 120,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.225,
+      "x_ohm_per_km": 0.08,
+      "c_nf_per_km": 264,
+      "max_i_a": 242.0
+    }
+  },
+  {
+    "id": "cable.pandapower.nayy-4x150-se",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NAYY 4x150 SE",
+      "material": "al",
+      "cross_section_mm2": 150,
+      "voltage_rating": "LV",
+      "r_ohm_per_km": 0.208,
+      "x_ohm_per_km": 0.08,
+      "c_nf_per_km": 261,
+      "max_i_a": 270.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x95-rm-25-12-20-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x95 RM/25 12/20 kV",
+      "material": "al",
+      "cross_section_mm2": 95,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.313,
+      "x_ohm_per_km": 0.132,
+      "c_nf_per_km": 216,
+      "max_i_a": 252.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x185-rm-25-12-20-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x185 RM/25 12/20 kV",
+      "material": "al",
+      "cross_section_mm2": 185,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.161,
+      "x_ohm_per_km": 0.117,
+      "c_nf_per_km": 273,
+      "max_i_a": 362.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x240-rm-25-12-20-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x240 RM/25 12/20 kV",
+      "material": "al",
+      "cross_section_mm2": 240,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.122,
+      "x_ohm_per_km": 0.112,
+      "c_nf_per_km": 304,
+      "max_i_a": 421.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x95-rm-25-6-10-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x95 RM/25 6/10 kV",
+      "material": "al",
+      "cross_section_mm2": 95,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.313,
+      "x_ohm_per_km": 0.123,
+      "c_nf_per_km": 315,
+      "max_i_a": 249.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x185-rm-25-6-10-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x185 RM/25 6/10 kV",
+      "material": "al",
+      "cross_section_mm2": 185,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.161,
+      "x_ohm_per_km": 0.11,
+      "c_nf_per_km": 406,
+      "max_i_a": 358.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x240-rm-25-6-10-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x240 RM/25 6/10 kV",
+      "material": "al",
+      "cross_section_mm2": 240,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.122,
+      "x_ohm_per_km": 0.105,
+      "c_nf_per_km": 456,
+      "max_i_a": 416.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x150-rm-25-12-20-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x150 RM/25 12/20 kV",
+      "material": "al",
+      "cross_section_mm2": 150,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.206,
+      "x_ohm_per_km": 0.116,
+      "c_nf_per_km": 250,
+      "max_i_a": 319.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x120-rm-25-12-20-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x120 RM/25 12/20 kV",
+      "material": "al",
+      "cross_section_mm2": 120,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.253,
+      "x_ohm_per_km": 0.119,
+      "c_nf_per_km": 230,
+      "max_i_a": 283.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x70-rm-25-12-20-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x70 RM/25 12/20 kV",
+      "material": "al",
+      "cross_section_mm2": 70,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.443,
+      "x_ohm_per_km": 0.132,
+      "c_nf_per_km": 190,
+      "max_i_a": 220.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x150-rm-25-6-10-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x150 RM/25 6/10 kV",
+      "material": "al",
+      "cross_section_mm2": 150,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.206,
+      "x_ohm_per_km": 0.11,
+      "c_nf_per_km": 360,
+      "max_i_a": 315.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x120-rm-25-6-10-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x120 RM/25 6/10 kV",
+      "material": "al",
+      "cross_section_mm2": 120,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.253,
+      "x_ohm_per_km": 0.113,
+      "c_nf_per_km": 340,
+      "max_i_a": 280.0
+    }
+  },
+  {
+    "id": "cable.pandapower.na2xs2y-1x70-rm-25-6-10-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "NA2XS2Y 1x70 RM/25 6/10 kV",
+      "material": "al",
+      "cross_section_mm2": 70,
+      "voltage_rating": "MV",
+      "r_ohm_per_km": 0.443,
+      "x_ohm_per_km": 0.123,
+      "c_nf_per_km": 280,
+      "max_i_a": 217.0
+    }
+  },
+  {
+    "id": "cable.pandapower.n2xs-fl-2y-1x120-rm-35-64-110-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "N2XS(FL)2Y 1x120 RM/35 64/110 kV",
+      "material": "al",
+      "cross_section_mm2": 120,
+      "voltage_rating": "HV",
+      "r_ohm_per_km": 0.153,
+      "x_ohm_per_km": 0.166,
+      "c_nf_per_km": 112,
+      "max_i_a": 366.0
+    }
+  },
+  {
+    "id": "cable.pandapower.n2xs-fl-2y-1x185-rm-35-64-110-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "N2XS(FL)2Y 1x185 RM/35 64/110 kV",
+      "material": "al",
+      "cross_section_mm2": 185,
+      "voltage_rating": "HV",
+      "r_ohm_per_km": 0.099,
+      "x_ohm_per_km": 0.156,
+      "c_nf_per_km": 125,
+      "max_i_a": 457.0
+    }
+  },
+  {
+    "id": "cable.pandapower.n2xs-fl-2y-1x240-rm-35-64-110-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "N2XS(FL)2Y 1x240 RM/35 64/110 kV",
+      "material": "al",
+      "cross_section_mm2": 240,
+      "voltage_rating": "HV",
+      "r_ohm_per_km": 0.075,
+      "x_ohm_per_km": 0.149,
+      "c_nf_per_km": 135,
+      "max_i_a": 526.0
+    }
+  },
+  {
+    "id": "cable.pandapower.n2xs-fl-2y-1x300-rm-35-64-110-kv",
+    "attributes": {
+      "catalog_kind": "cable",
+      "source": "pandapower std_types",
+      "designation": "N2XS(FL)2Y 1x300 RM/35 64/110 kV",
+      "material": "al",
+      "cross_section_mm2": 300,
+      "voltage_rating": "HV",
+      "r_ohm_per_km": 0.06,
+      "x_ohm_per_km": 0.144,
+      "c_nf_per_km": 144,
+      "max_i_a": 588.0
+    }
+  }
+]

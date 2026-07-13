@@ -81,6 +81,14 @@ func Open(path string) (*StagingStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("sqlite: creating staging schema: %w", err)
 	}
+	// Catalog schema is created here too (same physical database/connection
+	// pool, see (*StagingStore).Catalog) so a freshly opened database is
+	// always ready to be seeded via cmd/catalogimport, regardless of
+	// whether the caller ever touches staging at all.
+	if _, err := db.Exec(catalogSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite: creating catalog schema: %w", err)
+	}
 
 	return &StagingStore{db: db}, nil
 }

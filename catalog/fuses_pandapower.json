@@ -1,0 +1,813 @@
+[
+  {
+    "id": "fuse.pandapower.hv-100a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 100A",
+      "rated_current_a": 100.0,
+      "melting_curve_t_s": [
+        10.0,
+        3.64,
+        0.854,
+        0.281,
+        0.1,
+        0.0531,
+        0.022,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        300.0,
+        350.0,
+        450.0,
+        550.0,
+        700.0,
+        850.0,
+        1200.0,
+        1752.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-10a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 10A",
+      "rated_current_a": 10.0,
+      "melting_curve_t_s": [
+        10.0,
+        1675.0,
+        0.344,
+        0.156,
+        0.1,
+        0.0417,
+        0.0171,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        30.0,
+        32.0,
+        35.0,
+        37.0,
+        39.0,
+        50.0,
+        70.0,
+        88.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-125a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 125A",
+      "rated_current_a": 125.0,
+      "melting_curve_t_s": [
+        10.0,
+        1.82,
+        0.344,
+        0.1,
+        0.0467,
+        0.0269,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        375.0,
+        500.0,
+        700.0,
+        925.0,
+        1200.0,
+        1500.0,
+        2341.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-160a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 160A",
+      "rated_current_a": 160.0,
+      "melting_curve_t_s": [
+        10.0,
+        4.15,
+        1.03,
+        0.198,
+        0.1,
+        0.051,
+        0.0172,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        480.0,
+        550.0,
+        700.0,
+        1000.0,
+        1260.0,
+        1600.0,
+        2500.0,
+        3227.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-16a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 16A",
+      "rated_current_a": 16.0,
+      "melting_curve_t_s": [
+        10.0,
+        0.352,
+        0.164,
+        0.1,
+        0.0649,
+        0.0342,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        48.0,
+        60.0,
+        65.0,
+        71.0,
+        80.0,
+        100.0,
+        162.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-200a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 200A",
+      "rated_current_a": 200.0,
+      "melting_curve_t_s": [
+        10.0,
+        4.267,
+        1.21,
+        0.403,
+        0.1,
+        0.058,
+        0.022,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        600.0,
+        700.0,
+        900.0,
+        1150.0,
+        1665.0,
+        2000.0,
+        3000.0,
+        4313.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-20a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 20A",
+      "rated_current_a": 20.0,
+      "melting_curve_t_s": [
+        10.0,
+        1.3,
+        0.3,
+        0.155,
+        0.1,
+        0.0555,
+        0.023,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        60.0,
+        70.0,
+        80.0,
+        87.0,
+        94.0,
+        110.0,
+        150.0,
+        216.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-25a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 25A",
+      "rated_current_a": 25.0,
+      "melting_curve_t_s": [
+        10.0,
+        2.512,
+        0.833,
+        0.299,
+        0.1,
+        0.0372,
+        0.0223,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        75.0,
+        82.0,
+        90.0,
+        100.0,
+        124.0,
+        170.0,
+        200.0,
+        289.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-31-5a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 31.5A",
+      "rated_current_a": 31.5,
+      "melting_curve_t_s": [
+        10.0,
+        2.34,
+        0.722,
+        0.181,
+        0.1,
+        0.055,
+        0.0296,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        95.0,
+        110.0,
+        125.0,
+        150.0,
+        165.0,
+        200.0,
+        250.0,
+        390.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-40a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 40A",
+      "rated_current_a": 40.0,
+      "melting_curve_t_s": [
+        10.0,
+        1.3,
+        0.161,
+        0.1,
+        0.0611,
+        0.0399,
+        0.0141,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        120.0,
+        150.0,
+        200.0,
+        223.0,
+        260.0,
+        300.0,
+        450.0,
+        532.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-50a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 50A",
+      "rated_current_a": 50.0,
+      "melting_curve_t_s": [
+        10.0,
+        3.215,
+        0.597,
+        0.198,
+        0.1,
+        0.0378,
+        0.022,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        150.0,
+        170.0,
+        210.0,
+        250.0,
+        294.0,
+        400.0,
+        500.0,
+        711.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-6-3a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 6.3A",
+      "rated_current_a": 6.3,
+      "melting_curve_t_s": [
+        10.0,
+        1.39,
+        0.344,
+        0.168,
+        0.1,
+        0.056,
+        0.0263,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        19.0,
+        19.5,
+        20.4,
+        20.8,
+        22.0,
+        25.0,
+        32.0,
+        48.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-63a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 63A",
+      "rated_current_a": 63.0,
+      "melting_curve_t_s": [
+        10.0,
+        2.84,
+        0.368,
+        0.164,
+        0.1,
+        0.0621,
+        0.0378,
+        0.0195,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        189.0,
+        220.0,
+        300.0,
+        350.0,
+        393.0,
+        450.0,
+        530.0,
+        700.0,
+        961.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.hv-80a",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "HV 80A",
+      "rated_current_a": 80.0,
+      "melting_curve_t_s": [
+        10.0,
+        2.05,
+        0.369,
+        0.198,
+        0.1,
+        0.051,
+        0.0298,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        240.0,
+        300.0,
+        400.0,
+        450.0,
+        530.0,
+        650.0,
+        800.0,
+        1311.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-100",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-100",
+      "rated_current_a": 100.0,
+      "melting_curve_t_s": [
+        5400.0,
+        2000.0,
+        400.0,
+        20.0,
+        1.0,
+        0.2,
+        0.012,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        150.0,
+        190.0,
+        250.0,
+        430.0,
+        900.0,
+        1250.0,
+        2700.0,
+        3600.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-125",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-125",
+      "rated_current_a": 125.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        180.0,
+        400.0,
+        740.0,
+        2000.0,
+        4250.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-16",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-16",
+      "rated_current_a": 16.0,
+      "melting_curve_t_s": [
+        4000.0,
+        400.0,
+        2.0,
+        0.1,
+        0.04,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        26.0,
+        35.0,
+        75.0,
+        150.0,
+        200.0,
+        300.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-160",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-160",
+      "rated_current_a": 160.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        210.0,
+        500.0,
+        900.0,
+        2300.0,
+        5000.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-25",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-25",
+      "rated_current_a": 25.0,
+      "melting_curve_t_s": [
+        4000.0,
+        1000.0,
+        10.0,
+        0.2,
+        0.02,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        40.0,
+        50.0,
+        100.0,
+        210.0,
+        400.0,
+        500.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-50",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-50",
+      "rated_current_a": 50.0,
+      "melting_curve_t_s": [
+        4000.0,
+        40.0,
+        4.0,
+        1.0,
+        0.02,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        86.0,
+        200.0,
+        300.0,
+        400.0,
+        1000.0,
+        1280.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-63",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-63",
+      "rated_current_a": 63.0,
+      "melting_curve_t_s": [
+        4000.0,
+        100.0,
+        10.0,
+        2.0,
+        0.04,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        100.0,
+        200.0,
+        300.0,
+        400.0,
+        1000.0,
+        1500.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-1-80",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-1-80",
+      "rated_current_a": 80.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.01
+      ],
+      "melting_curve_i_a": [
+        150.58,
+        250.0,
+        450.0,
+        1150.0,
+        2470.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-1000",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-1000",
+      "rated_current_a": 1000.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        1900.0,
+        3500.0,
+        8400.0,
+        24000.0,
+        52000.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-200",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-200",
+      "rated_current_a": 200.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        280.0,
+        650.0,
+        1200.0,
+        3000.0,
+        7000.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-224",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-224",
+      "rated_current_a": 224.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.2,
+        0.04,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        400.0,
+        750.0,
+        1453.0,
+        3025.0,
+        4315.0,
+        7600.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-250",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-250",
+      "rated_current_a": 250.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        450.0,
+        800.0,
+        1650.0,
+        4000.0,
+        8500.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-315",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-315",
+      "rated_current_a": 315.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        550.0,
+        920.0,
+        1900.0,
+        5000.0,
+        11000.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-355",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-355",
+      "rated_current_a": 355.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        6.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        650.0,
+        1116.27,
+        2350.0,
+        5840.0,
+        12790.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-400",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-400",
+      "rated_current_a": 400.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        720.0,
+        1350.0,
+        2800.0,
+        6500.0,
+        15000.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-425",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-425",
+      "rated_current_a": 425.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        850.0,
+        1500.0,
+        3050.0,
+        7500.0,
+        16500.0
+      ]
+    }
+  },
+  {
+    "id": "fuse.pandapower.siemens-nh-2-630",
+    "attributes": {
+      "catalog_kind": "fuse",
+      "source": "pandapower std_types",
+      "designation": "Siemens NH-2-630",
+      "rated_current_a": 630.0,
+      "melting_curve_t_s": [
+        4800.0,
+        120.0,
+        7.0,
+        0.1,
+        0.004
+      ],
+      "melting_curve_i_a": [
+        1200.0,
+        2000.0,
+        4800.0,
+        12000.0,
+        26000.0
+      ]
+    }
+  }
+]
