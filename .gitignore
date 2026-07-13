@@ -9,4 +9,5 @@ out/
 .idea/
 examples/
 spec/
+.data/
 out*.*
