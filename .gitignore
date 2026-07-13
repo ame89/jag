@@ -1,0 +1,12 @@
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.dll
+.env.local
+out/
+.github/
+.history/
+.idea/
+examples/
+spec/
+out*.*
