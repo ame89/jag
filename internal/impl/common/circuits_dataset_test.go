@@ -26,8 +26,14 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 		wantSizesDesc []int // Node count per Circuit, descending; nil if 0 Circuits
 	}{
 		{
-			dir:          "BaseCase_Complete",
-			wantCircuits: 0, // pure bus-branch model: no ConnectivityNode/Edge at all
+			// Pure bus-branch model: no ConnectivityNode at all, only
+			// Terminal.TopologicalNode references (see terminals.go's
+			// ResolveTerminals fallback). Before that fallback existed,
+			// every Terminal failed to resolve and the model imported
+			// empty (0 Circuits) — this now reflects the real topology.
+			dir:           "BaseCase_Complete",
+			wantCircuits:  3,
+			wantSizesDesc: []int{105, 12, 1},
 		},
 		{
 			dir:           "MicroGrid_NL_BusCoupler",

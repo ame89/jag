@@ -574,8 +574,30 @@ func checkKVSNoTransformer(store staging.Store, version uint64, cr *BuildContain
 // objects, naming the object's own ID plus its CIM class directly in the
 // message so it's immediately clear which element in the source file is
 // dangling.
+//
+// Pure bus-branch CGMES sources have no ConnectivityNode class at all (see
+// terminals.go's ResolveTerminals fallback / Konzept.md's "CGMES kennt zwei
+// grundverschiedene Modellvarianten") — there, TopologicalNode is the only
+// node layer, referenced directly via Terminal.TopologicalNode. The same
+// "orphaned node" invariant is checked there too, so it isn't silently
+// skipped for such sources.
 func checkUnreferencedNodes(store staging.Store, version uint64) ([]InvariantViolation, error) {
-	nodeIDs, _, err := scanClass(store, version, 1000, "ConnectivityNode")
+	connViolations, err := checkUnreferencedNodesOfClass(store, version, "ConnectivityNode", "Terminal.ConnectivityNode")
+	if err != nil {
+		return nil, err
+	}
+	topoViolations, err := checkUnreferencedNodesOfClass(store, version, "TopologicalNode", "Terminal.TopologicalNode")
+	if err != nil {
+		return nil, err
+	}
+	return append(connViolations, topoViolations...), nil
+}
+
+// checkUnreferencedNodesOfClass is the shared implementation behind
+// checkUnreferencedNodes for one (node class, referencing Terminal
+// attribute) pair.
+func checkUnreferencedNodesOfClass(store staging.Store, version uint64, class, refAttribute string) ([]InvariantViolation, error) {
+	nodeIDs, _, err := scanClass(store, version, 1000, class)
 	if err != nil {
 		return nil, err
 	}
@@ -584,11 +606,11 @@ func checkUnreferencedNodes(store staging.Store, version uint64) ([]InvariantVio
 	for _, id := range nodeIDs {
 		refs, err := store.GetReferencesTo(version, id)
 		if err != nil {
-			return nil, fmt.Errorf("common: checking references to ConnectivityNode %s: %w", id, err)
+			return nil, fmt.Errorf("common: checking references to %s %s: %w", class, id, err)
 		}
 		count := 0
 		for _, r := range refs {
-			if r.IsReference && r.Attribute == "Terminal.ConnectivityNode" {
+			if r.IsReference && r.Attribute == refAttribute {
 				count++
 			}
 		}
@@ -596,7 +618,7 @@ func checkUnreferencedNodes(store staging.Store, version uint64) ([]InvariantVio
 			violations = append(violations, InvariantViolation{
 				ObjectID: id,
 				Rule:     "unreferenced-node",
-				Message:  fmt.Sprintf("ConnectivityNode %s (CIM class ConnectivityNode) is never referenced by any Terminal.ConnectivityNode — reference count 0", id),
+				Message:  fmt.Sprintf("%s %s (CIM class %s) is never referenced by any %s — reference count 0", class, id, class, refAttribute),
 			})
 		}
 	}

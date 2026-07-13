@@ -21,7 +21,7 @@ import (
 // not stored as a real Terminal in the source data).
 type EquipmentTerminals struct {
 	EquipmentID string
-	Node1       string // ConnectivityNode ID at sequenceNumber 1
+	Node1       string // ConnectivityNode ID at sequenceNumber 1 (or TopologicalNode ID, bus-branch fallback — see scanTerminals)
 	Node2       string // ConnectivityNode ID at sequenceNumber 2, if any (empty for single-terminal source/sink)
 }
 
@@ -125,6 +125,18 @@ func scanTerminals(store staging.Store, version uint64, chunkSize int) (map[stri
 		for _, tID := range ids {
 			eqID := idx.Ref(tID, "Terminal.ConductingEquipment")
 			node := idx.Ref(tID, "Terminal.ConnectivityNode")
+			if node == "" {
+				// Pure bus-branch CGMES sources have no ConnectivityNode
+				// layer at all (see Konzept.md's "CGMES kennt zwei
+				// grundverschiedene Modellvarianten"): the Terminal's node
+				// reference is carried directly as Terminal.TopologicalNode
+				// (TP profile) instead. JAG has no finer physical layer to
+				// recover there, so it falls back to using the
+				// TopologicalNode ID as the Node identity directly — this
+				// is the already-decided, already-electrically-reduced
+				// view for such sources, not a guess.
+				node = idx.Ref(tID, "Terminal.TopologicalNode")
+			}
 			seq := idx.Attr(tID, "ACDCTerminal.sequenceNumber")
 
 			// A malformed Terminal without ConductingEquipment has no
@@ -223,7 +235,7 @@ func classifyTerminals(eqID string, terms []rawTerminal) (EquipmentTerminals, bo
 	seen := map[string]string{} // sequenceNumber -> ConnectivityNode
 	for _, t := range terms {
 		if t.ConnectivityNode == "" {
-			return EquipmentTerminals{}, false, fmt.Sprintf("terminal %s has no ConnectivityNode", t.TerminalID)
+			return EquipmentTerminals{}, false, fmt.Sprintf("terminal %s has no ConnectivityNode and no TopologicalNode", t.TerminalID)
 		}
 		if _, dup := seen[t.SequenceNumber]; dup {
 			return EquipmentTerminals{}, false, fmt.Sprintf("duplicate sequenceNumber %q", t.SequenceNumber)
