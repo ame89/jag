@@ -41,6 +41,18 @@ type Phase3Result struct {
 //   - "bay-cable-count": at most one cable/ACLine may be connected to any
 //     one Bay (decided explicitly with the user 2026-07-13; a Bay/Feeder
 //     can have zero or one outgoing cable connection, never two).
+//   - "container-path": every Container must fit one of the 6 decided
+//     parent-child path templates (Konzept.md, "Eltern-Kind-Regeln des
+//     Container-Baums") — wrong nesting (e.g. a busbar not directly under a
+//     substation/distribution-box) is a hard error.
+//   - "kvs-no-transformer": a distribution-box (KVS) container must never
+//     have a PowerTransformer assigned to it (Konzept.md, explicit decision).
+//   - "unreferenced-node": a ConnectivityNode object with reference count 0
+//     is an error (Idee.md's invariant list) — previously only an ad-hoc
+//     diagnostic in cmd/phase2check, now a formal Phase 3 rule.
+//   - "equipment-without-container": every resolved Equipment must be
+//     assigned to exactly one container (Konzept.md's invariant list: "Jedes
+//     Betriebsmittel muss ... einem Container zugeordnet sein").
 //
 // resolved/containersResult/nodes/edges are exactly what Phase 2's
 // ResolveTerminals/BuildContainers/BuildNodesAndEdges already produced —
@@ -64,6 +76,26 @@ func CheckInvariants(
 	result.Violations = append(result.Violations, checkConnectivity(nodes, edges)...)
 
 	result.Violations = append(result.Violations, checkBayCableCount(resolved, containersResult)...)
+
+	result.Violations = append(result.Violations, checkContainerPaths(containersResult)...)
+
+	kvsViolations, err := checkKVSNoTransformer(store, version, containersResult)
+	if err != nil {
+		return result, fmt.Errorf("common: checking KVS-no-transformer: %w", err)
+	}
+	result.Violations = append(result.Violations, kvsViolations...)
+
+	unreferencedViolations, err := checkUnreferencedNodes(store, version)
+	if err != nil {
+		return result, fmt.Errorf("common: checking unreferenced nodes: %w", err)
+	}
+	result.Violations = append(result.Violations, unreferencedViolations...)
+
+	missingContainerViolations, err := checkEquipmentWithoutContainer(store, version, resolved, containersResult)
+	if err != nil {
+		return result, fmt.Errorf("common: checking equipment-without-container: %w", err)
+	}
+	result.Violations = append(result.Violations, missingContainerViolations...)
 
 	return result, nil
 }
@@ -398,5 +430,216 @@ func checkBayCableCount(resolved map[string]EquipmentTerminals, cr *BuildContain
 		})
 	}
 	return violations
+}
+
+// checkContainerPaths enforces "every Container must fit one of the 6
+// decided parent-child path templates" (Konzept.md, "Eltern-Kind-Regeln des
+// Container-Baums"): substation/acline/junction/distribution-box are
+// top-level (no parent, per the Stations-/Kabel-/Muffen-/KVS-Struktur
+// templates); bay/busbar must be parented directly under a substation or
+// distribution-box (per the Stations-/Sammelschienen-/KVS-Struktur
+// templates). Wrong nesting is reported with both the offending
+// container's own ID+type and (if resolvable) its parent's ID+type, so a
+// user can immediately see which container from the CIM-derived hierarchy
+// is misplaced.
+func checkContainerPaths(cr *BuildContainersResult) []InvariantViolation {
+	byID := make(map[string]coremodel.Container, len(cr.Containers))
+	for _, c := range cr.Containers {
+		byID[c.ID] = c
+	}
+
+	ids := make([]string, 0, len(cr.Containers))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	var violations []InvariantViolation
+	for _, id := range ids {
+		c := byID[id]
+		switch c.Type {
+		case ContainerTypeSubstation, ContainerTypeACLine, ContainerTypeJunction, ContainerTypeDistributionBox:
+			if c.ParentID != "" {
+				violations = append(violations, InvariantViolation{
+					ObjectID: id,
+					Rule:     "container-path",
+					Message: fmt.Sprintf(
+						"container %s (type %q) must be top-level per its path template, but has parent %s",
+						id, c.Type, describeContainer(byID, c.ParentID),
+					),
+				})
+			}
+		case ContainerTypeBay, ContainerTypeBusbar:
+			if c.ParentID == "" {
+				violations = append(violations, InvariantViolation{
+					ObjectID: id,
+					Rule:     "container-path",
+					Message: fmt.Sprintf(
+						"container %s (type %q) has no parent, but must be nested directly under a substation or distribution-box container",
+						id, c.Type,
+					),
+				})
+				continue
+			}
+			parent, ok := byID[c.ParentID]
+			if !ok {
+				violations = append(violations, InvariantViolation{
+					ObjectID: id,
+					Rule:     "container-path",
+					Message: fmt.Sprintf(
+						"container %s (type %q) references parent container %s, which does not exist in the built container set",
+						id, c.Type, c.ParentID,
+					),
+				})
+				continue
+			}
+			if parent.Type != ContainerTypeSubstation && parent.Type != ContainerTypeDistributionBox {
+				violations = append(violations, InvariantViolation{
+					ObjectID: id,
+					Rule:     "container-path",
+					Message: fmt.Sprintf(
+						"container %s (type %q) has parent %s (type %q), but its path template requires a substation or distribution-box parent",
+						id, c.Type, c.ParentID, parent.Type,
+					),
+				})
+			}
+		}
+	}
+	return violations
+}
+
+// describeContainer renders a short "id (type X)" description for a
+// container ID, falling back to "id (unknown container)" when the parent
+// itself can't be resolved — used to keep container-path violation
+// messages self-contained even when the parent reference is dangling.
+func describeContainer(byID map[string]coremodel.Container, id string) string {
+	if c, ok := byID[id]; ok {
+		return fmt.Sprintf("%s (type %q)", id, c.Type)
+	}
+	return fmt.Sprintf("%s (unknown container)", id)
+}
+
+// checkKVSNoTransformer enforces the explicit decision "a KVS
+// (distribution-box) container must never have a PowerTransformer assigned
+// to it" (Konzept.md). It scans the PowerTransformer class directly
+// (chunked, see staging.Store.GetByClass/scanClass) rather than relying
+// only on already-resolved Equipment, so a mis-nested Transformer is
+// reported under its own specific rule name (not just generically via
+// checkContainerPaths), with the PowerTransformer's own ID and its
+// distribution-box container's ID both named in the message.
+func checkKVSNoTransformer(store staging.Store, version uint64, cr *BuildContainersResult) ([]InvariantViolation, error) {
+	kvsIDs := map[string]bool{}
+	for _, c := range cr.Containers {
+		if c.Type == ContainerTypeDistributionBox {
+			kvsIDs[c.ID] = true
+		}
+	}
+	if len(kvsIDs) == 0 {
+		return nil, nil
+	}
+
+	transformerIDs, _, err := scanClass(store, version, 1000, "PowerTransformer")
+	if err != nil {
+		return nil, err
+	}
+
+	var violations []InvariantViolation
+	for _, id := range transformerIDs {
+		contID := cr.EquipmentToCont[id]
+		if contID != "" && kvsIDs[contID] {
+			violations = append(violations, InvariantViolation{
+				ObjectID: id,
+				Rule:     "kvs-no-transformer",
+				Message: fmt.Sprintf(
+					"PowerTransformer %s is assigned to distribution-box (KVS) container %s, but a KVS must never contain a Transformer",
+					id, contID,
+				),
+			})
+		}
+	}
+	return violations, nil
+}
+
+// checkUnreferencedNodes enforces "a ConnectivityNode object with reference
+// count 0 is an error" (Idee.md's invariant list; previously only an ad-hoc
+// diagnostic in cmd/phase2check). It scans the raw ConnectivityNode class
+// (chunked) and, for each one, counts incoming Terminal.ConnectivityNode
+// references directly against the staging store (staging.Store.
+// GetReferencesTo) rather than checking membership in the already-built
+// Node set: the built Node set can legitimately omit a ConnectivityNode's
+// original ID after BusbarSection auto-merging (see busbarmerge.go), which
+// would make a membership-based check report a false positive for a node
+// that is, in fact, correctly wired up. Checking the raw reference count
+// against the staging data instead reports only genuinely orphaned CIM
+// objects, naming the object's own ID plus its CIM class directly in the
+// message so it's immediately clear which element in the source file is
+// dangling.
+func checkUnreferencedNodes(store staging.Store, version uint64) ([]InvariantViolation, error) {
+	nodeIDs, _, err := scanClass(store, version, 1000, "ConnectivityNode")
+	if err != nil {
+		return nil, err
+	}
+
+	var violations []InvariantViolation
+	for _, id := range nodeIDs {
+		refs, err := store.GetReferencesTo(version, id)
+		if err != nil {
+			return nil, fmt.Errorf("common: checking references to ConnectivityNode %s: %w", id, err)
+		}
+		count := 0
+		for _, r := range refs {
+			if r.IsReference && r.Attribute == "Terminal.ConnectivityNode" {
+				count++
+			}
+		}
+		if count == 0 {
+			violations = append(violations, InvariantViolation{
+				ObjectID: id,
+				Rule:     "unreferenced-node",
+				Message:  fmt.Sprintf("ConnectivityNode %s (CIM class ConnectivityNode) is never referenced by any Terminal.ConnectivityNode — reference count 0", id),
+			})
+		}
+	}
+	return violations, nil
+}
+
+// checkEquipmentWithoutContainer enforces "every resolved Equipment must be
+// assigned to exactly one container" (Konzept.md's invariant list). This is
+// a completeness check complementary to BuildContainers' own Anomalies list
+// (which only reports *invalid*/unresolvable container references, not
+// *missing* ones): any Equipment ID present in `resolved` (i.e. it passed
+// Terminal resolution) but absent from EquipmentToCont never got a
+// container assigned at all. The CIM class of each affected Equipment is
+// looked up directly (store.GetByID) so the message names both its ID and
+// its concrete CIM type, e.g. "Breaker abc123 has no assigned container",
+// making it immediately clear which kind of element in the source file is
+// missing its Equipment.EquipmentContainer.
+func checkEquipmentWithoutContainer(store staging.Store, version uint64, resolved map[string]EquipmentTerminals, cr *BuildContainersResult) ([]InvariantViolation, error) {
+	var equipmentIDs []string
+	for id := range resolved {
+		equipmentIDs = append(equipmentIDs, id)
+	}
+	sort.Strings(equipmentIDs)
+
+	var violations []InvariantViolation
+	for _, id := range equipmentIDs {
+		if _, ok := cr.EquipmentToCont[id]; ok {
+			continue
+		}
+		class := "unknown class"
+		records, err := store.GetByID(version, id)
+		if err != nil {
+			return nil, fmt.Errorf("common: looking up class of equipment %s: %w", id, err)
+		}
+		if len(records) > 0 {
+			class = records[0].Class
+		}
+		violations = append(violations, InvariantViolation{
+			ObjectID: id,
+			Rule:     "equipment-without-container",
+			Message:  fmt.Sprintf("%s %s has no assigned container (Equipment.EquipmentContainer missing or unresolved)", class, id),
+		})
+	}
+	return violations, nil
 }
 
