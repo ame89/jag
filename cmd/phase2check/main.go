@@ -282,5 +282,45 @@ func main() {
 		fmt.Printf("  [%s] %s: %s\n", v.Rule, v.ObjectID, v.Message)
 	}
 
+	// PROTOTYPE: electrical topology (Zero-Ohm reduction), not yet wired
+	// into CheckInvariants/Phase 3 — see internal/impl/common/electrical.go.
+	elecStart := time.Now()
+	groups, switches, err := common.BuildElectricalGroups(store, result.Version, nodes, edges, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "electrical topology: %v\n", err)
+		os.Exit(1)
+	}
+	closed, open := 0, 0
+	byClass := map[string]int{}
+	for _, s := range switches {
+		byClass[s.Class]++
+		if s.Open {
+			open++
+		} else {
+			closed++
+		}
+	}
+	distinctGroups := map[string]bool{}
+	for _, g := range groups {
+		distinctGroups[g] = true
+	}
+	fmt.Printf("\nelectrical topology (prototype): %d switch-like equipment (closed=%d, open=%d), classes=%v\n", len(switches), closed, open, byClass)
+	fmt.Printf("  %d physical Nodes reduced to %d electrical groups (%s)\n", len(nodes), len(distinctGroups), time.Since(elecStart))
+
+	mismatchStart := time.Now()
+	mismatches, err := common.CheckElectricalTopologyAgainstCGMES(store, result.Version, groups)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "electrical topology cross-check: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("  cross-check vs. CGMES TopologicalNode: %d mismatches (%s)\n", len(mismatches), time.Since(mismatchStart))
+	for i, m := range mismatches {
+		if i >= 15 {
+			fmt.Printf("    ... and %d more\n", len(mismatches)-i)
+			break
+		}
+		fmt.Printf("    [%s] %s: %s\n", m.Rule, m.ObjectID, m.Message)
+	}
+
 	fmt.Printf("\ntotal wall-clock (open+phase1+phase2+phase3): %s\n", time.Since(overallStart))
 }
