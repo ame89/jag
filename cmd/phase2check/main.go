@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"sort"
 	"time"
 
@@ -16,6 +17,20 @@ func main() {
 	dir := "examples/cgmes/ReliCapGrid_Espheim"
 	if len(os.Args) > 1 {
 		dir = os.Args[1]
+	}
+
+	if cpuProfilePath := os.Getenv("JAG_CPU_PROFILE"); cpuProfilePath != "" {
+		f, err := os.Create(cpuProfilePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "creating cpu profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "starting cpu profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	files, err := filepath.Glob(filepath.Join(dir, "*.xml"))

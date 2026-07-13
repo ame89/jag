@@ -94,6 +94,14 @@ func RunCGMESFiles(store staging.Store, files []string) (Result, error) {
 		return Result{Version: version, RecordCount: recordCount, Errors: stagingErrs}, fmt.Errorf("phase1: final flush: %w", err)
 	}
 
+	// Build read-side indexes once, now that all rows are in — cheaper
+	// than maintaining them incrementally during the inserts above (see
+	// staging.Store.EnsureIndexes), and must happen before Phase 2 reads
+	// this version's data.
+	if err := store.EnsureIndexes(); err != nil {
+		return Result{Version: version, RecordCount: recordCount, Errors: stagingErrs}, fmt.Errorf("phase1: building indexes: %w", err)
+	}
+
 	if len(stagingErrs) > 0 {
 		if err := store.InsertErrors(stagingErrs); err != nil {
 			return Result{Version: version, RecordCount: recordCount, Errors: stagingErrs}, fmt.Errorf("phase1: inserting staging errors: %w", err)

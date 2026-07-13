@@ -26,12 +26,6 @@ CREATE TABLE IF NOT EXISTS staging_records (
     is_reference  INTEGER NOT NULL,
     seq           INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_staging_records_by_id
-    ON staging_records (version, id);
-CREATE INDEX IF NOT EXISTS idx_staging_records_by_class
-    ON staging_records (version, class, id);
-CREATE INDEX IF NOT EXISTS idx_staging_records_by_value
-    ON staging_records (version, value, is_reference);
 
 CREATE TABLE IF NOT EXISTS staging_errors (
     version       INTEGER NOT NULL,
@@ -96,6 +90,32 @@ func Open(path string) (*StagingStore, error) {
 // Close closes the underlying database handle.
 func (s *StagingStore) Close() error {
 	return s.db.Close()
+}
+
+// stagingIndexes creates the secondary indexes staging_records reads rely
+// on. Deliberately NOT part of stagingSchema/Open: building these once
+// after Phase 1's bulk insert has finished (via a single sorted pass over
+// already-inserted rows) is far cheaper than maintaining them incrementally
+// on every insert — profiling on a ~70k-row real CGMES model showed insert
+// time drop from ~5.6s to ~1.3s with index maintenance removed from the
+// write path. Read performance (GetByID/GetByClass/GetReferencesTo) is
+// unaffected as long as EnsureIndexes runs before those reads happen.
+const stagingIndexes = `
+CREATE INDEX IF NOT EXISTS idx_staging_records_by_id
+    ON staging_records (version, id);
+CREATE INDEX IF NOT EXISTS idx_staging_records_by_class
+    ON staging_records (version, class, id);
+CREATE INDEX IF NOT EXISTS idx_staging_records_by_value
+    ON staging_records (version, value, is_reference);
+`
+
+// EnsureIndexes (re-)creates the staging_records secondary indexes. See
+// staging.Store.EnsureIndexes for when callers must invoke this.
+func (s *StagingStore) EnsureIndexes() error {
+	if _, err := s.db.Exec(stagingIndexes); err != nil {
+		return fmt.Errorf("sqlite: creating staging indexes: %w", err)
+	}
+	return nil
 }
 
 // NextVersion atomically increments and returns the staging version

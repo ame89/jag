@@ -27,6 +27,17 @@ type Store interface {
 	// are free to chunk internally for their own statement-size limits).
 	InsertBatch(records []model.StagingRecord) error
 
+	// EnsureIndexes (re-)creates the secondary indexes staging_records
+	// reads depend on (GetByID/GetByClass/GetReferencesTo). Callers are
+	// expected to call this once, after all InsertBatch calls for a run
+	// have completed and before any Phase 2 reads happen — building an
+	// index once over already-inserted rows is far cheaper than
+	// maintaining it incrementally during bulk insert (see Konzept.md's
+	// performance-goals section: reads stay fast, writes are not
+	// penalized by read-side index maintenance). Safe/cheap to call
+	// again on an already-indexed store (a no-op).
+	EnsureIndexes() error
+
 	// InsertErrors bulk-inserts Phase 1 parse errors. A parse error does
 	// not abort the run (see Idee.md "Implementierungshinweise") — errors
 	// are collected here and reported once the phase has run to
