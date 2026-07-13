@@ -238,5 +238,28 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("\ngeometries resolved: %d (0 expected — Espheim ships no GL profile) (%s)\n", len(geometries), time.Since(geoStart))
-	fmt.Printf("\ntotal wall-clock (open+phase1+phase2): %s\n", time.Since(overallStart))
+
+	phase3Start := time.Now()
+	phase3, err := common.CheckInvariants(store, result.Version, resolved, containers, nodes, edges)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "phase3: %v\n", err)
+		os.Exit(1)
+	}
+	byRule := map[string]int{}
+	for _, v := range phase3.Violations {
+		byRule[v.Rule]++
+	}
+	fmt.Printf("\nphase3 invariant violations: %d (%s)\n", len(phase3.Violations), time.Since(phase3Start))
+	for rule, n := range byRule {
+		fmt.Printf("  %-20s %d\n", rule, n)
+	}
+	for i, v := range phase3.Violations {
+		if i >= 30 {
+			fmt.Printf("  ... and %d more\n", len(phase3.Violations)-i)
+			break
+		}
+		fmt.Printf("  [%s] %s: %s\n", v.Rule, v.ObjectID, v.Message)
+	}
+
+	fmt.Printf("\ntotal wall-clock (open+phase1+phase2+phase3): %s\n", time.Since(overallStart))
 }
