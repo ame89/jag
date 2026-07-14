@@ -200,6 +200,44 @@ func TestBuildCircuitsAgainstRealDatasetsNSC(t *testing.T) {
 	}
 }
 
+// TestBuildCircuitsAgainstRealDatasetsPfCimBeispielOrtsnetz mirrors
+// TestBuildCircuitsAgainstRealDatasets for the examples/pf-cim-beispiel-ortsnetz
+// dataset (CGMES-style profile split: eq/tp/ssh/gl, real Ortsnetz example,
+// no GL-based geometry cross-check needed here since this test only pins
+// Circuit/Node counts, not geometry).
+func TestBuildCircuitsAgainstRealDatasetsPfCimBeispielOrtsnetz(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "examples", "pf-cim-beispiel-ortsnetz")
+	wantCircuits := 2
+	wantSizesDesc := []int{587, 1}
+
+	gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+
+	if gotCircuits != wantCircuits {
+		t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, wantCircuits, gotSizes)
+	}
+	if !equalInts(gotSizes, wantSizesDesc) {
+		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
+	}
+}
+
+// TestBuildCircuitsAgainstRealDatasetsPandapowerCIM mirrors
+// TestBuildCircuitsAgainstRealDatasets for the examples/pandapower-cim
+// dataset (CGMES-style profile split: eq/tp/ssh/sv/gl/dl).
+func TestBuildCircuitsAgainstRealDatasetsPandapowerCIM(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "examples", "pandapower-cim")
+	wantCircuits := 2
+	wantSizesDesc := []int{12, 1}
+
+	gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+
+	if gotCircuits != wantCircuits {
+		t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, wantCircuits, gotSizes)
+	}
+	if !equalInts(gotSizes, wantSizesDesc) {
+		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
+	}
+}
+
 // buildCircuitsForDataset runs the same pipeline phase2check/circuitcount
 // use (Phase 1 -> ResolveTerminals -> BuildContainers -> MergeJunctionNodes
 // -> MergeBusbarSectionNodes -> BuildNodesAndEdges -> BuildCircuits) against
