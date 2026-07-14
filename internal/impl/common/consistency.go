@@ -94,9 +94,7 @@ func CheckInvariants(
 	// result.Violations = append(result.Violations, voltageViolations...)
 
 	result.Violations = append(result.Violations, checkConnectivity(nodes, edges)...)
-
 	result.Violations = append(result.Violations, checkBayCableCount(resolved, containersResult, isNSC)...)
-
 	result.Violations = append(result.Violations, checkContainerPaths(containersResult)...)
 
 	kvsViolations, err := checkKVSNoTransformer(store, version, containersResult)
@@ -119,6 +117,7 @@ func CheckInvariants(
 
 	return result, nil
 }
+
 
 // checkVoltageLevels enforces "every Equipment belongs to exactly one
 // voltage level, except the Transformer (which spans two)". The voltage

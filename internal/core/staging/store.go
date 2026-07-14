@@ -79,10 +79,22 @@ type Store interface {
 	GetReferencesTo(version uint64, targetID string) ([]model.StagingRecord, error)
 
 	// GetByIDs is GetByID for many IDs at once (WHERE id IN (...)).
+	// Returned records are in no particular order — callers needing a
+	// specific order must sort the (small, already-filtered) result
+	// themselves rather than relying on an ORDER BY here, which would
+	// force backends to give up an otherwise-selective index (see
+	// GetReferencesToAny's doc for the concrete regression this caused).
 	GetByIDs(version uint64, ids []string) ([]model.StagingRecord, error)
 
 	// GetReferencesToAny is GetReferencesTo for many target IDs at once
-	// (WHERE value IN (...) AND is_reference = 1).
+	// (WHERE value IN (...) AND is_reference = 1). Returned records are
+	// in no particular order for the same reason as GetByIDs — measured
+	// on a ~2.7M-row SQLite staging table, an ORDER BY here made the
+	// query planner switch from an index seek on (version, value,
+	// is_reference) to a full-table scan ordered by id, turning a ~5ms
+	// query into several seconds per 500-ID chunk (minutes overall for
+	// Phase 3's checkUnreferencedNodes). Sort in Go if a caller ever
+	// needs deterministic order.
 	GetReferencesToAny(version uint64, targetIDs []string) ([]model.StagingRecord, error)
 
 	// CountByVersion returns the number of staging records currently

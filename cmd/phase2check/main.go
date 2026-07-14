@@ -8,12 +8,67 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
+	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
 	"gitlab.com/openk-nsc/jag/internal/impl/common"
 	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
 	"gitlab.com/openk-nsc/jag/internal/sqlite"
 )
+
+// reportSink is phase2check's common.Sink implementation: it only needs
+// counts/a small sample for reporting, so (unlike the old code, which held
+// every Attribute/Geometry of the whole model in RAM) it never
+// accumulates more than one candidate "sample equipment"'s attributes —
+// see BuildSachdatenAndGeometryParallel's 2026-07-14 fix doc comment. Safe
+// for concurrent use: every station worker calls WriteAttributes/
+// WriteGeometries concurrently.
+type reportSink struct {
+	mu          sync.Mutex
+	totalAttrs  int
+	totalGeoms  int
+	byOwner     map[string]int
+	sampleOwner string
+	sampleAttrs []coremodel.Attribute
+}
+
+func newReportSink() *reportSink {
+	return &reportSink{byOwner: map[string]int{}}
+}
+
+func (s *reportSink) WriteAttributes(batch []coremodel.Attribute) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.totalAttrs += len(batch)
+	// Each batch contains complete per-owner attribute sets (BuildAttributes
+	// never splits one owner's attributes across two batches), so it's safe
+	// to decide "is this a good sample owner" using only this batch.
+	perOwnerThisBatch := map[string][]coremodel.Attribute{}
+	for _, a := range batch {
+		s.byOwner[a.OwnerID]++
+		if s.sampleOwner == "" {
+			perOwnerThisBatch[a.OwnerID] = append(perOwnerThisBatch[a.OwnerID], a)
+		}
+	}
+	if s.sampleOwner == "" {
+		for owner, as := range perOwnerThisBatch {
+			if s.byOwner[owner] > 15 { // machines with many attached satellites stand out
+				s.sampleOwner = owner
+				s.sampleAttrs = as
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (s *reportSink) WriteGeometries(batch []coremodel.Geometry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.totalGeoms += len(batch)
+	return nil
+}
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -293,6 +348,35 @@ func main() {
 	}
 	fmt.Printf("ConnectivityNode objects in source: %d, unreferenced (ref-count 0): %d\n", total, unreferenced)
 
+	// JAG_STATION_WORKERS controls the number of station-worker goroutines
+	// for common.BuildSachdatenAndGeometryParallel ("step (b)" of the
+	// parallel-import decision — see that function's doc comment); 0/unset
+	// uses common.DefaultStationWorkers. Only used on the normal (no
+	// JAG_SACHDATEN_SAMPLE) path below, since the sample diagnostic
+	// restricts BuildAttributes' input without restricting BuildGeometry's
+	// equipmentIDs/containerIDs the same way, which the combined parallel
+	// function doesn't support.
+	stationWorkers := 0
+	if v := os.Getenv("JAG_STATION_WORKERS"); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_STATION_WORKERS: %v\n", convErr)
+			os.Exit(1)
+		}
+		stationWorkers = n
+	}
+
+	// JAG_DISABLE_ANHAENGSEL is a diagnostic-only switch (see
+	// common.DisableSatelliteWalk's doc comment): when "1", the Sachdaten
+	// phase never walks into any satellite/Anhängsel object at all, only
+	// emitting each Equipment's own literal attributes. Used to measure the
+	// Sachdaten phase's baseline duration/RAM without any many-to-one hub
+	// risk, while hunting for hub classes to add to structuralClasses.
+	if os.Getenv("JAG_DISABLE_ANHAENGSEL") == "1" {
+		common.DisableSatelliteWalk = true
+		fmt.Println("JAG_DISABLE_ANHAENGSEL=1: satellite/Anhängsel walk disabled, only literal Equipment attributes will be emitted")
+	}
+
 	attrsStart := time.Now()
 	sachdatenInput := resolved
 	if v := os.Getenv("JAG_SACHDATEN_SAMPLE"); v != "" {
@@ -321,31 +405,7 @@ func main() {
 		sachdatenInput = sample
 		fmt.Printf("\n[diagnostic] JAG_SACHDATEN_SAMPLE=%d -> sampling %d/%d equipment for BuildAttributes\n", n, len(sample), len(resolved))
 	}
-	attrs, err := common.BuildAttributes(store, result.Version, 1000, sachdatenInput)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "building attributes: %v\n", err)
-		os.Exit(1)
-	}
-	byOwner := map[string]int{}
-	for _, a := range attrs {
-		byOwner[a.OwnerID]++
-	}
-	fmt.Printf("\nsachdaten: %d attribute rows across %d equipments (avg %.1f/equipment) (%s)\n", len(attrs), len(byOwner), float64(len(attrs))/float64(len(byOwner)), time.Since(attrsStart))
-
-	// Show a SynchronousMachine's attributes as a spot check (should include
-	// its own RotatingMachine.* fields plus GeneratingUnit/FossilFuel/
-	// ControlAreaGeneratingUnit satellite attributes).
-	for eqID, count := range byOwner {
-		if count > 15 { // machines with many attached satellites stand out
-			fmt.Printf("\nsample equipment %s (%d attributes):\n", eqID, count)
-			for _, a := range attrs {
-				if a.OwnerID == eqID {
-					fmt.Printf("  %-45s = %v\n", a.Key, a.Value)
-				}
-			}
-			break
-		}
-	}
+	sampled := sachdatenInput != nil && len(sachdatenInput) != len(resolved)
 
 	equipmentIDs := map[string]bool{}
 	for eqID := range resolved {
@@ -355,13 +415,59 @@ func main() {
 	for _, c := range containers.Containers {
 		containerIDs[c.ID] = true
 	}
-	geoStart := time.Now()
-	geometries, err := common.BuildGeometry(store, result.Version, 1000, equipmentIDs, containerIDs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "building geometry: %v\n", err)
-		os.Exit(1)
+
+	geoStart := attrsStart
+	sink := newReportSink()
+	if sampled {
+		// Sampling restricts BuildAttributes' input without restricting
+		// BuildGeometry's equipmentIDs/containerIDs the same way — the
+		// combined parallel path doesn't support that split, so fall back
+		// to the plain sequential calls whenever JAG_SACHDATEN_SAMPLE is
+		// in play (a diagnostic-only knob, not normal operation anyway).
+		if err := common.BuildAttributes(store, result.Version, 1000, sachdatenInput, sink); err != nil {
+			fmt.Fprintf(os.Stderr, "building attributes: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("\nsachdaten: %d attribute rows (%s)\n", sink.totalAttrs, time.Since(attrsStart))
+
+		geoStart = time.Now()
+		if err := common.BuildGeometry(store, result.Version, 1000, equipmentIDs, containerIDs, sink); err != nil {
+			fmt.Fprintf(os.Stderr, "building geometry: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		// Normal path: step (b) of the parallel-import decision — station
+		// workers build Sachdaten+Geometry concurrently, one station (or
+		// bundle of stations) per goroutine, plus one dedicated goroutine
+		// for ACLine/unassigned equipment (see BuildSachdatenAndGeometryParallel's
+		// doc comment). Each worker flushes through sink as it goes (see
+		// reportSink/Sink's 2026-07-14 fix doc comments) instead of this
+		// call returning the whole model's Attributes/Geometries at once.
+		if err := common.BuildSachdatenAndGeometryParallel(store, result.Version, 1000, resolved, containers, stationWorkers, sink); err != nil {
+			fmt.Fprintf(os.Stderr, "building sachdaten+geometry (parallel): %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("\nsachdaten+geometry (parallel, %d workers): %d attribute rows, %d geometries (%s)\n", stationWorkers, sink.totalAttrs, sink.totalGeoms, time.Since(attrsStart))
 	}
-	fmt.Printf("\ngeometries resolved: %d (0 expected — Espheim ships no GL profile) (%s)\n", len(geometries), time.Since(geoStart))
+
+	byOwner := sink.byOwner
+	if len(byOwner) > 0 {
+		fmt.Printf("sachdaten: %d attribute rows across %d equipments (avg %.1f/equipment)\n", sink.totalAttrs, len(byOwner), float64(sink.totalAttrs)/float64(len(byOwner)))
+	}
+
+	// Show a SynchronousMachine's attributes as a spot check (should include
+	// its own RotatingMachine.* fields plus GeneratingUnit/FossilFuel/
+	// ControlAreaGeneratingUnit satellite attributes) — sampleAttrs was
+	// captured by reportSink on the fly (first owner seen with >15
+	// attributes), instead of scanning the whole model's attrs afterward.
+	if sink.sampleOwner != "" {
+		fmt.Printf("\nsample equipment %s (%d attributes):\n", sink.sampleOwner, len(sink.sampleAttrs))
+		for _, a := range sink.sampleAttrs {
+			fmt.Printf("  %-45s = %v\n", a.Key, a.Value)
+		}
+	}
+
+	fmt.Printf("\ngeometries resolved: %d (0 expected — Espheim ships no GL profile) (%s)\n", sink.totalGeoms, time.Since(geoStart))
 
 	phase3Start := time.Now()
 	phase3, err := common.CheckInvariants(store, result.Version, mergedResolved, containers, nodes, edges, isNSC)

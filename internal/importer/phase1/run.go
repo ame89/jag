@@ -99,10 +99,16 @@ func RunCGMESFiles(store staging.Store, files []string) (Result, error) {
 	// Build read-side indexes once, now that all rows are in — cheaper
 	// than maintaining them incrementally during the inserts above (see
 	// staging.Store.EnsureIndexes), and must happen before Phase 2 reads
-	// this version's data.
+	// this version's data. Wrapped in its own progress phase: previously
+	// this ran silently between "phase1-import-cgmes" done and the next
+	// phase's "started" log, making a real (observed: tens of seconds on
+	// a multi-GB staging table) chunk of wall-clock time invisible.
+	pIdx := newProgress("phase1-build-indexes")
 	if err := store.EnsureIndexes(); err != nil {
+		pIdx.Done()
 		return Result{Version: version, RecordCount: recordCount, Errors: stagingErrs}, fmt.Errorf("phase1: building indexes: %w", err)
 	}
+	pIdx.Done()
 
 	if len(stagingErrs) > 0 {
 		if err := store.InsertErrors(stagingErrs); err != nil {
@@ -195,9 +201,12 @@ func RunNSCFiles(store staging.Store, files []string) (Result, error) {
 		return Result{Version: version, RecordCount: recordCount, Errors: stagingErrs}, fmt.Errorf("phase1: final flush: %w", err)
 	}
 
+	pIdx := newProgress("phase1-build-indexes")
 	if err := store.EnsureIndexes(); err != nil {
+		pIdx.Done()
 		return Result{Version: version, RecordCount: recordCount, Errors: stagingErrs}, fmt.Errorf("phase1: building indexes: %w", err)
 	}
+	pIdx.Done()
 
 	if len(stagingErrs) > 0 {
 		if err := store.InsertErrors(stagingErrs); err != nil {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"gitlab.com/openk-nsc/jag/internal/core/staging"
 	"gitlab.com/openk-nsc/jag/internal/importer/model"
@@ -88,6 +89,12 @@ type rawTerminal struct {
 	TerminalRef
 }
 
+// DefaultTerminalScanWorkers is the default concurrency for the per-class
+// scans inside ResolveTerminalsParallel (step (a) of the parallel-import
+// decision, 2026-07-14 — see this file's and parallel.go's doc comments).
+// Only used as the fallback when workers <= 0 is passed.
+const DefaultTerminalScanWorkers = 8
+
 // ResolveTerminals scans the "Terminal" class of the given staging version
 // in cursor-based chunks of chunkSize distinct Terminal IDs (see
 // staging.Store.GetByClass), resolving each Terminal's ConductingEquipment +
@@ -107,16 +114,91 @@ type rawTerminal struct {
 // the node-role path (nodeRoleClasses) rather than the ordinary Zweipol
 // path — callers (BuildNodesAndEdges, MergeJunctionNodes) need it to tell
 // the two apart.
+//
+// This is a thin wrapper around ResolveTerminalsParallel using
+// DefaultTerminalScanWorkers — kept as a separate entry point so existing
+// callers/tests that don't care about the worker count don't need to
+// change.
 func ResolveTerminals(store staging.Store, version uint64, chunkSize int) (map[string]EquipmentTerminals, map[string]bool, []Anomaly, error) {
+	return ResolveTerminalsParallel(store, version, chunkSize, 0)
+}
+
+// ResolveTerminalsParallel is ResolveTerminals with an explicit worker
+// count (workers <= 0 defaults to DefaultTerminalScanWorkers) — "step (a)"
+// of the two-step parallel-import plan (see parallel.go's
+// BuildSachdatenAndGeometryParallel for "step (b)", done first per explicit
+// user decision).
+//
+// Unlike step (b), Terminal resolution has no natural per-station shape to
+// split by (a single "Terminal" class scan has no station boundary to cut
+// along without a new range-partitioned Store API, which was deliberately
+// NOT added here — see this function's doc comment on scanTerminals
+// staying sequential). What IS trivially parallel, and previously ran
+// strictly one class after another for no data-dependency reason, is:
+//   - the "equipment with zero Terminals" cross-check
+//     (findEquipmentWithoutTerminalsParallel), which scans every OTHER
+//     class in the version once each — each class's scan is fully
+//     independent of every other, only their findings get merged at the
+//     end;
+//   - scanNodeRoleIDsParallel, same reasoning across nodeRoleClasses;
+//   - and the in-memory classification pass (classifyAll) can run
+//     concurrently WITH the zero-Terminal cross-check, since both only
+//     read the already-fully-scanned byEquipment map (built by
+//     scanTerminals, which must still finish first) and produce
+//     independent outputs.
+//
+// scanTerminals itself (the "Terminal" class scan) stays exactly as before
+// — one single sequential cursor scan. Splitting that one further would
+// need a range-partitioned GetByClass variant on staging.Store (an
+// interface change), which is out of scope for this step; if the Terminal
+// scan itself turns out to be the dominant cost at 30-40GB scale after
+// measuring, that is the next thing to revisit — not assumed here.
+func ResolveTerminalsParallel(store staging.Store, version uint64, chunkSize int, workers int) (map[string]EquipmentTerminals, map[string]bool, []Anomaly, error) {
+	if workers <= 0 {
+		workers = DefaultTerminalScanWorkers
+	}
+
 	byEquipment, err := scanTerminals(store, version, chunkSize)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	nodeRoleIDs, err := scanNodeRoleIDs(store, version, chunkSize)
+	nodeRoleIDs, err := scanNodeRoleIDsParallel(store, version, chunkSize, workers)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
+	var result map[string]EquipmentTerminals
+	var classifyAnomalies []Anomaly
+	var missing []string
+	var missingErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		result, classifyAnomalies = classifyAll(byEquipment, nodeRoleIDs)
+	}()
+	go func() {
+		defer wg.Done()
+		missing, missingErr = findEquipmentWithoutTerminalsParallel(store, version, chunkSize, byEquipment, workers)
+	}()
+	wg.Wait()
+	if missingErr != nil {
+		return result, nodeRoleIDs, classifyAnomalies, missingErr
+	}
+
+	anomalies := classifyAnomalies
+	for _, eqID := range missing {
+		anomalies = append(anomalies, Anomaly{EquipmentID: eqID, Message: "equipment has zero terminals"})
+	}
+	return result, nodeRoleIDs, anomalies, nil
+}
+
+// classifyAll runs the pure in-memory classification pass (no DB access)
+// over every Equipment found by scanTerminals, producing the final
+// EquipmentTerminals result map plus classification Anomalies. Split out
+// of ResolveTerminalsParallel so it can run concurrently with
+// findEquipmentWithoutTerminalsParallel (see that function's doc comment).
+func classifyAll(byEquipment map[string][]rawTerminal, nodeRoleIDs map[string]bool) (map[string]EquipmentTerminals, []Anomaly) {
 	result := map[string]EquipmentTerminals{}
 	var anomalies []Anomaly
 
@@ -149,42 +231,73 @@ func ResolveTerminals(store staging.Store, version uint64, chunkSize int) (map[s
 		p.Tick(1)
 	}
 	p.Done()
-
-	missing, err := findEquipmentWithoutTerminals(store, version, chunkSize, byEquipment)
-	if err != nil {
-		return result, nodeRoleIDs, anomalies, err
-	}
-	for _, eqID := range missing {
-		anomalies = append(anomalies, Anomaly{EquipmentID: eqID, Message: "equipment has zero terminals"})
-	}
-
-	return result, nodeRoleIDs, anomalies, nil
+	return result, anomalies
 }
 
-// scanNodeRoleIDs scans every class in nodeRoleClasses (currently just
-// "Junction") and returns the distinct object IDs found — cheap compared
-// to a per-Equipment class lookup, since there are normally few node-role
-// classes and few objects of each.
-func scanNodeRoleIDs(store staging.Store, version uint64, chunkSize int) (map[string]bool, error) {
-	ids := map[string]bool{}
+// scanClassIDs performs one chunked class scan (like scanClass in
+// container.go, duplicated here to avoid a cross-file dependency on its
+// exact return shape) and returns the distinct object IDs found, in ID
+// order.
+func scanClassIDs(store staging.Store, version uint64, chunkSize int, class string) ([]string, error) {
+	var ids []string
+	afterID := ""
+	for {
+		records, err := store.GetByClass(version, class, afterID, chunkSize)
+		if err != nil {
+			return nil, fmt.Errorf("common: scanning class %s: %w", class, err)
+		}
+		if len(records) == 0 {
+			break
+		}
+		distinct := distinctIDsInOrder(records)
+		ids = append(ids, distinct...)
+		afterID = distinct[len(distinct)-1]
+		if len(distinct) < chunkSize {
+			break
+		}
+	}
+	return ids, nil
+}
+
+// scanNodeRoleIDsParallel scans every class in nodeRoleClasses (currently
+// Junction/BusbarSection) concurrently — one goroutine per class, bounded
+// by workers — and returns the union of distinct object IDs found. Cheap
+// in absolute terms (there are normally few node-role classes and few
+// objects of each), but kept consistent with the same concurrent-per-class
+// pattern used for the much larger findEquipmentWithoutTerminalsParallel
+// scan below.
+func scanNodeRoleIDsParallel(store staging.Store, version uint64, chunkSize int, workers int) (map[string]bool, error) {
+	var classes []string
 	for class := range nodeRoleClasses {
-		afterID := ""
-		for {
-			records, err := store.GetByClass(version, class, afterID, chunkSize)
-			if err != nil {
-				return nil, fmt.Errorf("common: scanning node-role class %s: %w", class, err)
-			}
-			if len(records) == 0 {
-				break
-			}
-			distinct := distinctIDsInOrder(records)
-			for _, id := range distinct {
-				ids[id] = true
-			}
-			afterID = distinct[len(distinct)-1]
-			if len(distinct) < chunkSize {
-				break
-			}
+		classes = append(classes, class)
+	}
+
+	type classResult struct {
+		ids []string
+		err error
+	}
+	results := make([]classResult, len(classes))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i, class := range classes {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, class string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			ids, err := scanClassIDs(store, version, chunkSize, class)
+			results[i] = classResult{ids: ids, err: err}
+		}(i, class)
+	}
+	wg.Wait()
+
+	ids := map[string]bool{}
+	for _, r := range results {
+		if r.err != nil {
+			return nil, fmt.Errorf("common: scanning node-role classes: %w", r.err)
+		}
+		for _, id := range r.ids {
+			ids[id] = true
 		}
 	}
 	return ids, nil
@@ -261,60 +374,104 @@ func isGeneratingUnitClass(class string) bool {
 	return strings.HasSuffix(class, "GeneratingUnit")
 }
 
-// findEquipmentWithoutTerminals scans every class other than "Terminal" in
-// the version and returns the IDs of objects that carry an
+// findEquipmentWithoutTerminalsParallel scans every class other than
+// "Terminal" in the version and returns the IDs of objects that carry an
 // Equipment.EquipmentContainer attribute (the generic "this is Equipment"
 // marker) but never showed up in the Terminal scan — i.e. Equipment with
 // zero Terminals. PowerElectronicsUnit subclasses (NSC dialect: Wallbox,
 // PhotoVoltaicUnit, BatteryUnit, AirConditioningUnit, ...) are excluded via
 // their PowerElectronicsUnit.PowerElectronicsConnection attribute (decided
-// 2026-07-14): analogous to GeneratingUnit above, these are satellite device
-// descriptions attached to their PowerElectronicsConnection (the actual
-// grid-connection point with its own Terminal), never wired directly.
-func findEquipmentWithoutTerminals(store staging.Store, version uint64, chunkSize int, found map[string][]rawTerminal) ([]string, error) {
+// 2026-07-14): analogous to GeneratingUnit above, these are satellite
+// device descriptions attached to their PowerElectronicsConnection (the
+// actual grid-connection point with its own Terminal), never wired
+// directly.
+//
+// Each class's scan is fully independent of every other's (found is
+// read-only here, already fully populated by scanTerminals) — this runs
+// them concurrently across up to `workers` goroutines at once instead of
+// one class after another, which is how it worked before "step (a)" of
+// the parallel-import plan.
+func findEquipmentWithoutTerminalsParallel(store staging.Store, version uint64, chunkSize int, found map[string][]rawTerminal, workers int) ([]string, error) {
 	classes, err := store.ListClasses(version)
 	if err != nil {
 		return nil, fmt.Errorf("common: listing classes: %w", err)
 	}
 
-	var missing []string
+	var scanClasses []string
 	for _, class := range classes {
 		if class == "Terminal" || isGeneratingUnitClass(class) {
 			continue
 		}
+		scanClasses = append(scanClasses, class)
+	}
 
-		afterID := ""
-		for {
-			records, err := store.GetByClass(version, class, afterID, chunkSize)
-			if err != nil {
-				return nil, fmt.Errorf("common: scanning class %s: %w", class, err)
-			}
-			if len(records) == 0 {
-				break
-			}
+	type classResult struct {
+		missing []string
+		err     error
+	}
+	results := make([]classResult, len(scanClasses))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for i, class := range scanClasses {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, class string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			m, err := scanClassMissingEquipment(store, version, chunkSize, class, found)
+			results[i] = classResult{missing: m, err: err}
+		}(i, class)
+	}
+	wg.Wait()
 
-			idx := BuildObjectIndex(records)
-			ids := distinctIDsInOrder(records)
-
-			for _, id := range ids {
-				if !idx.HasAttr(id, "Equipment.EquipmentContainer") {
-					continue
-				}
-				if idx.HasAttr(id, "PowerElectronicsUnit.PowerElectronicsConnection") {
-					continue
-				}
-				if _, ok := found[id]; !ok {
-					missing = append(missing, id)
-				}
-			}
-
-			afterID = ids[len(ids)-1]
-			if len(ids) < chunkSize {
-				break
-			}
+	var missing []string
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
 		}
+		missing = append(missing, r.missing...)
 	}
 	sort.Strings(missing)
+	return missing, nil
+}
+
+// scanClassMissingEquipment performs one chunked class scan for `class`
+// and returns the IDs of Equipment objects (per the
+// Equipment.EquipmentContainer marker) not present in `found`. Factored
+// out of findEquipmentWithoutTerminalsParallel so it can run as one
+// goroutine's unit of work.
+func scanClassMissingEquipment(store staging.Store, version uint64, chunkSize int, class string, found map[string][]rawTerminal) ([]string, error) {
+	var missing []string
+	afterID := ""
+	for {
+		records, err := store.GetByClass(version, class, afterID, chunkSize)
+		if err != nil {
+			return nil, fmt.Errorf("common: scanning class %s: %w", class, err)
+		}
+		if len(records) == 0 {
+			break
+		}
+
+		idx := BuildObjectIndex(records)
+		ids := distinctIDsInOrder(records)
+
+		for _, id := range ids {
+			if !idx.HasAttr(id, "Equipment.EquipmentContainer") {
+				continue
+			}
+			if idx.HasAttr(id, "PowerElectronicsUnit.PowerElectronicsConnection") {
+				continue
+			}
+			if _, ok := found[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+
+		afterID = ids[len(ids)-1]
+		if len(ids) < chunkSize {
+			break
+		}
+	}
 	return missing, nil
 }
 

@@ -62,14 +62,48 @@ type StagingStore struct {
 // Open opens (creating if necessary) a SQLite database at path and ensures
 // the staging schema exists. Use ":memory:" for an in-memory database
 // (mainly for tests).
+// maxParallelReadConns bounds how many concurrent connections a real,
+// file-backed database allows (see the WAL comment below). Generous but
+// fixed rather than tied to a caller-supplied worker count: Phase 2's
+// planned per-station worker goroutines (see
+// internal/impl/common's BuildSachdatenAndGeometryParallel, "step (b)" of
+// the user's parallel-import decision) need at most a handful of
+// concurrent readers, and idle pooled connections cost SQLite nothing
+// noticeable, so there is no need to plumb a worker count through Open's
+// signature just to size this.
+const maxParallelReadConns = 16
+
 func Open(path string) (*StagingStore, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: opening %s: %w", path, err)
 	}
-	// Phase 1 writes are single-writer, bulk/batched — one open
-	// connection avoids SQLite's concurrent-writer locking entirely.
-	db.SetMaxOpenConns(1)
+	if path == ":memory:" {
+		// An in-memory SQLite database is private to the connection that
+		// created it (no shared cache) — a second connection would see an
+		// empty database, silently losing data. Keep a single connection
+		// here so existing in-memory (mostly test) usage stays correct;
+		// real parallel reads only make sense against a real file anyway.
+		db.SetMaxOpenConns(1)
+	} else {
+		// Real, file-backed database: WAL journal mode lets many
+		// concurrent readers run alongside Phase 1's single writer (Phase 1
+		// itself stays sequential/single-goroutine — only Phase 2's
+		// per-station worker goroutines actually issue concurrent reads),
+		// instead of SQLite's default rollback-journal mode, which would
+		// serialize any concurrent access regardless of read/write mix.
+		if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("sqlite: enabling WAL journal mode: %w", err)
+		}
+		// A busy concurrent reader/writer should wait briefly for a lock
+		// instead of immediately failing with SQLITE_BUSY.
+		if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("sqlite: setting busy_timeout: %w", err)
+		}
+		db.SetMaxOpenConns(maxParallelReadConns)
+	}
 
 	if _, err := db.Exec(stagingSchema); err != nil {
 		db.Close()
@@ -270,11 +304,20 @@ func (s *StagingStore) GetByIDs(version uint64, ids []string) ([]model.StagingRe
 		for _, id := range chunk {
 			args = append(args, id)
 		}
+		// Deliberately no ORDER BY here: with a WHERE on id (an indexed
+		// but non-selective-looking IN-list to the query planner) and an
+		// ORDER BY on that same id column, SQLite's planner still picks
+		// the right index (idx_staging_records_by_id starts with id), so
+		// this one was never the problem — see GetReferencesToAny below
+		// for the query where ORDER BY caused a catastrophic plan
+		// regression. ORDER BY is omitted here anyway since callers
+		// (getByIDsIndexed) only group results into a map — no caller
+		// needs any particular row order — and dropping it avoids ever
+		// depending on the query planner making the "lucky" choice.
 		query := fmt.Sprintf(`
 			SELECT version, id, profile, class, attribute, value, is_reference, seq
 			FROM staging_records
 			WHERE version = ? AND id IN (%s)
-			ORDER BY id, profile, attribute, seq
 		`, placeholders(len(chunk)))
 
 		rows, err := s.db.Query(query, args...)
@@ -311,11 +354,24 @@ func (s *StagingStore) GetReferencesToAny(version uint64, targetIDs []string) ([
 		for _, id := range chunk {
 			args = append(args, id)
 		}
+		// Deliberately no ORDER BY: measured on a ~2.7M-row staging table,
+		// adding "ORDER BY id, profile, attribute, seq" here made SQLite's
+		// planner abandon idx_staging_records_by_value (the index that
+		// makes this query selective — WHERE is on value/is_reference)
+		// in favor of idx_staging_records_by_id, which satisfies the
+		// ORDER BY without a sort step but forces a full-table scan of
+		// the whole version to find matches. That turned each 500-ID
+		// chunk from ~5ms into 2-11s — with ~134 chunks for a real
+		// dataset, this alone was Phase 3's checkUnreferencedNodes
+		// invariant check taking 7+ minutes instead of under a second.
+		// No caller needs any particular row order (getReferencesToAnyIndexed
+		// only groups results into a map by target ID) — if a caller ever
+		// does, sort the (small) result slice in Go instead of forcing a
+		// planner decision here.
 		query := fmt.Sprintf(`
 			SELECT version, id, profile, class, attribute, value, is_reference, seq
 			FROM staging_records
 			WHERE version = ? AND is_reference = 1 AND value IN (%s)
-			ORDER BY id, profile, attribute, seq
 		`, placeholders(len(chunk)))
 
 		rows, err := s.db.Query(query, args...)
