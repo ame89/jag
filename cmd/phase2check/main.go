@@ -17,6 +17,51 @@ import (
 	"gitlab.com/openk-nsc/jag/internal/sqlite"
 )
 
+// persistChunkSize bounds how many rows go into a single ModelStore
+// Upsert* transaction, mirroring the 1000-row chunking BuildAttributes/
+// BuildGeometry already use via Sink. Without this, persisting a whole
+// model's Containers/Equipment/Nodes/Edges/electrical groups in one
+// UpsertX call would open one single transaction spanning the entire
+// model — correct, but an unnecessarily large, long-lived transaction
+// (lock held the whole time, no incremental progress/durability) as
+// dataset size grows. Chunking keeps each transaction's size and duration
+// bounded regardless of model size, consistent with this project's
+// bulk-not-unbounded persistence stance (see Idee.md).
+const persistChunkSize = 1000
+
+func chunkUpsert[T any](items []T, upsert func([]T) error) error {
+	for i := 0; i < len(items); i += persistChunkSize {
+		end := i + persistChunkSize
+		if end > len(items) {
+			end = len(items)
+		}
+		if err := upsert(items[i:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// chunkUpsertMap splits a map (electrical groups: node_id -> group_id) into
+// bounded-size sub-maps before handing each to upsert, for the same
+// transaction-size reason as chunkUpsert above.
+func chunkUpsertMap(items map[string]string, upsert func(map[string]string) error) error {
+	chunk := make(map[string]string, persistChunkSize)
+	for k, v := range items {
+		chunk[k] = v
+		if len(chunk) >= persistChunkSize {
+			if err := upsert(chunk); err != nil {
+				return err
+			}
+			chunk = make(map[string]string, persistChunkSize)
+		}
+	}
+	if len(chunk) > 0 {
+		return upsert(chunk)
+	}
+	return nil
+}
+
 // reportSink is phase2check's common.Sink implementation: it only needs
 // counts/a small sample for reporting, so (unlike the old code, which held
 // every Attribute/Geometry of the whole model in RAM) it never
@@ -68,6 +113,37 @@ func (s *reportSink) WriteGeometries(batch []coremodel.Geometry) error {
 	defer s.mu.Unlock()
 	s.totalGeoms += len(batch)
 	return nil
+}
+
+// persistSink wraps a *reportSink (for the existing counters/sample used
+// in the report below) and additionally persists every batch through
+// ModelStore into the model_* schema (internal/sqlite/model.go) — this is
+// the "wiring in" of the previously schema-only target model: Attributes
+// and Geometries built by BuildAttributes/BuildGeometry (and the parallel
+// station-worker variant) now actually land in SQLite, batch by batch,
+// instead of only ever being counted. Each ModelStore.UpsertX call runs in
+// its own transaction (see model.go), so this keeps the same bounded-RAM
+// streaming property the plain reportSink already had — no batch is held
+// onto beyond this one call. Safe for concurrent use for the same reason
+// reportSink is: every station worker calls these methods concurrently,
+// and each call's transaction is independent.
+type persistSink struct {
+	*reportSink
+	model *sqlite.ModelStore
+}
+
+func (s *persistSink) WriteAttributes(batch []coremodel.Attribute) error {
+	if err := s.model.UpsertAttributes(batch); err != nil {
+		return fmt.Errorf("persisting attributes: %w", err)
+	}
+	return s.reportSink.WriteAttributes(batch)
+}
+
+func (s *persistSink) WriteGeometries(batch []coremodel.Geometry) error {
+	if err := s.model.UpsertGeometry(batch); err != nil {
+		return fmt.Errorf("persisting geometries: %w", err)
+	}
+	return s.reportSink.WriteGeometries(batch)
 }
 
 func main() {
@@ -151,6 +227,7 @@ func main() {
 	}
 	defer store.Close()
 	fmt.Printf("using sqlite file: %s\n", dbPath)
+	modelStore := store.Model()
 
 	phase1Start := time.Now()
 	var result phase1.Result
@@ -227,6 +304,21 @@ func main() {
 	}
 	fmt.Printf("cim:Line references kept as Sachdaten (untrusted): %d\n", len(containers.LineRefs))
 
+	persistStart := time.Now()
+	if err := chunkUpsert(containers.Containers, modelStore.UpsertContainers); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting containers: %v\n", err)
+		os.Exit(1)
+	}
+	equipmentRows := make([]coremodel.Equipment, 0, len(resolved))
+	for eqID := range resolved {
+		equipmentRows = append(equipmentRows, coremodel.Equipment{ID: eqID, ContainerID: containers.EquipmentToCont[eqID]})
+	}
+	if err := chunkUpsert(equipmentRows, modelStore.UpsertEquipment); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting equipment: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("persisted %d containers, %d equipment rows (%s)\n", len(containers.Containers), len(equipmentRows), time.Since(persistStart))
+
 	// acline chain size distribution — sanity check for the topology-based
 	// grouping (see BuildContainers doc comment).
 	chainSize := map[string]int{}
@@ -286,6 +378,16 @@ func main() {
 
 	nodes, edges := common.BuildNodesAndEdges(mergedResolved, nodeOnlyIDs)
 	fmt.Printf("built %d Nodes, %d Edges\n", len(nodes), len(edges))
+	nodesEdgesPersistStart := time.Now()
+	if err := chunkUpsert(nodes, modelStore.UpsertNodes); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting nodes: %v\n", err)
+		os.Exit(1)
+	}
+	if err := chunkUpsert(edges, modelStore.UpsertEdges); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting edges: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("persisted %d nodes, %d edges (%s)\n", len(nodes), len(edges), time.Since(nodesEdgesPersistStart))
 	gndEdges := 0
 	for _, e := range edges {
 		if e.Terminal2NodeID == common.GNDNodeID {
@@ -417,7 +519,7 @@ func main() {
 	}
 
 	geoStart := attrsStart
-	sink := newReportSink()
+	sink := &persistSink{reportSink: newReportSink(), model: modelStore}
 	if sampled {
 		// Sampling restricts BuildAttributes' input without restricting
 		// BuildGeometry's equipmentIDs/containerIDs the same way — the
@@ -515,6 +617,61 @@ func main() {
 	}
 	fmt.Printf("\nelectrical topology (prototype): %d switch-like equipment (closed=%d, open=%d), classes=%v\n", len(switches), closed, open, byClass)
 	fmt.Printf("  %d physical Nodes reduced to %d electrical groups (%s)\n", len(nodes), len(distinctGroups), time.Since(elecStart))
+
+	groupsPersistStart := time.Now()
+	if err := chunkUpsertMap(groups, modelStore.UpsertElectricalGroups); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting electrical groups: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("  persisted %d electrical group assignments (%s)\n", len(groups), time.Since(groupsPersistStart))
+
+	// Re-derive the "circuits: N (sizes desc)" report from the persisted
+	// DB state itself (model_electrical_group), not from the in-memory
+	// `groups` map above — this is the same report as during import, but
+	// now sourced from the final DB model to confirm the DB round-trip is
+	// faithful (GROUP BY-computed, no full node-ID scan into Go memory).
+	dbGroupSizes, err := modelStore.GroupSizes()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reading electrical group sizes from DB: %v\n", err)
+		os.Exit(1)
+	}
+	dbCircSizes := make([]int, 0, len(dbGroupSizes))
+	for _, n := range dbGroupSizes {
+		dbCircSizes = append(dbCircSizes, n)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(dbCircSizes)))
+	fmt.Printf("  circuits from DB model_electrical_group: %d (node-count sizes desc: %v)\n", len(dbGroupSizes), dbCircSizes)
+
+	// Dynamic switch-map demo: JAG itself doesn't track live switching
+	// state (see Konzept.md), but BuildElectricalGroups/BuildCircuits
+	// already accept a SwitchStateOverrides map for a caller that does
+	// (e.g. SCADA-driven). Flip the first closed switch found to "open"
+	// as a smoke test, recompute in-memory only (not persisted — the
+	// model_electrical_group table above stays the static import-default
+	// grouping), and show how the circuit count/sizes react.
+	var demoSwitchID string
+	for _, sw := range switches {
+		if !sw.Open {
+			demoSwitchID = sw.EquipmentID
+			break
+		}
+	}
+	if demoSwitchID != "" {
+		overrides := common.SwitchStateOverrides{demoSwitchID: true} // force open
+		dynGroups, _, err := common.BuildElectricalGroups(store, result.Version, nodes, edges, overrides)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "electrical topology (dynamic override): %v\n", err)
+			os.Exit(1)
+		}
+		dynDistinct := map[string]bool{}
+		for _, g := range dynGroups {
+			dynDistinct[g] = true
+		}
+		fmt.Printf("  dynamic switch-map demo: forcing %s open -> %d electrical groups (was %d)\n",
+			demoSwitchID, len(dynDistinct), len(distinctGroups))
+	} else {
+		fmt.Printf("  dynamic switch-map demo: no closed switch found, skipped\n")
+	}
 
 	mismatchStart := time.Now()
 	mismatches, err := common.CheckElectricalTopologyAgainstCGMES(store, result.Version, groups)

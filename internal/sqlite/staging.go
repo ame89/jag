@@ -74,7 +74,24 @@ type StagingStore struct {
 const maxParallelReadConns = 16
 
 func Open(path string) (*StagingStore, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := path
+	if path != ":memory:" {
+		// IMPORTANT (2026-07-14 bugfix): PRAGMA statements issued via
+		// db.Exec only apply to whichever single pooled connection
+		// happens to run that query — database/sql opens up to
+		// maxParallelReadConns physical connections lazily, and most of
+		// them would never see a "PRAGMA busy_timeout=..."/"PRAGMA
+		// journal_mode=WAL" executed that way, defaulting to
+		// busy_timeout=0 (immediate SQLITE_BUSY on any contention). This
+		// was discovered when wiring concurrent station-worker writes
+		// into ModelStore (see model.go/impl/common's parallel Sachdaten+
+		// Geometry build) — workers hit "database is locked" almost
+		// immediately. Fix: pass these as DSN query parameters instead,
+		// which modernc.org/sqlite applies to every new connection it
+		// opens, not just the first one.
+		dsn = fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", path)
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: opening %s: %w", path, err)
 	}
@@ -86,22 +103,6 @@ func Open(path string) (*StagingStore, error) {
 		// real parallel reads only make sense against a real file anyway.
 		db.SetMaxOpenConns(1)
 	} else {
-		// Real, file-backed database: WAL journal mode lets many
-		// concurrent readers run alongside Phase 1's single writer (Phase 1
-		// itself stays sequential/single-goroutine — only Phase 2's
-		// per-station worker goroutines actually issue concurrent reads),
-		// instead of SQLite's default rollback-journal mode, which would
-		// serialize any concurrent access regardless of read/write mix.
-		if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("sqlite: enabling WAL journal mode: %w", err)
-		}
-		// A busy concurrent reader/writer should wait briefly for a lock
-		// instead of immediately failing with SQLITE_BUSY.
-		if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("sqlite: setting busy_timeout: %w", err)
-		}
 		db.SetMaxOpenConns(maxParallelReadConns)
 	}
 
@@ -116,6 +117,15 @@ func Open(path string) (*StagingStore, error) {
 	if _, err := db.Exec(catalogSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("sqlite: creating catalog schema: %w", err)
+	}
+	// Final-model schema (Node/Edge/Container/Geometry/Attribute/electrical
+	// group, see model.go) — created here too so a freshly opened database
+	// is always ready for ModelStore, regardless of whether the caller
+	// ever touches it. NOT YET wired into the Phase 2/3 pipeline itself
+	// (see model.go's top-of-file doc comment).
+	if _, err := db.Exec(modelSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite: creating model schema: %w", err)
 	}
 
 	return &StagingStore{db: db}, nil
