@@ -112,6 +112,12 @@ add("common/interfaces.go", '''package common
 // ID/reference string, per CIM's own EquipmentContainer abstraction --
 // this keeps model/hierarchy, model/lines etc. free to add new container
 // types without model/common needing to know about them.
+//
+// The marker method is exported (not unexported) deliberately: Go only
+// allows an unexported interface method to be satisfied by a method
+// declared in the very same package as the interface, so an unexported
+// marker here could never be implemented by model/hierarchy, model/lines,
+// etc. across package boundaries.
 // CIM: IEC61970 Base "EquipmentContainer" (abstract).
 type EquipmentContainer interface {
 \tIsEquipmentContainer()
@@ -119,7 +125,8 @@ type EquipmentContainer interface {
 
 // ConnectivityNodeContainer is implemented by CIM classes that can contain
 // ConnectivityNode/TopologicalNode objects (VoltageLevel, Bay, Line, ...).
-// CIM: IEC61970 Base "ConnectivityNodeContainer" (abstract).
+// See EquipmentContainer's doc comment for why the marker method must be
+// exported. CIM: IEC61970 Base "ConnectivityNodeContainer" (abstract).
 type ConnectivityNodeContainer interface {
 \tIsConnectivityNodeContainer()
 }
@@ -129,7 +136,8 @@ type ConnectivityNodeContainer interface {
 // so that Terminal.ConductingEquipment can hold a typed pointer to any of
 // them without model/busbarsandnodes needing to import every equipment
 // package (which would create an import cycle, since several equipment
-// packages need to reference Terminal).
+// packages need to reference Terminal). See EquipmentContainer's doc
+// comment for why the marker method must be exported.
 // CIM: IEC61970 Base "ConductingEquipment" (abstract).
 type ConductingEquipmentRef interface {
 \tIsConductingEquipment()
@@ -379,12 +387,9 @@ type PowerElectronicsConnection struct {
 \tRegulatingControl               *RegulatingControl    `json:"regulatingControl,omitempty"`               // optional; CIM: RegulatingCondEq.RegulatingControl -- keine Einheit
 }
 
-func (p *PowerElectronicsConnection) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*PowerElectronicsConnection)(nil)
 ''')
 
-add("control/regulating_control.go", go_header("control", _imp_control) + '''// RegulatingControl describes the steuVA/steuEA control rule attached to a
+add("control/regulating_control.go", go_header("control", [f"{MOD}/common"]) + '''// RegulatingControl describes the steuVA/steuEA control rule attached to a
 // PowerElectronicsConnection (e.g. §14a EnWG load control / §9 EEG feed-in
 // management): whether it is a discrete or continuous control, whether it
 // is enabled, and its allowed value range. CIM: IEC61970 Base
@@ -400,7 +405,7 @@ type RegulatingControl struct {
 }
 ''')
 
-add("control/energy_scheduling_type.go", go_header("control", _imp_control) + '''// EnergySchedulingType categorizes a scheduled energy resource (e.g. for a
+add("control/energy_scheduling_type.go", go_header("control", [f"{MOD}/common"]) + '''// EnergySchedulingType categorizes a scheduled energy resource (e.g. for a
 // PowerElectronicsUnit's planned/steuerbare output). No attributes beyond
 // the base IdentifiedObject fields were verified against our example data.
 // CIM: IEC61970 Base/Scheduling "EnergySchedulingType" (catalog-like
@@ -410,7 +415,7 @@ type EnergySchedulingType struct {
 }
 ''')
 
-add("control/time_schedule.go", go_header("control", _imp_control) + '''// TimeSchedule describes a recurring measurement/control schedule (e.g. a
+add("control/time_schedule.go", go_header("control", [f"{MOD}/common"]) + '''// TimeSchedule describes a recurring measurement/control schedule (e.g. a
 // Meter's reading interval, MeasuringSchedule/TransmissionSchedule).
 // CIM: IEC61970 Base "TimeSchedule".
 type TimeSchedule struct {
@@ -420,7 +425,7 @@ type TimeSchedule struct {
 }
 ''')
 
-add("control/psr_type.go", go_header("control", _imp_control) + '''// PSRType is a catalog entry classifying a PowerSystemResource (e.g. the
+add("control/psr_type.go", go_header("control", [f"{MOD}/common"]) + '''// PSRType is a catalog entry classifying a PowerSystemResource (e.g. the
 // steuVA/steuEA classification of a controllable connection point).
 // CIM: IEC61970 Base "PSRType" (catalog).
 type PSRType struct {
@@ -508,9 +513,6 @@ type Switch struct {
 \tRatedCurrent *float64              `json:"ratedCurrent,omitempty"` // optional; CIM: Switch.ratedCurrent -- Einheit: Ampere (A)
 }
 
-func (s *Switch) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*Switch)(nil)
 ''')
 
 add("switchgear/breaker.go", go_header("switchgear", None) + '''// Breaker is a circuit breaker (Lasttrennschalter) -- a Switch subtype
@@ -611,9 +613,6 @@ type ACLineSegment struct {
 \tPerLengthImpedance         *PerLengthSequenceImpedance `json:"perLengthImpedance,omitempty"`         // optional; CIM: ACLineSegment.PerLengthImpedance -- keine Einheit; NSC-Dialekt: Katalog-Nachschlagewert statt direkter r/x-Angabe oben
 }
 
-func (a *ACLineSegment) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*ACLineSegment)(nil)
 ''')
 
 add("lines/line.go", go_header("lines", [f"{MOD}/common"]) + '''// Line is a CIM EquipmentContainer grouping the ACLineSegments (and any
@@ -646,9 +645,6 @@ type Junction struct {
 \tcommon.Equipment
 }
 
-func (j *Junction) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*Junction)(nil)
 ''')
 
 add("lines/per_length_sequence_impedance.go", go_header("lines", [f"{MOD}/common"]) + '''// PerLengthSequenceImpedance is a catalog entry describing per-kilometer
@@ -683,9 +679,6 @@ type BusbarSection struct {
 \tIpMax       *float64              `json:"ipMax,omitempty"`       // optional; CIM: BusbarSection.ipMax -- Einheit: kA (max. zulässiger Stoßkurzschlussstrom)
 }
 
-func (b *BusbarSection) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*BusbarSection)(nil)
 ''')
 
 add("busbarsandnodes/connectivity_node.go", go_header("busbarsandnodes", [f"{MOD}/common"]) + '''// ConnectivityNode is the physical connection point shared by the
@@ -722,7 +715,7 @@ type BusNameMarker struct {
 }
 ''')
 
-add("busbarsandnodes/terminal.go", go_header("busbarsandnodes", _imp_bb) + '''// Terminal is a CIM connection point of one piece of ConductingEquipment.
+add("busbarsandnodes/terminal.go", go_header("busbarsandnodes", [f"{MOD}/common", f"{MOD}/limits", f"{MOD}/statevariables"]) + '''// Terminal is a CIM connection point of one piece of ConductingEquipment.
 // JAG deliberately avoids modeling Terminals explicitly wherever possible
 // (each JAG Edge just directly references its two connections instead) --
 // this struct exists for lossless CIM import/export round-tripping.
@@ -768,16 +761,12 @@ type PowerTransformer struct {
 \tHighSideMinOperatingU                  *float64                    `json:"highSideMinOperatingU,omitempty"`                  // optional; CIM: PowerTransformer.highSideMinOperatingU -- Einheit: kV
 }
 
-func (t *PowerTransformer) IsConductingEquipment() {}
-func (t *PowerTransformer) IsEquipmentContainer()  {}
+func (t *PowerTransformer) IsEquipmentContainer() {}
 
-var (
-\t_ common.ConductingEquipmentRef = (*PowerTransformer)(nil)
-\t_ common.EquipmentContainer     = (*PowerTransformer)(nil)
-)
+var _ common.EquipmentContainer = (*PowerTransformer)(nil)
 ''')
 
-add("transformers/power_transformer_end.go", go_header("transformers", _imp_trafo) + '''// PowerTransformerEnd is one winding side (OS or US) of a PowerTransformer,
+add("transformers/power_transformer_end.go", go_header("transformers", [f"{MOD}/busbarsandnodes", f"{MOD}/common", f"{MOD}/metadata"]) + '''// PowerTransformerEnd is one winding side (OS or US) of a PowerTransformer,
 // carrying that side's rated values and short-circuit impedance. JAG maps
 // TransformerEnd.endNumber (1/2) directly onto its own Terminal 1/2
 // convention (1 = HV/OS side, 2 = LV/US side). Side-specific attributes are
@@ -1016,9 +1005,6 @@ type GenericEquipment struct {
 \tcommon.Equipment
 }
 
-func (g *GenericEquipment) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*GenericEquipment)(nil)
 ''')
 
 add("hierarchy/house.go", go_header("hierarchy", [f"{MOD}/common", f"{MOD}/geometry"]) + '''// House is JAG's renamed form of the CIM class "Building" (see
@@ -1075,9 +1061,6 @@ type SynchronousMachine struct {
 \tGeneratingUnit *GeneratingUnit     `json:"generatingUnit,omitempty"` // optional; CIM: SynchronousMachine.GeneratingUnit -- keine Einheit
 }
 
-func (s *SynchronousMachine) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*SynchronousMachine)(nil)
 ''')
 
 add("connectionusers/asynchronous_machine.go", go_header("connectionusers", [f"{MOD}/common"]) + '''// AsynchronousMachine is an induction generator/motor. No attributes
@@ -1088,9 +1071,6 @@ type AsynchronousMachine struct {
 \tcommon.Equipment
 }
 
-func (a *AsynchronousMachine) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*AsynchronousMachine)(nil)
 ''')
 
 add("connectionusers/generating_unit.go", go_header("connectionusers", [f"{MOD}/common"]) + '''// GeneratingUnit is the non-electrical "plant" side of a generator
@@ -1103,9 +1083,6 @@ type GeneratingUnit struct {
 \tRatedNetMaxP  *float64 `json:"ratedNetMaxP,omitempty"`  // optional; CIM: GeneratingUnit.ratedNetMaxP -- Einheit: MW
 }
 
-func (g *GeneratingUnit) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*GeneratingUnit)(nil)
 ''')
 
 add("connectionusers/thermal_generating_unit.go", go_header("connectionusers", None) + '''// ThermalGeneratingUnit is a fossil/thermal-fired GeneratingUnit
@@ -1229,9 +1206,6 @@ type ExternalNetworkInjection struct {
 \tQ           *float64 `json:"q,omitempty"`           // optional; CIM: ExternalNetworkInjection.q -- Einheit: MVAr
 }
 
-func (e *ExternalNetworkInjection) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*ExternalNetworkInjection)(nil)
 ''')
 
 add("connectionusers/equivalent_injection.go", go_header("connectionusers", [f"{MOD}/common"]) + '''// EquivalentInjection is a simplified equivalent source/sink used to
@@ -1248,9 +1222,6 @@ type EquivalentInjection struct {
 \tMaxQ *float64 `json:"maxQ,omitempty"` // optional; CIM: EquivalentInjection.maxQ -- Einheit: MVAr
 }
 
-func (e *EquivalentInjection) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*EquivalentInjection)(nil)
 ''')
 
 add("connectionusers/energy_consumer.go", go_header("connectionusers", [f"{MOD}/common", f"{MOD}/metadata"]) + '''// EnergyConsumer is a generic load (Auspeiser/Consumer role) drawing
@@ -1264,12 +1235,9 @@ type EnergyConsumer struct {
 \tPhaseConnection *string           `json:"phaseConnection,omitempty"` // optional; CIM: EnergyConsumer.phaseConnection -- keine Einheit
 }
 
-func (e *EnergyConsumer) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*EnergyConsumer)(nil)
 ''')
 
-add("connectionusers/conform_load.go", go_header("connectionusers", [f"{MOD}/common"]) + '''// ConformLoad is an EnergyConsumer whose demand follows one of a
+add("connectionusers/conform_load.go", go_header("connectionusers", None) + '''// ConformLoad is an EnergyConsumer whose demand follows one of a
 // utility's standard load profiles/curves (as opposed to a NonConformLoad
 // with its own individual profile). CIM: IEC61970 Base "ConformLoad"
 // (extends "EnergyConsumer").
@@ -1311,9 +1279,6 @@ type LinearShuntCompensator struct {
 \tNormalSections   *int                  `json:"normalSections,omitempty"`   // optional; CIM: ShuntCompensator.normalSections -- keine Einheit
 }
 
-func (l *LinearShuntCompensator) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*LinearShuntCompensator)(nil)
 ''')
 
 add("compensation/nonlinear_shunt_compensator.go", go_header("compensation", [f"{MOD}/common", f"{MOD}/metadata"]) + '''// NonlinearShuntCompensator is a shunt capacitor/reactor bank whose
@@ -1326,9 +1291,6 @@ type NonlinearShuntCompensator struct {
 \tPoints      []*NonlinearShuntCompensatorPoint  `json:"points,omitempty"`      // optional; CIM: NonlinearShuntCompensator.NonlinearShuntCompensatorPoints -- keine Einheit
 }
 
-func (n *NonlinearShuntCompensator) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*NonlinearShuntCompensator)(nil)
 ''')
 
 add("compensation/nonlinear_shunt_compensator_point.go", go_header("compensation", None) + '''// NonlinearShuntCompensatorPoint is one row (one section count -> b/g
@@ -1350,9 +1312,6 @@ type StaticVarCompensator struct {
 \tcommon.Equipment
 }
 
-func (s *StaticVarCompensator) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*StaticVarCompensator)(nil)
 ''')
 
 add("compensation/series_compensator.go", go_header("compensation", [f"{MOD}/common"]) + '''// SeriesCompensator is a series capacitor/reactor -- a Zweipol edge with
@@ -1364,9 +1323,6 @@ type SeriesCompensator struct {
 \tcommon.Equipment
 }
 
-func (s *SeriesCompensator) IsConductingEquipment() {}
-
-var _ common.ConductingEquipmentRef = (*SeriesCompensator)(nil)
 ''')
 
 print("compensation done, files so far:", len(files))
