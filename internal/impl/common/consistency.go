@@ -94,6 +94,7 @@ func CheckInvariants(
 	// result.Violations = append(result.Violations, voltageViolations...)
 
 	result.Violations = append(result.Violations, checkConnectivity(nodes, edges)...)
+	result.Violations = append(result.Violations, checkStationConnectivity(nodes, edges, containersResult)...)
 	result.Violations = append(result.Violations, checkBayCableCount(resolved, containersResult, isNSC)...)
 	result.Violations = append(result.Violations, checkContainerPaths(containersResult)...)
 
@@ -382,6 +383,175 @@ func checkConnectivity(nodes []coremodel.Node, edges []coremodel.Edge) []Invaria
 			Rule:     "connectivity",
 			Message:  fmt.Sprintf("disconnected component of %d node(s) not connected to the main network (e.g. member %s)", len(members), members[0]),
 		})
+	}
+	return violations
+}
+
+// checkStationConnectivity is the local counterpart to checkConnectivity
+// (decided with the user 2026-07-14): checkConnectivity only verifies that
+// the WHOLE physical Node/Edge graph forms one component across the entire
+// imported model; it says nothing about whether the equipment INSIDE one
+// individual Station (Substation/distribution-box), House, or ACLine is
+// itself correctly wired together. A piece of equipment could be correctly
+// assigned to a Container (equipment-without-container passes) yet still
+// be internally disconnected from the rest of that same Container's
+// equipment, as long as some other path ties the overall model together —
+// checkConnectivity alone would never catch that.
+//
+// Scope (explicit user decision): only the four "self-contained" top-level
+// Container types are checked — Substation, House (CIM Building), a KVS
+// (distribution-box), and ACLine (a single cable/line chain, checked
+// per-individual-chain, not lumped together). Junction is intentionally
+// NOT checked here (out of scope for now, not decided as "correct" or
+// "incorrect" — a Muffe/splice container usually holds exactly one
+// element, checking it adds no value currently). The user explicitly
+// deferred the analogous GLOBAL "orphaned components across the whole
+// model" question (checkConnectivity's existing, coarser check already
+// covers that, and is intentionally left permissive/non-blocking for now —
+// only Station/House/ACLine-internal wiring must be correct today).
+//
+// GND is deliberately never traversed (explicit user requirement): GND is
+// a shared virtual reference point every single-terminal piece of
+// equipment's Terminal 2 points at (see nodeedge.go's GNDNodeID), not a
+// real physical link between otherwise-unrelated equipment — including it
+// in the union-find would falsely merge any two GND-connected pieces of
+// equipment into one "component" even if nothing else connects them.
+//
+// Implementation note (possible future optimization, not done yet):
+// BuildNodesAndEdges already runs purely in-memory (no DB access) before
+// BuildSachdatenAndGeometryParallel's per-station goroutines start (see
+// parallel.go), so this per-station check could in principle be computed
+// directly inside each station worker (on that worker's own node/edge
+// subset, no additional DB round-trip) instead of as a separate sequential
+// Phase 3 pass — deferred for now to keep the first implementation simple
+// and easy to verify; revisit once correctness is confirmed.
+func checkStationConnectivity(nodes []coremodel.Node, edges []coremodel.Edge, cr *BuildContainersResult) []InvariantViolation {
+	byID := make(map[string]coremodel.Container, len(cr.Containers))
+	for _, c := range cr.Containers {
+		byID[c.ID] = c
+	}
+
+	// checkedType reports whether owner (a top-level Container ID, as
+	// returned by stationOwnerOf) is one of the four in-scope types.
+	checkedType := func(owner string) (coremodel.ContainerType, bool) {
+		c, ok := byID[owner]
+		if !ok {
+			return "", false
+		}
+		switch c.Type {
+		case ContainerTypeSubstation, ContainerTypeHouse, ContainerTypeDistributionBox, ContainerTypeACLine:
+			return c.Type, true
+		}
+		return "", false
+	}
+
+	// nodeOwner: Node.EquipmentID -> owning top-level Container ID, only
+	// for nodes whose owner is in scope. groupNodes: owner -> its member
+	// Node.EquipmentIDs, for the per-owner component check below.
+	nodeOwner := make(map[string]string, len(nodes))
+	groupNodes := map[string][]string{}
+	for _, n := range nodes {
+		contID := cr.EquipmentToCont[n.EquipmentID]
+		if contID == "" {
+			continue // already flagged by equipment-without-container
+		}
+		owner := stationOwnerOf(contID, byID)
+		if _, ok := checkedType(owner); !ok {
+			continue
+		}
+		nodeOwner[n.EquipmentID] = owner
+		groupNodes[owner] = append(groupNodes[owner], n.EquipmentID)
+	}
+	if len(groupNodes) == 0 {
+		return nil
+	}
+
+	parent := map[string]string{}
+	for eqID := range nodeOwner {
+		parent[eqID] = eqID
+	}
+	find := func(x string) string {
+		for parent[x] != x {
+			parent[x] = parent[parent[x]] // path halving
+			x = parent[x]
+		}
+		return x
+	}
+	union := func(a, b string) {
+		ra, rb := find(a), find(b)
+		if ra != rb {
+			parent[ra] = rb
+		}
+	}
+
+	for _, e := range edges {
+		if e.Terminal1NodeID == "" || e.Terminal2NodeID == "" {
+			continue
+		}
+		if e.Terminal1NodeID == GNDNodeID || e.Terminal2NodeID == GNDNodeID {
+			continue // never traverse through GND for this check
+		}
+		eqContID := cr.EquipmentToCont[e.EquipmentID]
+		if eqContID == "" {
+			continue
+		}
+		owner := stationOwnerOf(eqContID, byID)
+		if _, ok := checkedType(owner); !ok {
+			continue // this Edge's own Container isn't in scope
+		}
+		// Only union if both endpoints actually belong to this same
+		// owner's group — a boundary Edge (e.g. a feeder cable reaching
+		// out to an external ACLine/House) has its OWN owner excluded by
+		// construction already (its EquipmentID resolves to the ACLine's
+		// owner, not the Station's), but this guard keeps the check
+		// robust even if a Node's own Container assignment looks
+		// otherwise inconsistent.
+		if nodeOwner[e.Terminal1NodeID] != owner || nodeOwner[e.Terminal2NodeID] != owner {
+			continue
+		}
+		union(e.Terminal1NodeID, e.Terminal2NodeID)
+	}
+
+	var owners []string
+	for owner := range groupNodes {
+		owners = append(owners, owner)
+	}
+	sort.Strings(owners)
+
+	var violations []InvariantViolation
+	for _, owner := range owners {
+		members := groupNodes[owner]
+		components := map[string][]string{}
+		for _, m := range members {
+			root := find(m)
+			components[root] = append(components[root], m)
+		}
+		if len(components) <= 1 {
+			continue
+		}
+		var roots []string
+		for r := range components {
+			roots = append(roots, r)
+		}
+		sort.Slice(roots, func(i, j int) bool {
+			if len(components[roots[i]]) != len(components[roots[j]]) {
+				return len(components[roots[i]]) > len(components[roots[j]])
+			}
+			return roots[i] < roots[j] // deterministic tie-break
+		})
+		ownerTyp, _ := checkedType(owner)
+		for _, r := range roots[1:] { // keep the largest sub-component as "the main part of this container"
+			mem := components[r]
+			sort.Strings(mem)
+			violations = append(violations, InvariantViolation{
+				ObjectID: owner,
+				Rule:     "station-connectivity",
+				Message: fmt.Sprintf(
+					"container %s (type %q) has a disconnected internal component of %d node(s) not connected to its main part (e.g. member %s), GND excluded",
+					owner, ownerTyp, len(mem), mem[0],
+				),
+			})
+		}
 	}
 	return violations
 }
