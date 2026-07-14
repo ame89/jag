@@ -127,17 +127,26 @@ func BuildElectricalGroups(store staging.Store, version uint64, nodes []coremode
 		}
 	}
 
+	edgeIDs := make([]string, len(edges))
+	for i, e := range edges {
+		edgeIDs[i] = e.EquipmentID
+	}
+	recordsByID, err := getByIDsIndexed(store, version, edgeIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("common: looking up switch states: %w", err)
+	}
+
 	var switches []SwitchInfo
+	p := newProgress("electrical-groups")
 	for _, e := range edges {
-		records, err := store.GetByID(version, e.EquipmentID)
-		if err != nil {
-			return nil, nil, fmt.Errorf("common: looking up switch state of %s: %w", e.EquipmentID, err)
-		}
+		records := recordsByID[e.EquipmentID]
 		if len(records) == 0 {
+			p.Tick(1)
 			continue
 		}
 		state := classifySwitch(records)
 		if !state.IsSwitch {
+			p.Tick(1)
 			continue
 		}
 		open := effectiveOpen(overrides, e.EquipmentID, state.Open)
@@ -145,7 +154,9 @@ func BuildElectricalGroups(store staging.Store, version uint64, nodes []coremode
 		if !open {
 			union(e.Terminal1NodeID, e.Terminal2NodeID)
 		}
+		p.Tick(1)
 	}
+	p.Done()
 
 	groups := make(ElectricalGroups, len(nodes))
 	for _, n := range nodes {
@@ -217,11 +228,18 @@ func BuildCircuits(store staging.Store, version uint64, nodes []coremodel.Node, 
 		open     bool
 	}
 	infoOf := make(map[string]edgeInfo, len(edges))
+	edgeIDs := make([]string, len(edges))
+	for i, e := range edges {
+		edgeIDs[i] = e.EquipmentID
+	}
+	recordsByID, err := getByIDsIndexed(store, version, edgeIDs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("common: looking up edge classes: %w", err)
+	}
+
+	p := newProgress("circuits")
 	for _, e := range edges {
-		records, lookupErr := store.GetByID(version, e.EquipmentID)
-		if lookupErr != nil {
-			return nil, nil, nil, fmt.Errorf("common: looking up class of %s: %w", e.EquipmentID, lookupErr)
-		}
+		records := recordsByID[e.EquipmentID]
 		var info edgeInfo
 		if len(records) > 0 {
 			info.class = records[0].Class
@@ -230,6 +248,7 @@ func BuildCircuits(store staging.Store, version uint64, nodes []coremodel.Node, 
 		info.isSwitch = state.IsSwitch
 		info.open = effectiveOpen(overrides, e.EquipmentID, state.Open)
 		infoOf[e.EquipmentID] = info
+		p.Tick(1)
 
 		if info.class == "PowerTransformer" {
 			continue // galvanically decoupled — never union
@@ -242,6 +261,7 @@ func BuildCircuits(store staging.Store, version uint64, nodes []coremodel.Node, 
 		}
 		union(e.Terminal1NodeID, e.Terminal2NodeID)
 	}
+	p.Done()
 
 	nodeCircuit = make(map[string]string, len(nodes))
 	circuits = map[string]*Circuit{}

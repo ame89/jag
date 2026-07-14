@@ -41,9 +41,18 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 			wantSizesDesc: []int{8, 7, 2, 2},
 		},
 		{
+			// Updated 2026-07-14: BusbarSection was added to
+			// terminals.go's nodeRoleClasses (previously only Junction),
+			// fixing a bug where any BusbarSection with >2 Terminals (a
+			// perfectly normal busbar with many feeder connections) was
+			// wrongly rejected as an Anomaly instead of being treated as
+			// a Node-role marker for its own ConnectivityNode(s) — see
+			// nodeedge.go's doc comment. This dataset had 6 such
+			// previously-rejected BusbarSections; correctly including
+			// them merges two previously-separate Circuits into one.
 			dir:           "MiniGrid_NodeBreaker_Switchgear",
-			wantCircuits:  8,
-			wantSizesDesc: []int{58, 14, 11, 4, 4, 4, 4, 4},
+			wantCircuits:  7,
+			wantSizesDesc: []int{58, 14, 11, 7, 4, 4, 4},
 		},
 		{
 			dir:          "ReliCapGrid_Espheim",
@@ -125,11 +134,78 @@ func TestBuildCircuitsAgainstRealDatasetsCGMES3(t *testing.T) {
 	}
 }
 
+// TestBuildCircuitsAgainstRealDatasetsCigreMV mirrors
+// TestBuildCircuitsAgainstRealDatasets for the examples/cigre_mv dataset,
+// which (unlike examples/cgmes/*) has no per-scenario subdirectory — its
+// profile files (Equipment/Topology/SteadyStateHypothesis/StateVariables/
+// DiagramLayout) sit directly under examples/cigre_mv.
+func TestBuildCircuitsAgainstRealDatasetsCigreMV(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "examples", "cigre_mv")
+	wantCircuits := 3
+	wantSizesDesc := []int{11, 3, 1}
+
+	gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+
+	if gotCircuits != wantCircuits {
+		t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, wantCircuits, gotSizes)
+	}
+	if !equalInts(gotSizes, wantSizesDesc) {
+		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
+	}
+}
+
+// TestBuildCircuitsAgainstRealDatasetsNSC mirrors
+// TestBuildCircuitsAgainstRealDatasets for the examples/nsc dataset
+// (NSC dialect, via phase1.RunNSCFiles). Unlike the CGMES datasets above,
+// examples/nsc's two ".xml" files are independent scenarios that happen to
+// share an object ID ("IS123") — RunNSCFiles treats any shared ID across
+// files passed to a single call as a hard error (see RunNSCFiles' doc
+// comment), so each file is imported in its own call here rather than as a
+// single whole-directory glob.
+//
+// examples/nsc-problem is intentionally excluded — the user has asked to
+// only inspect it on explicit request, not as part of this regression
+// suite.
+func TestBuildCircuitsAgainstRealDatasetsNSC(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "examples", "nsc")
+
+	tests := []struct {
+		file          string
+		wantCircuits  int
+		wantSizesDesc []int
+	}{
+		{
+			file:          "example_as_cim.xml",
+			wantCircuits:  9,
+			wantSizesDesc: []int{35, 20, 13, 13, 8, 6, 6, 3, 3},
+		},
+		{
+			file:          "Eine_ONS_mit_2_KVS_3_Muffen_und_9_Häuser_ohne_Trafo_MD.xml",
+			wantCircuits:  3,
+			wantSizesDesc: []int{23, 18, 6},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			gotCircuits, gotSizes := buildCircuitsForFiles(t, []string{filepath.Join(dir, tt.file)}, true)
+
+			if gotCircuits != tt.wantCircuits {
+				t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, tt.wantCircuits, gotSizes)
+			}
+			if !equalInts(gotSizes, tt.wantSizesDesc) {
+				t.Fatalf("Circuit sizes = %v, want %v", gotSizes, tt.wantSizesDesc)
+			}
+		})
+	}
+}
+
 // buildCircuitsForDataset runs the same pipeline phase2check/circuitcount
-// use (Phase 1 -> ResolveTerminals -> BuildContainers ->
-// MergeBusbarSectionNodes -> BuildNodesAndEdges -> BuildCircuits) against
-// every *.xml file in dir and returns the resulting Circuit count plus
-// each Circuit's Node count, sorted descending.
+// use (Phase 1 -> ResolveTerminals -> BuildContainers -> MergeJunctionNodes
+// -> MergeBusbarSectionNodes -> BuildNodesAndEdges -> BuildCircuits) against
+// every *.xml file in dir (CGMES dialect, via phase1.RunCGMESFiles) and
+// returns the resulting Circuit count plus each Circuit's Node count,
+// sorted descending.
 func buildCircuitsForDataset(t *testing.T, dir string) (int, []int) {
 	t.Helper()
 
@@ -142,21 +218,37 @@ func buildCircuitsForDataset(t *testing.T, dir string) (int, []int) {
 	}
 	sort.Strings(files)
 
+	return buildCircuitsForFiles(t, files, false)
+}
+
+// buildCircuitsForFiles is the dialect-aware core shared by
+// buildCircuitsForDataset (CGMES, whole-directory glob) and the NSC tests
+// below (which must import one file at a time — see RunNSCFiles' doc
+// comment on why NSC scenario files sharing an object ID across files is a
+// hard error, not something a directory-wide glob can handle here).
+func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int) {
+	t.Helper()
+
 	store, err := sqlite.Open(":memory:")
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
 	defer store.Close()
 
-	result, err := phase1.RunCGMESFiles(store, files)
+	var result phase1.Result
+	if isNSC {
+		result, err = phase1.RunNSCFiles(store, files)
+	} else {
+		result, err = phase1.RunCGMESFiles(store, files)
+	}
 	if err != nil {
-		t.Fatalf("RunCGMESFiles: %v", err)
+		t.Fatalf("Run*Files: %v", err)
 	}
 	if len(result.Errors) != 0 {
-		t.Fatalf("RunCGMESFiles reported %d collected errors: %+v", len(result.Errors), result.Errors)
+		t.Fatalf("Run*Files reported %d collected errors: %+v", len(result.Errors), result.Errors)
 	}
 
-	resolved, _, err := ResolveTerminals(store, result.Version, 1000)
+	resolved, nodeRoleIDs, _, err := ResolveTerminals(store, result.Version, 1000)
 	if err != nil {
 		t.Fatalf("ResolveTerminals: %v", err)
 	}
@@ -178,8 +270,17 @@ func buildCircuitsForDataset(t *testing.T, dir string) (int, []int) {
 		}
 	}
 
-	mergedResolved := MergeBusbarSectionNodes(resolved, containers, busbarSectionIDs)
-	nodes, edges := BuildNodesAndEdges(mergedResolved, busbarSectionIDs)
+	nodeOnlyIDs := map[string]bool{}
+	for eqID := range busbarSectionIDs {
+		nodeOnlyIDs[eqID] = true
+	}
+	for eqID := range nodeRoleIDs {
+		nodeOnlyIDs[eqID] = true
+	}
+
+	junctionMerged := MergeJunctionNodes(resolved, nodeRoleIDs)
+	mergedResolved := MergeBusbarSectionNodes(junctionMerged, containers, nodeOnlyIDs)
+	nodes, edges := BuildNodesAndEdges(mergedResolved, nodeOnlyIDs)
 
 	circuits, _, _, err := BuildCircuits(store, result.Version, nodes, edges, nil)
 	if err != nil {

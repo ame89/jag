@@ -19,10 +19,47 @@ import (
 // only Node1 set is a single-terminal source/sink (see Konzept.md/model
 // decision: connection 2 is implicitly wired to GND during model-building,
 // not stored as a real Terminal in the source data).
+//
+// ExtraNodes is populated only for node-role Equipment (see nodeRoleClasses
+// — currently Junction) that has more than one of its own ConnectivityNode:
+// unlike a Zweipol, such Equipment isn't limited to two Terminals — a
+// branching splice/T-Muffe can have any number of connections, all
+// representing the SAME physical point. Node1 holds one of them
+// (the lexicographically smallest), ExtraNodes the rest; junctionmerge.go's
+// MergeJunctionNodes unifies them onto one canonical Node ID. Regular
+// Zweipol/single-terminal-source Equipment never sets this field.
 type EquipmentTerminals struct {
 	EquipmentID string
 	Node1       string // ConnectivityNode ID at sequenceNumber 1 (or TopologicalNode ID, bus-branch fallback — see scanTerminals)
 	Node2       string // ConnectivityNode ID at sequenceNumber 2, if any (empty for single-terminal source/sink)
+	ExtraNodes  []string
+}
+
+// nodeRoleClasses are CIM classes whose Equipment objects are, despite
+// having their own Terminals, not a Zweipol/Edge at all — they are purely a
+// Node-role marker for their own (possibly several) ConnectivityNode(s).
+// Decided explicitly with the user (2026-07-13, NSC import investigation):
+// a Junction (Kabelmuffe) can be a branching splice (Abzweigmuffe/T-Muffe)
+// with 3+ Terminals, one per cable segment meeting at that physical point —
+// structurally impossible to express as a two-terminal Edge. This mirrors
+// BusbarSection's existing Node-role treatment (see nodeedge.go), just
+// generalized to more than one of the object's own ConnectivityNodes. This
+// is dialect-neutral: it applies to CGMES data too, not just NSC, since
+// it's a real modeling decision, not an import-format quirk.
+//
+// BusbarSection (added 2026-07-14, load-test investigation): a busbar with
+// many feeder connections naturally has one Terminal per feeder (observed:
+// 11 Terminals for a 200-station/10-feeder load-test dataset). Without
+// BusbarSection in nodeRoleClasses, classifyTerminals rejected every such
+// busbar as an Anomaly (>2 Terminals) before it ever reached ResolveTerminals'
+// result map, so nodeedge.go's separate nodeOnlyIDs/BusbarSection handling
+// (see its own doc comment) never got the chance to treat it as a Node-role
+// marker — this fixes that upstream gap. Same reasoning as Junction: a
+// busbar's own Node1/ExtraNodes are its (possibly several) real
+// ConnectivityNode(s), never true Edge terminals.
+var nodeRoleClasses = map[string]bool{
+	"Junction":      true,
+	"BusbarSection": true,
 }
 
 // TerminalRef is one raw Terminal seen for an Equipment, kept for
@@ -65,10 +102,19 @@ type rawTerminal struct {
 // Equipment.EquipmentContainer attribute (the generic marker of "this is a
 // real piece of Equipment", present regardless of CIM subclass) and cross-
 // checks them against what the Terminal scan found.
-func ResolveTerminals(store staging.Store, version uint64, chunkSize int) (map[string]EquipmentTerminals, []Anomaly, error) {
+//
+// The returned nodeRoleIDs set names exactly the Equipment IDs resolved via
+// the node-role path (nodeRoleClasses) rather than the ordinary Zweipol
+// path — callers (BuildNodesAndEdges, MergeJunctionNodes) need it to tell
+// the two apart.
+func ResolveTerminals(store staging.Store, version uint64, chunkSize int) (map[string]EquipmentTerminals, map[string]bool, []Anomaly, error) {
 	byEquipment, err := scanTerminals(store, version, chunkSize)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+	nodeRoleIDs, err := scanNodeRoleIDs(store, version, chunkSize)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	result := map[string]EquipmentTerminals{}
@@ -80,28 +126,68 @@ func ResolveTerminals(store staging.Store, version uint64, chunkSize int) (map[s
 	}
 	sort.Strings(equipmentIDs)
 
+	p := newProgress("terminals-classify")
 	for _, eqID := range equipmentIDs {
-		et, ok, msg := classifyTerminals(eqID, byEquipment[eqID])
+		var et EquipmentTerminals
+		var ok bool
+		var msg string
+		if nodeRoleIDs[eqID] {
+			et, ok, msg = classifyNodeRoleTerminals(eqID, byEquipment[eqID])
+		} else {
+			et, ok, msg = classifyTerminals(eqID, byEquipment[eqID])
+		}
 		if !ok {
 			refs := make([]TerminalRef, len(byEquipment[eqID]))
 			for i, t := range byEquipment[eqID] {
 				refs[i] = t.TerminalRef
 			}
 			anomalies = append(anomalies, Anomaly{EquipmentID: eqID, Terminals: refs, Message: msg})
+			p.Tick(1)
 			continue
 		}
 		result[eqID] = et
+		p.Tick(1)
 	}
+	p.Done()
 
 	missing, err := findEquipmentWithoutTerminals(store, version, chunkSize, byEquipment)
 	if err != nil {
-		return result, anomalies, err
+		return result, nodeRoleIDs, anomalies, err
 	}
 	for _, eqID := range missing {
 		anomalies = append(anomalies, Anomaly{EquipmentID: eqID, Message: "equipment has zero terminals"})
 	}
 
-	return result, anomalies, nil
+	return result, nodeRoleIDs, anomalies, nil
+}
+
+// scanNodeRoleIDs scans every class in nodeRoleClasses (currently just
+// "Junction") and returns the distinct object IDs found — cheap compared
+// to a per-Equipment class lookup, since there are normally few node-role
+// classes and few objects of each.
+func scanNodeRoleIDs(store staging.Store, version uint64, chunkSize int) (map[string]bool, error) {
+	ids := map[string]bool{}
+	for class := range nodeRoleClasses {
+		afterID := ""
+		for {
+			records, err := store.GetByClass(version, class, afterID, chunkSize)
+			if err != nil {
+				return nil, fmt.Errorf("common: scanning node-role class %s: %w", class, err)
+			}
+			if len(records) == 0 {
+				break
+			}
+			distinct := distinctIDsInOrder(records)
+			for _, id := range distinct {
+				ids[id] = true
+			}
+			afterID = distinct[len(distinct)-1]
+			if len(distinct) < chunkSize {
+				break
+			}
+		}
+	}
+	return ids, nil
 }
 
 // scanTerminals performs the actual chunked "Terminal" class scan and
@@ -109,6 +195,7 @@ func ResolveTerminals(store staging.Store, version uint64, chunkSize int) (map[s
 func scanTerminals(store staging.Store, version uint64, chunkSize int) (map[string][]rawTerminal, error) {
 	byEquipment := map[string][]rawTerminal{}
 
+	p := newProgress("terminals-scan")
 	afterID := ""
 	for {
 		records, err := store.GetByClass(version, "Terminal", afterID, chunkSize)
@@ -152,10 +239,12 @@ func scanTerminals(store staging.Store, version uint64, chunkSize int) (map[stri
 		}
 
 		afterID = ids[len(ids)-1]
+		p.Tick(len(ids))
 		if len(ids) < chunkSize {
 			break
 		}
 	}
+	p.Done()
 	return byEquipment, nil
 }
 
@@ -176,7 +265,12 @@ func isGeneratingUnitClass(class string) bool {
 // the version and returns the IDs of objects that carry an
 // Equipment.EquipmentContainer attribute (the generic "this is Equipment"
 // marker) but never showed up in the Terminal scan — i.e. Equipment with
-// zero Terminals.
+// zero Terminals. PowerElectronicsUnit subclasses (NSC dialect: Wallbox,
+// PhotoVoltaicUnit, BatteryUnit, AirConditioningUnit, ...) are excluded via
+// their PowerElectronicsUnit.PowerElectronicsConnection attribute (decided
+// 2026-07-14): analogous to GeneratingUnit above, these are satellite device
+// descriptions attached to their PowerElectronicsConnection (the actual
+// grid-connection point with its own Terminal), never wired directly.
 func findEquipmentWithoutTerminals(store staging.Store, version uint64, chunkSize int, found map[string][]rawTerminal) ([]string, error) {
 	classes, err := store.ListClasses(version)
 	if err != nil {
@@ -204,6 +298,9 @@ func findEquipmentWithoutTerminals(store staging.Store, version uint64, chunkSiz
 
 			for _, id := range ids {
 				if !idx.HasAttr(id, "Equipment.EquipmentContainer") {
+					continue
+				}
+				if idx.HasAttr(id, "PowerElectronicsUnit.PowerElectronicsConnection") {
 					continue
 				}
 				if _, ok := found[id]; !ok {
@@ -257,6 +354,42 @@ func classifyTerminals(eqID string, terms []rawTerminal) (EquipmentTerminals, bo
 			return EquipmentTerminals{}, false, "two terminals but sequence numbers aren't exactly 1 and 2"
 		}
 		et.Node1, et.Node2 = n1, n2
+	}
+	return et, true, ""
+}
+
+// classifyNodeRoleTerminals interprets the raw Terminals collected for a
+// node-role Equipment (see nodeRoleClasses — currently Junction). Unlike a
+// Zweipol, such Equipment may have any number (>=1) of Terminals, each
+// wired to a different ConnectivityNode/TopologicalNode, all representing
+// the SAME physical connection point (e.g. a branching splice/T-Muffe
+// feeding several cable segments) — junctionmerge.go's MergeJunctionNodes
+// unifies them onto one canonical Node. Sequence numbers are irrelevant
+// here (a multi-way splice has no "terminal 1 vs terminal 2" direction),
+// so — unlike classifyTerminals — they are not checked at all. Zero
+// Terminals or a missing ConnectivityNode/TopologicalNode on any of them is
+// still reported as an Anomaly.
+func classifyNodeRoleTerminals(eqID string, terms []rawTerminal) (EquipmentTerminals, bool, string) {
+	if len(terms) == 0 {
+		return EquipmentTerminals{}, false, "node-role equipment has zero terminals"
+	}
+
+	seen := map[string]bool{}
+	var nodes []string
+	for _, t := range terms {
+		if t.ConnectivityNode == "" {
+			return EquipmentTerminals{}, false, fmt.Sprintf("terminal %s has no ConnectivityNode and no TopologicalNode", t.TerminalID)
+		}
+		if !seen[t.ConnectivityNode] {
+			seen[t.ConnectivityNode] = true
+			nodes = append(nodes, t.ConnectivityNode)
+		}
+	}
+	sort.Strings(nodes)
+
+	et := EquipmentTerminals{EquipmentID: eqID, Node1: nodes[0]}
+	if len(nodes) > 1 {
+		et.ExtraNodes = nodes[1:]
 	}
 	return et, true, ""
 }

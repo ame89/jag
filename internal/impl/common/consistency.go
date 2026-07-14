@@ -41,6 +41,10 @@ type Phase3Result struct {
 //   - "bay-cable-count": at most one cable/ACLine may be connected to any
 //     one Bay (decided explicitly with the user 2026-07-13; a Bay/Feeder
 //     can have zero or one outgoing cable connection, never two).
+//     Relaxed for the NSC dialect (decided 2026-07-14): NSC Feeders may
+//     genuinely have several downstream cables/house-connection stubs, so
+//     this check is skipped entirely when isNSC is true; CGMES keeps the
+//     strict rule.
 //   - "container-path": every Container must fit one of the 6 decided
 //     parent-child path templates (Konzept.md, "Eltern-Kind-Regeln des
 //     Container-Baums") — wrong nesting (e.g. a busbar not directly under a
@@ -64,18 +68,34 @@ func CheckInvariants(
 	containersResult *BuildContainersResult,
 	nodes []coremodel.Node,
 	edges []coremodel.Edge,
+	isNSC bool,
 ) (Phase3Result, error) {
+	p := newProgress("phase3-invariants")
+	defer p.Done()
 	var result Phase3Result
 
-	voltageViolations, err := checkVoltageLevels(store, version, resolved)
-	if err != nil {
-		return result, fmt.Errorf("common: checking voltage levels: %w", err)
-	}
-	result.Violations = append(result.Violations, voltageViolations...)
+	// TODO(2026-07-14, temporarily disabled per explicit user request):
+	// the "voltage-level" check is switched off for now. Root cause: the
+	// NSC dialect has no VoltageLevel class at all — Equipment attaches
+	// directly to a Feeder (JAG's Bay-equivalent, see BuildContainers) or
+	// straight to a Substation, so the Bay.VoltageLevel -> BaseVoltage
+	// fallback chain this check relies on can never resolve for NSC data,
+	// producing a large number of false-positive violations (e.g. every
+	// Fuse in examples/nsc/example_as_cim.xml). Re-enable once a real
+	// NSC-appropriate voltage-level source is decided (e.g. a Sachdaten
+	// key/attribute carrying nominal voltage directly on Feeder, or some
+	// other NSC-specific resolution) — do not just silently leave this
+	// off going forward.
+	//
+	// voltageViolations, err := checkVoltageLevels(store, version, resolved)
+	// if err != nil {
+	// 	return result, fmt.Errorf("common: checking voltage levels: %w", err)
+	// }
+	// result.Violations = append(result.Violations, voltageViolations...)
 
 	result.Violations = append(result.Violations, checkConnectivity(nodes, edges)...)
 
-	result.Violations = append(result.Violations, checkBayCableCount(resolved, containersResult)...)
+	result.Violations = append(result.Violations, checkBayCableCount(resolved, containersResult, isNSC)...)
 
 	result.Violations = append(result.Violations, checkContainerPaths(containersResult)...)
 
@@ -119,12 +139,20 @@ func checkVoltageLevels(store staging.Store, version uint64, resolved map[string
 	}
 	sort.Strings(equipmentIDs)
 
-	var violations []InvariantViolation
+	eqRecords, err := getByIDsIndexed(store, version, equipmentIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	type eqInfo struct {
+		class       string
+		voltages    map[string]bool
+		containerID string
+	}
+	infos := make(map[string]eqInfo, len(equipmentIDs))
+	var transformerIDs, containerIDs []string
 	for _, eqID := range equipmentIDs {
-		records, err := store.GetByID(version, eqID)
-		if err != nil {
-			return nil, err
-		}
+		records := eqRecords[eqID]
 		if len(records) == 0 {
 			continue // dangling/external reference, nothing to check here
 		}
@@ -140,13 +168,112 @@ func checkVoltageLevels(store staging.Store, version uint64, resolved map[string
 				containerID = r.Value
 			}
 		}
-
 		if class == "PowerTransformer" {
-			ends, err := transformerEndBaseVoltages(store, version, eqID)
-			if err != nil {
-				return nil, err
+			transformerIDs = append(transformerIDs, eqID)
+		} else if containerID != "" {
+			containerIDs = append(containerIDs, containerID)
+		}
+		infos[eqID] = eqInfo{class: class, voltages: voltages, containerID: containerID}
+	}
+
+	// PowerTransformerEnd.BaseVoltage for every PowerTransformer, batched:
+	// one reverse-reference lookup for all transformers, then one forward
+	// lookup for all their ends.
+	incomingToTransformers, err := getReferencesToAnyIndexed(store, version, transformerIDs)
+	if err != nil {
+		return nil, err
+	}
+	var endIDs []string
+	for _, incoming := range incomingToTransformers {
+		for _, r := range incoming {
+			if r.Attribute == "PowerTransformerEnd.PowerTransformer" {
+				endIDs = append(endIDs, r.ID)
 			}
-			for v := range ends {
+		}
+	}
+	endRecords, err := getByIDsIndexed(store, version, endIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Container fallback (Equipment.EquipmentContainer -> Bay/VoltageLevel
+	// -> BaseVoltage) for every non-transformer equipment's container,
+	// batched: one lookup for all containers, one for all Bay->VoltageLevel
+	// targets found among them.
+	containerRecords, err := getByIDsIndexed(store, version, containerIDs)
+	if err != nil {
+		return nil, err
+	}
+	var vlIDs []string
+	for _, records := range containerRecords {
+		if len(records) == 0 || records[0].Class != "Bay" {
+			continue
+		}
+		for _, r := range records {
+			if r.IsReference && r.Attribute == "Bay.VoltageLevel" {
+				vlIDs = append(vlIDs, r.Value)
+			}
+		}
+	}
+	vlRecords, err := getByIDsIndexed(store, version, vlIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	transformerEndVoltages := func(transformerID string) map[string]bool {
+		voltages := map[string]bool{}
+		seenEnds := map[string]bool{}
+		for _, r := range incomingToTransformers[transformerID] {
+			if r.Attribute != "PowerTransformerEnd.PowerTransformer" || seenEnds[r.ID] {
+				continue
+			}
+			seenEnds[r.ID] = true
+			for _, er := range endRecords[r.ID] {
+				if er.IsReference && er.Attribute == "TransformerEnd.BaseVoltage" {
+					voltages[er.Value] = true
+				}
+			}
+		}
+		return voltages
+	}
+
+	containerBaseVoltage := func(containerID string) string {
+		records := containerRecords[containerID]
+		if len(records) == 0 {
+			return ""
+		}
+		lookupRecords := records
+		if records[0].Class == "Bay" {
+			vlID := ""
+			for _, r := range records {
+				if r.IsReference && r.Attribute == "Bay.VoltageLevel" {
+					vlID = r.Value
+					break
+				}
+			}
+			if vlID == "" {
+				return ""
+			}
+			lookupRecords = vlRecords[vlID]
+		}
+		for _, r := range lookupRecords {
+			if r.IsReference && r.Attribute == "VoltageLevel.BaseVoltage" {
+				return r.Value
+			}
+		}
+		return ""
+	}
+
+	var violations []InvariantViolation
+	for _, eqID := range equipmentIDs {
+		info, ok := infos[eqID]
+		if !ok {
+			continue // dangling/external reference, nothing to check here
+		}
+		voltages := info.voltages
+
+		if info.class == "PowerTransformer" {
+			for v := range transformerEndVoltages(eqID) {
 				voltages[v] = true
 			}
 			switch {
@@ -164,12 +291,8 @@ func checkVoltageLevels(store staging.Store, version uint64, resolved map[string
 			continue
 		}
 
-		if len(voltages) == 0 && containerID != "" {
-			v, err := containerBaseVoltage(store, version, containerID)
-			if err != nil {
-				return nil, err
-			}
-			if v != "" {
+		if len(voltages) == 0 && info.containerID != "" {
+			if v := containerBaseVoltage(info.containerID); v != "" {
 				voltages[v] = true
 			}
 		}
@@ -190,72 +313,6 @@ func checkVoltageLevels(store staging.Store, version uint64, resolved map[string
 		}
 	}
 	return violations, nil
-}
-
-// containerBaseVoltage resolves the BaseVoltage of a container reached via
-// Equipment.EquipmentContainer, which is either a Bay (-> Bay.VoltageLevel
-// -> VoltageLevel.BaseVoltage) or a VoltageLevel directly (->
-// VoltageLevel.BaseVoltage) — the same two shapes BuildContainers already
-// handles for the same reference (see container.go).
-func containerBaseVoltage(store staging.Store, version uint64, containerID string) (string, error) {
-	records, err := store.GetByID(version, containerID)
-	if err != nil {
-		return "", err
-	}
-	if len(records) == 0 {
-		return "", nil
-	}
-	vlID := containerID
-	if records[0].Class == "Bay" {
-		vlID = ""
-		for _, r := range records {
-			if r.IsReference && r.Attribute == "Bay.VoltageLevel" {
-				vlID = r.Value
-				break
-			}
-		}
-		if vlID == "" {
-			return "", nil
-		}
-	}
-	vlRecords, err := store.GetByID(version, vlID)
-	if err != nil {
-		return "", err
-	}
-	for _, r := range vlRecords {
-		if r.IsReference && r.Attribute == "VoltageLevel.BaseVoltage" {
-			return r.Value, nil
-		}
-	}
-	return "", nil
-}
-
-// transformerEndBaseVoltages returns the distinct BaseVoltage IDs found
-// across every PowerTransformerEnd attached to transformerID (found via the
-// reverse reference PowerTransformerEnd.PowerTransformer -> transformerID).
-func transformerEndBaseVoltages(store staging.Store, version uint64, transformerID string) (map[string]bool, error) {
-	incoming, err := store.GetReferencesTo(version, transformerID)
-	if err != nil {
-		return nil, err
-	}
-	voltages := map[string]bool{}
-	seenEnds := map[string]bool{}
-	for _, r := range incoming {
-		if r.Attribute != "PowerTransformerEnd.PowerTransformer" || seenEnds[r.ID] {
-			continue
-		}
-		seenEnds[r.ID] = true
-		endRecords, err := store.GetByID(version, r.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, er := range endRecords {
-			if er.IsReference && er.Attribute == "TransformerEnd.BaseVoltage" {
-				voltages[er.Value] = true
-			}
-		}
-	}
-	return voltages, nil
 }
 
 // checkConnectivity enforces "all elements form one connected graph from
@@ -343,7 +400,18 @@ func checkConnectivity(nodes []coremodel.Node, edges []coremodel.Edge) []Invaria
 // anomaly, but already caught by checkConnectivity as a disconnected
 // component) or terminates at a House instead of a Bay (not an anomaly),
 // neither of which this specific check needs to distinguish.
-func checkBayCableCount(resolved map[string]EquipmentTerminals, cr *BuildContainersResult) []InvariantViolation {
+func checkBayCableCount(resolved map[string]EquipmentTerminals, cr *BuildContainersResult, isNSC bool) []InvariantViolation {
+	// Relaxed for NSC (decided 2026-07-14): the original "at most one
+	// cable/ACLine per Bay" rule (decided 2026-07-13) assumed one outgoing
+	// feeder cable per Bay, but real NSC example data (example_as_cim.xml)
+	// has Feeders legitimately serving multiple downstream cable
+	// runs/house-connection stubs (observed up to 5 per Feeder) — this is a
+	// genuine NSC distribution-topology characteristic, not a data defect.
+	// CGMES data keeps the strict rule unchanged.
+	if isNSC {
+		return nil
+	}
+
 	bayIDs := map[string]bool{}
 	for _, c := range cr.Containers {
 		if c.Type == ContainerTypeBay {
@@ -602,14 +670,15 @@ func checkUnreferencedNodesOfClass(store staging.Store, version uint64, class, r
 		return nil, err
 	}
 
+	refsByTarget, err := getReferencesToAnyIndexed(store, version, nodeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("common: checking references to %s nodes: %w", class, err)
+	}
+
 	var violations []InvariantViolation
 	for _, id := range nodeIDs {
-		refs, err := store.GetReferencesTo(version, id)
-		if err != nil {
-			return nil, fmt.Errorf("common: checking references to %s %s: %w", class, id, err)
-		}
 		count := 0
-		for _, r := range refs {
+		for _, r := range refsByTarget[id] {
 			if r.IsReference && r.Attribute == refAttribute {
 				count++
 			}
@@ -643,17 +712,22 @@ func checkEquipmentWithoutContainer(store staging.Store, version uint64, resolve
 	}
 	sort.Strings(equipmentIDs)
 
-	var violations []InvariantViolation
+	var missingIDs []string
 	for _, id := range equipmentIDs {
-		if _, ok := cr.EquipmentToCont[id]; ok {
-			continue
+		if _, ok := cr.EquipmentToCont[id]; !ok {
+			missingIDs = append(missingIDs, id)
 		}
+	}
+
+	missingRecords, err := getByIDsIndexed(store, version, missingIDs)
+	if err != nil {
+		return nil, fmt.Errorf("common: looking up classes of equipment without container: %w", err)
+	}
+
+	var violations []InvariantViolation
+	for _, id := range missingIDs {
 		class := "unknown class"
-		records, err := store.GetByID(version, id)
-		if err != nil {
-			return nil, fmt.Errorf("common: looking up class of equipment %s: %w", id, err)
-		}
-		if len(records) > 0 {
+		if records := missingRecords[id]; len(records) > 0 {
 			class = records[0].Class
 		}
 		violations = append(violations, InvariantViolation{

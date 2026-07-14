@@ -84,6 +84,8 @@ func scanClass(store staging.Store, version uint64, chunkSize int, class string)
 //     topology for some segments) but is kept as an untrusted Sachdaten
 //     reference alongside the Equipment.
 func BuildContainers(store staging.Store, version uint64, chunkSize int, resolved map[string]EquipmentTerminals) (*BuildContainersResult, error) {
+	p := newProgress("containers")
+	defer p.Done()
 	res := &BuildContainersResult{EquipmentToCont: map[string]string{}}
 
 	subIDs, subIdx, err := scanClass(store, version, chunkSize, "Substation")
@@ -97,6 +99,22 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 			ID: id, Type: ContainerTypeSubstation,
 		})
 		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: subIdx.NameOf(id)})
+	}
+
+	// House (decided 2026-07-14): CIM's Building, standalone top-level
+	// container (like Substation/ACLine/Junction) — no parent reference to
+	// resolve, unlike Bay/BusbarSection.
+	houseIDs, houseIdx, err := scanClass(store, version, chunkSize, "Building")
+	if err != nil {
+		return nil, err
+	}
+	houseSet := map[string]bool{}
+	for _, id := range houseIDs {
+		houseSet[id] = true
+		res.Containers = append(res.Containers, coremodel.Container{
+			ID: id, Type: ContainerTypeHouse,
+		})
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: houseIdx.NameOf(id)})
 	}
 
 	vlIDs, vlIdx, err := scanClass(store, version, chunkSize, "VoltageLevel")
@@ -132,32 +150,87 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 		bayToContainer[id] = id
 	}
 
+	// Feeder is the NSC dialect's equivalent of Bay (decided explicitly
+	// with the user, 2026-07-14): same container role ("bay" container
+	// type), but CIM's Feeder class has no VoltageLevel of its own — it
+	// references its Substation directly via
+	// Feeder.NormalEnergizingSubstation instead of Bay's
+	// Bay.VoltageLevel -> VoltageLevel.Substation chain.
+	feederIDs, feederIdx, err := scanClass(store, version, chunkSize, "Feeder")
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range feederIDs {
+		sub := feederIdx.Ref(id, "Feeder.NormalEnergizingSubstation")
+		if !subSet[sub] {
+			res.Anomalies = append(res.Anomalies, ContainerAnomaly{ObjectID: id, Message: "Feeder.NormalEnergizingSubstation unresolved"})
+			continue
+		}
+		res.Containers = append(res.Containers, coremodel.Container{
+			ID: id, Type: ContainerTypeBay, ParentID: sub,
+		})
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: feederIdx.NameOf(id)})
+		bayToContainer[id] = id
+	}
+
 	bbIDs, bbIdx, err := scanClass(store, version, chunkSize, "BusbarSection")
 	if err != nil {
 		return nil, err
 	}
-	busbarByVL := map[string][]string{} // VoltageLevel ID -> BusbarSection IDs
+	// busbarGroup collects the BusbarSections sharing one synthesized busbar
+	// container. Normally grouped by VoltageLevel (CGMES: a VoltageLevel can
+	// have several BusbarSections, e.g. double-busbar arrangements — they
+	// share ONE busbar container). The NSC dialect has no VoltageLevel at
+	// all (see the Feeder/Bay decision above) — there, BusbarSection
+	// attaches directly to its Substation, so the group key/parent falls
+	// back to the Substation itself. The container ID can't simply reuse
+	// the Substation ID in that case (already taken by the Substation's own
+	// Container), hence the "busbar:" prefix.
+	type busbarGroup struct {
+		containerID string
+		parentID    string
+		name        string
+		members     []string
+	}
+	groups := map[string]*busbarGroup{}
 	for _, id := range bbIDs {
-		vl := bbIdx.Ref(id, "Equipment.EquipmentContainer")
-		if _, ok := vlToSubstation[vl]; !ok {
-			res.Anomalies = append(res.Anomalies, ContainerAnomaly{ObjectID: id, Message: "BusbarSection container (expected VoltageLevel) unresolved"})
+		container := bbIdx.Ref(id, "Equipment.EquipmentContainer")
+		var key, containerID, parentID, name string
+		switch {
+		case vlToSubstation[container] != "":
+			key = container
+			containerID = container // no separate BusbarNode object exists in CGMES
+			parentID = vlToSubstation[container]
+			name = vlIdx.NameOf(container)
+		case subSet[container]:
+			key = "substation:" + container
+			containerID = "busbar:" + container
+			parentID = container
+			name = subIdx.NameOf(container)
+		default:
+			res.Anomalies = append(res.Anomalies, ContainerAnomaly{ObjectID: id, Message: "BusbarSection container (expected VoltageLevel or Substation) unresolved"})
 			continue
 		}
-		busbarByVL[vl] = append(busbarByVL[vl], id)
+		g, ok := groups[key]
+		if !ok {
+			g = &busbarGroup{containerID: containerID, parentID: parentID, name: name}
+			groups[key] = g
+		}
+		g.members = append(g.members, id)
 	}
-	var vlKeys []string
-	for vl := range busbarByVL {
-		vlKeys = append(vlKeys, vl)
+	var groupKeys []string
+	for k := range groups {
+		groupKeys = append(groupKeys, k)
 	}
-	sort.Strings(vlKeys)
-	for _, vl := range vlKeys {
-		containerID := vl // busbar container ID derived from its VoltageLevel (no separate BusbarNode object exists in CGMES)
+	sort.Strings(groupKeys)
+	for _, k := range groupKeys {
+		g := groups[k]
 		res.Containers = append(res.Containers, coremodel.Container{
-			ID: containerID, Type: ContainerTypeBusbar, ParentID: vlToSubstation[vl],
+			ID: g.containerID, Type: ContainerTypeBusbar, ParentID: g.parentID,
 		})
-		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: containerID, Key: AttributeKeyName, Value: vlIdx.NameOf(vl)})
-		for _, bbID := range busbarByVL[vl] {
-			res.EquipmentToCont[bbID] = containerID
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: g.containerID, Key: AttributeKeyName, Value: g.name})
+		for _, bbID := range g.members {
+			res.EquipmentToCont[bbID] = g.containerID
 		}
 	}
 
@@ -172,13 +245,31 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 	// so it covers all "station structure" Equipment (breakers,
 	// disconnectors, transformers, meters, ...), analogous to
 	// findEquipmentWithoutTerminals in terminals.go.
+	//
+	// Fallback (decided 2026-07-14): some Equipment (observed for NSC
+	// PowerElectronicsConnection, i.e. PV/steuVA/steuEA feed-in points) has
+	// no Equipment.EquipmentContainer at all — it is only reachable via its
+	// own Terminal -> ConnectivityNode -> ConnectivityNode.ConnectivityNodeContainer.
+	// cnToContainer captures that mapping so the fallback below can resolve
+	// such Equipment via its resolved ConnectivityNode(s) (Node1/Node2).
+	cnIDs, cnIdx, err := scanClass(store, version, chunkSize, "ConnectivityNode")
+	if err != nil {
+		return nil, err
+	}
+	cnToContainer := map[string]string{}
+	for _, id := range cnIDs {
+		if c := cnIdx.Ref(id, "ConnectivityNode.ConnectivityNodeContainer"); c != "" {
+			cnToContainer[id] = c
+		}
+	}
+
 	classes, err := store.ListClasses(version)
 	if err != nil {
 		return nil, fmt.Errorf("common: listing classes: %w", err)
 	}
 	for _, class := range classes {
 		switch class {
-		case "Terminal", "ConnectivityNode", "Substation", "VoltageLevel", "Bay", "BusbarSection", "ACLineSegment":
+		case "Terminal", "ConnectivityNode", "Substation", "VoltageLevel", "Bay", "Feeder", "BusbarSection", "ACLineSegment", "Building":
 			continue
 		}
 		if isGeneratingUnitClass(class) {
@@ -204,6 +295,15 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 					continue
 				}
 				container := idx.Ref(id, "Equipment.EquipmentContainer")
+				if container == "" {
+					// No direct EquipmentContainer — fall back to the
+					// container of the Equipment's own ConnectivityNode(s).
+					if c := cnToContainer[resolved[id].Node1]; c != "" {
+						container = c
+					} else if c := cnToContainer[resolved[id].Node2]; c != "" {
+						container = c
+					}
+				}
 				switch {
 				case bayToContainer[container] != "":
 					res.EquipmentToCont[id] = bayToContainer[container]
@@ -211,8 +311,10 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int, resolve
 					res.EquipmentToCont[id] = vlToSubstation[container] // no Bay in between — attach straight to the Substation
 				case subSet[container]:
 					res.EquipmentToCont[id] = container // e.g. a two-winding Transformer spanning VoltageLevels, attached directly to the Substation
+				case houseSet[container]:
+					res.EquipmentToCont[id] = container // house-internal Equipment (Meter, Fuse, ...) attached directly to its House/Building
 				case container != "":
-					res.Anomalies = append(res.Anomalies, ContainerAnomaly{ObjectID: id, Message: "Equipment.EquipmentContainer does not resolve to a known Bay, VoltageLevel or Substation"})
+					res.Anomalies = append(res.Anomalies, ContainerAnomaly{ObjectID: id, Message: "Equipment.EquipmentContainer does not resolve to a known Bay, VoltageLevel, Substation or House"})
 				}
 			}
 			afterID = ids[len(ids)-1]
@@ -346,7 +448,11 @@ func buildACLineChains(aclIDs []string, resolved map[string]EquipmentTerminals) 
 		containers = append(containers, coremodel.Container{
 			ID: containerID, Type: ContainerTypeACLine,
 		})
-		names = append(names, coremodel.Attribute{OwnerID: containerID, Key: AttributeKeyName, Value: "ACLine " + members[0][:8]})
+		// members[0] isn't guaranteed to be a long CIM mRID UUID (short
+		// human-readable IDs, e.g. in the cigre_mv example data, can be
+		// shorter than 8 characters) — cap the slice to avoid a
+		// out-of-range panic.
+		names = append(names, coremodel.Attribute{OwnerID: containerID, Key: AttributeKeyName, Value: "ACLine " + members[0][:min(8, len(members[0]))]})
 		for _, m := range members {
 			aclineOf[m] = containerID
 		}

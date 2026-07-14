@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
 	"sort"
+	"strconv"
 	"time"
 
 	"gitlab.com/openk-nsc/jag/internal/impl/common"
@@ -14,6 +16,10 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	phase1.SetLogger(logger)
+	common.SetLogger(logger)
+
 	dir := "examples/cgmes/ReliCapGrid_Espheim"
 	if len(os.Args) > 1 {
 		dir = os.Args[1]
@@ -33,9 +39,43 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	files, err := filepath.Glob(filepath.Join(dir, "*.xml"))
-	if err != nil || len(files) == 0 {
-		fmt.Fprintf(os.Stderr, "no .xml files found in %s (err: %v)\n", dir, err)
+	// NSC dialect files use a .rdf extension instead of CGMES's .xml — the
+	// underlying parser is dialect-neutral RDF/XML either way (see
+	// internal/importer/cgmes/parser.go). Which Phase 1 entry point to use
+	// is decided per directory (not per file): if any .rdf files are
+	// present, the whole directory is treated as an NSC dataset and run
+	// through phase1.RunNSCFiles (which also normalizes NSC's dialect
+	// quirks — see internal/importer/nsc's doc comment); a pure .xml
+	// directory keeps using phase1.RunCGMESFiles. Mixing both dialects in
+	// one directory isn't a real scenario in the example data and isn't
+	// supported here.
+	xmlFiles, err := filepath.Glob(filepath.Join(dir, "*.xml"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "globbing %s: %v\n", dir, err)
+		os.Exit(1)
+	}
+	rdfFiles, err := filepath.Glob(filepath.Join(dir, "*.rdf"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "globbing %s: %v\n", dir, err)
+		os.Exit(1)
+	}
+	// The 20 NSC ".rdf" scenario files under examples/nsc turned out to be
+	// non-canonical, independent variant fragments that share IDs with
+	// each other and with example_as_cim.xml (see phase1.RunNSCFiles'
+	// duplicate-ID guard) — the user decided to ignore them rather than
+	// fix that up further. That leaves no ".rdf" file to trigger the NSC
+	// dialect heuristic below for a directory containing only
+	// example_as_cim.xml, so JAG_FORCE_NSC=1 lets a caller force the NSC
+	// Phase 1 path (RunNSCFiles, with its 0-based sequenceNumber /
+	// multi-Terminal BusbarSection normalization) even for a pure ".xml"
+	// directory.
+	isNSC := len(rdfFiles) > 0 || os.Getenv("JAG_FORCE_NSC") == "1"
+	files := xmlFiles
+	if isNSC {
+		files = append(append([]string{}, xmlFiles...), rdfFiles...)
+	}
+	if len(files) == 0 {
+		fmt.Fprintf(os.Stderr, "no .xml/.rdf files found in %s\n", dir)
 		os.Exit(1)
 	}
 	sort.Strings(files)
@@ -58,7 +98,12 @@ func main() {
 	fmt.Printf("using sqlite file: %s\n", dbPath)
 
 	phase1Start := time.Now()
-	result, err := phase1.RunCGMESFiles(store, files)
+	var result phase1.Result
+	if isNSC {
+		result, err = phase1.RunNSCFiles(store, files)
+	} else {
+		result, err = phase1.RunCGMESFiles(store, files)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "phase1: %v\n", err)
 		os.Exit(1)
@@ -69,7 +114,7 @@ func main() {
 	}
 
 	termStart := time.Now()
-	resolved, anomalies, err := common.ResolveTerminals(store, result.Version, 1000)
+	resolved, nodeRoleIDs, anomalies, err := common.ResolveTerminals(store, result.Version, 1000)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve terminals: %v\n", err)
 		os.Exit(1)
@@ -157,16 +202,34 @@ func main() {
 			busbarSectionIDs[eqID] = true
 		}
 	}
-	mergedResolved := common.MergeBusbarSectionNodes(resolved, containers, busbarSectionIDs)
+
+	junctionMerged := common.MergeJunctionNodes(resolved, nodeRoleIDs)
+	junctionMerges := 0
+	for eqID := range nodeRoleIDs {
+		if junctionMerged[eqID].Node1 != resolved[eqID].Node1 {
+			junctionMerges++
+		}
+	}
+	fmt.Printf("\njunction nodes remapped (own multi-terminal splice unified): %d\n", junctionMerges)
+
+	nodeOnlyIDs := map[string]bool{}
+	for eqID := range busbarSectionIDs {
+		nodeOnlyIDs[eqID] = true
+	}
+	for eqID := range nodeRoleIDs {
+		nodeOnlyIDs[eqID] = true
+	}
+
+	mergedResolved := common.MergeBusbarSectionNodes(junctionMerged, containers, nodeOnlyIDs)
 	merges := 0
 	for eqID := range busbarSectionIDs {
 		if mergedResolved[eqID].Node1 != resolved[eqID].Node1 {
 			merges++
 		}
 	}
-	fmt.Printf("\nbusbar-section nodes remapped (previously disconnected, same busbar container): %d\n", merges)
+	fmt.Printf("busbar-section nodes remapped (previously disconnected, same busbar container): %d\n", merges)
 
-	nodes, edges := common.BuildNodesAndEdges(mergedResolved, busbarSectionIDs)
+	nodes, edges := common.BuildNodesAndEdges(mergedResolved, nodeOnlyIDs)
 	fmt.Printf("built %d Nodes, %d Edges\n", len(nodes), len(edges))
 	gndEdges := 0
 	for _, e := range edges {
@@ -175,6 +238,19 @@ func main() {
 		}
 	}
 	fmt.Printf("edges pointing to GND: %d\n", gndEdges)
+
+	circStart := time.Now()
+	circuits, _, _, err := common.BuildCircuits(store, result.Version, nodes, edges, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "building circuits: %v\n", err)
+		os.Exit(1)
+	}
+	circSizes := make([]int, 0, len(circuits))
+	for _, c := range circuits {
+		circSizes = append(circSizes, len(c.Nodes))
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(circSizes)))
+	fmt.Printf("circuits: %d (node-count sizes desc: %v) (%s)\n", len(circuits), circSizes, time.Since(circStart))
 
 	// Cross-check: does every ConnectivityNode object in the source
 	// actually appear among our built Nodes (Idee.md invariant: a
@@ -218,7 +294,34 @@ func main() {
 	fmt.Printf("ConnectivityNode objects in source: %d, unreferenced (ref-count 0): %d\n", total, unreferenced)
 
 	attrsStart := time.Now()
-	attrs, err := common.BuildAttributes(store, result.Version, 1000, resolved)
+	sachdatenInput := resolved
+	if v := os.Getenv("JAG_SACHDATEN_SAMPLE"); v != "" {
+		// Diagnostic-only knob: restrict BuildAttributes to the first N
+		// equipment IDs (sorted) so a CPU profile of the Sachdaten/
+		// Anhängsel walk can be captured in a reasonable time against a
+		// large dataset, instead of waiting for the full run. Not used in
+		// normal operation.
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_SACHDATEN_SAMPLE: %v\n", convErr)
+			os.Exit(1)
+		}
+		var ids []string
+		for id := range resolved {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		if n < len(ids) {
+			ids = ids[:n]
+		}
+		sample := make(map[string]common.EquipmentTerminals, len(ids))
+		for _, id := range ids {
+			sample[id] = resolved[id]
+		}
+		sachdatenInput = sample
+		fmt.Printf("\n[diagnostic] JAG_SACHDATEN_SAMPLE=%d -> sampling %d/%d equipment for BuildAttributes\n", n, len(sample), len(resolved))
+	}
+	attrs, err := common.BuildAttributes(store, result.Version, 1000, sachdatenInput)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "building attributes: %v\n", err)
 		os.Exit(1)
@@ -261,7 +364,7 @@ func main() {
 	fmt.Printf("\ngeometries resolved: %d (0 expected — Espheim ships no GL profile) (%s)\n", len(geometries), time.Since(geoStart))
 
 	phase3Start := time.Now()
-	phase3, err := common.CheckInvariants(store, result.Version, mergedResolved, containers, nodes, edges)
+	phase3, err := common.CheckInvariants(store, result.Version, mergedResolved, containers, nodes, edges, isNSC)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "phase3: %v\n", err)
 		os.Exit(1)

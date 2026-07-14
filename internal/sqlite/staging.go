@@ -253,6 +253,92 @@ func (s *StagingStore) GetByID(version uint64, id string) ([]model.StagingRecord
 	return records, nil
 }
 
+// sqliteMaxIDsPerQuery caps how many IDs go into one "IN (...)" query,
+// staying safely under SQLite's default max-variable limit (999) while
+// still batching many IDs per round-trip instead of one query per ID.
+const sqliteMaxIDsPerQuery = 500
+
+// GetByIDs is GetByID for many IDs at once (see staging.Store.GetByIDs).
+func (s *StagingStore) GetByIDs(version uint64, ids []string) ([]model.StagingRecord, error) {
+	var out []model.StagingRecord
+	for start := 0; start < len(ids); start += sqliteMaxIDsPerQuery {
+		end := min(start+sqliteMaxIDsPerQuery, len(ids))
+		chunk := ids[start:end]
+
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, version)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		query := fmt.Sprintf(`
+			SELECT version, id, profile, class, attribute, value, is_reference, seq
+			FROM staging_records
+			WHERE version = ? AND id IN (%s)
+			ORDER BY id, profile, attribute, seq
+		`, placeholders(len(chunk)))
+
+		rows, err := s.db.Query(query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: querying by ids: %w", err)
+		}
+		for rows.Next() {
+			var r model.StagingRecord
+			if err := rows.Scan(&r.Version, &r.ID, &r.Profile, &r.Class, &r.Attribute, &r.Value, &r.IsReference, &r.Seq); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("sqlite: scanning row: %w", err)
+			}
+			out = append(out, r)
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return nil, fmt.Errorf("sqlite: iterating rows: %w", rowsErr)
+		}
+	}
+	return out, nil
+}
+
+// GetReferencesToAny is GetReferencesTo for many target IDs at once (see
+// staging.Store.GetReferencesToAny).
+func (s *StagingStore) GetReferencesToAny(version uint64, targetIDs []string) ([]model.StagingRecord, error) {
+	var out []model.StagingRecord
+	for start := 0; start < len(targetIDs); start += sqliteMaxIDsPerQuery {
+		end := min(start+sqliteMaxIDsPerQuery, len(targetIDs))
+		chunk := targetIDs[start:end]
+
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, version)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		query := fmt.Sprintf(`
+			SELECT version, id, profile, class, attribute, value, is_reference, seq
+			FROM staging_records
+			WHERE version = ? AND is_reference = 1 AND value IN (%s)
+			ORDER BY id, profile, attribute, seq
+		`, placeholders(len(chunk)))
+
+		rows, err := s.db.Query(query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: querying references to any: %w", err)
+		}
+		for rows.Next() {
+			var r model.StagingRecord
+			if err := rows.Scan(&r.Version, &r.ID, &r.Profile, &r.Class, &r.Attribute, &r.Value, &r.IsReference, &r.Seq); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("sqlite: scanning row: %w", err)
+			}
+			out = append(out, r)
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return nil, fmt.Errorf("sqlite: iterating rows: %w", rowsErr)
+		}
+	}
+	return out, nil
+}
+
 // ListClasses returns the distinct classes present in the given import
 // version (see staging.Store.ListClasses).
 func (s *StagingStore) ListClasses(version uint64) ([]string, error) {

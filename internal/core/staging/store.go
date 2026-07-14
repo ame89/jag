@@ -78,6 +78,13 @@ type Store interface {
 	// index for the whole model into memory.
 	GetReferencesTo(version uint64, targetID string) ([]model.StagingRecord, error)
 
+	// GetByIDs is GetByID for many IDs at once (WHERE id IN (...)).
+	GetByIDs(version uint64, ids []string) ([]model.StagingRecord, error)
+
+	// GetReferencesToAny is GetReferencesTo for many target IDs at once
+	// (WHERE value IN (...) AND is_reference = 1).
+	GetReferencesToAny(version uint64, targetIDs []string) ([]model.StagingRecord, error)
+
 	// CountByVersion returns the number of staging records currently
 	// stored for the given import version (mainly for reporting/
 	// diagnostics).

@@ -18,6 +18,14 @@
 // checkConnectivity (consistency.go) should have caught. BusbarSection IDs
 // (passed in via nodeOnlyIDs) contribute only their own Node1 to the Nodes
 // set — no Edge, no GND link.
+//
+// Junction is the second Node-role exception (see terminals.go's
+// nodeRoleClasses/ExtraNodes): a branching splice can have 3+ Terminals,
+// all belonging to the same physical point — its Node1 AND ExtraNodes both
+// contribute to the Nodes set (already merged onto one canonical ID by
+// junctionmerge.go's MergeJunctionNodes before this function runs), and
+// like BusbarSection it must be included in nodeOnlyIDs so no Edge/GND
+// link is created for it.
 package common
 
 import (
@@ -37,9 +45,10 @@ const GNDNodeID = "GND"
 // ConnectivityNode referenced by many Equipments still yields one Node),
 // and the GND node is added exactly once, only if at least one genuine
 // single-terminal source/sink Equipment actually needs it. nodeOnlyIDs
-// marks Equipment (currently: BusbarSection) that has exactly one Terminal
-// but is NOT a source/sink — it contributes only its own Node1 to the
-// Nodes set, no Edge is created for it at all (see this file's doc
+// marks Equipment (BusbarSection and Junction) that is NOT a source/sink
+// despite having one Terminal (or, for Junction, possibly several) — it
+// contributes only its own node(s) (Node1 plus ExtraNodes, if any) to the
+// Nodes set; no Edge is created for it at all (see this file's doc
 // comment).
 func BuildNodesAndEdges(resolved map[string]EquipmentTerminals, nodeOnlyIDs map[string]bool) ([]coremodel.Node, []coremodel.Edge) {
 	nodeIDs := map[string]bool{}
@@ -55,9 +64,12 @@ func BuildNodesAndEdges(resolved map[string]EquipmentTerminals, nodeOnlyIDs map[
 	for _, eqID := range equipmentIDs {
 		et := resolved[eqID]
 		nodeIDs[et.Node1] = true
+		for _, extra := range et.ExtraNodes {
+			nodeIDs[extra] = true
+		}
 
 		if et.Node2 == "" && nodeOnlyIDs[eqID] {
-			continue // BusbarSection: Node-role marker only, no Edge
+			continue // BusbarSection/Junction: Node-role marker only, no Edge
 		}
 
 		terminal2 := et.Node2

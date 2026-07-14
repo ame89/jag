@@ -39,6 +39,14 @@ import "sort"
 // node IDs remapped as described above. busbarSectionIDs must contain
 // exactly the BusbarSection Equipment IDs (e.g. derived from
 // containers.EquipmentToCont, restricted to busbar-type containers).
+//
+// It must ALSO include any other node-role-only Equipment IDs (e.g.
+// Junction, see terminals.go's nodeRoleClasses) that this function should
+// not treat as a single-terminal source/sink when replicating
+// BuildNodesAndEdges's topology internally (see the union-find loop below)
+// — nodesByContainer still only picks up the ones whose container is
+// actually busbar-typed, so including Junction IDs here is harmless for
+// that part and only affects the GND-exclusion check.
 func MergeBusbarSectionNodes(resolved map[string]EquipmentTerminals, containers *BuildContainersResult, busbarSectionIDs map[string]bool) map[string]EquipmentTerminals {
 	busbarContainer := map[string]bool{}
 	for _, c := range containers.Containers {
@@ -141,10 +149,18 @@ func MergeBusbarSectionNodes(resolved map[string]EquipmentTerminals, containers 
 	}
 	out := make(map[string]EquipmentTerminals, len(resolved))
 	for eqID, et := range resolved {
+		var newExtra []string
+		if len(et.ExtraNodes) > 0 {
+			newExtra = make([]string, len(et.ExtraNodes))
+			for i, n := range et.ExtraNodes {
+				newExtra[i] = apply(n)
+			}
+		}
 		out[eqID] = EquipmentTerminals{
 			EquipmentID: et.EquipmentID,
 			Node1:       apply(et.Node1),
 			Node2:       apply(et.Node2),
+			ExtraNodes:  newExtra,
 		}
 	}
 	return out

@@ -38,6 +38,8 @@ import (
 //     future dataset uses a non-WGS84 CoordinateSystem, this will silently
 //     misinterpret its coordinates; revisit if/when that's encountered.
 func BuildGeometry(store staging.Store, version uint64, chunkSize int, equipmentIDs, containerIDs map[string]bool) ([]coremodel.Geometry, error) {
+	p := newProgress("geometry")
+	defer p.Done()
 	_, ppIdx, err := scanClass(store, version, chunkSize, "PositionPoint")
 	if err != nil {
 		return nil, err
