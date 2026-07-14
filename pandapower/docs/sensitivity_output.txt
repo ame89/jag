@@ -1,0 +1,106 @@
+Network built: 131 buses, 191 lines, 16 trafos, 103 loads, 22 gens, 2 ext_grid(s)
+AC Jacobian (last Newton-Raphson iteration): shape (235, 235) (reference only, see README.md)
+
+Computing PTDF (200 branches x 128 buses) ...
+Computing LODF (200 x 200) ...
+Full PTDF matrix written to C:\Users\AndreasMeyer\dvl\worldiety\openk\NSC\gitlab.com\openk-nsc\jag\pandapower\docs\ptdf.csv
+
+=== Top 20 most sensitive (branch, bus-injection) pairs -- |PTDF| ===
+(how much branch active-power flow [p.u. of baseMVA] shifts per 1 MW injection change at that bus, relative to the slack)
+  line:12-117                               <-  bus BP_EH-PH2                 PTDF = -1.0000
+  line:71-73                                <-  bus BP_EH-PH1                 PTDF = -1.0000
+  line:110-112                              <-  bus CONNECTIVITY_NODE460      PTDF = -1.0000
+  line:TieLine_EH-SD2                       <-  bus BP_SD-EH2                 PTDF = -1.0000
+  line:LineEH-SD4                           <-  bus TerminalES41              PTDF = -1.0000
+  trafo:86-87                               <-  bus CONNECTIVITY_NODE1210     PTDF = -1.0000
+  line:L-356722699                          <-  bus Bus-1131909578            PTDF = +1.0000
+  line:TieLine_EH-SD3                       <-  bus BP_SD-EH3                 PTDF = +1.0000
+  line:110-111                              <-  bus CONNECTIVITY_NODE254      PTDF = -1.0000
+  line:LineEH-SD4                           <-  bus BP_SD-EH_DC1              PTDF = -1.0000
+  line:EH_line1                             <-  bus BP_SD-EH3                 PTDF = +1.0000
+  line:EH_line1                             <-  bus EH_border3                PTDF = +1.0000
+  line:85-86                                <-  bus CONNECTIVITY_NODE1210     PTDF = -1.0000
+  line:85-86                                <-  bus CONNECTIVITY_NODE692      PTDF = -1.0000
+  line:68-116                               <-  bus BP_EH-PH3                 PTDF = -1.0000
+  trafo:Aac                                 <-  bus BP_SD-EH3                 PTDF = +1.0000
+  trafo:Aac                                 <-  bus BP Portheim-Espheim       PTDF = +1.0000
+  trafo:Aac                                 <-  bus EH_border3                PTDF = +1.0000
+  line:TieLine_EH-HVDC_EH_SD_1              <-  bus BP_SD-EH_DC1              PTDF = -1.0000
+  trafo:Aaa(1)                              <-  bus TerminalES41              PTDF = +1.0000
+
+Full LODF matrix written to C:\Users\AndreasMeyer\dvl\worldiety\openk\NSC\gitlab.com\openk-nsc\jag\pandapower\docs\lodf.csv
+
+=== Structural bridges (10 of 200 branches) ===
+Outage of any of these islands part of the network (no alternative path -> LODF undefined/infinite for every other branch). These are single points of failure with zero (n-1) redundancy:
+  line:110-111
+  line:110-112
+  line:12-117
+  line:71-73
+  line:EH_line1
+  line:L-356722699
+  line:LineEH-SD4
+  line:TieLine_EH-SD2
+  line:TieLine_EH-SD3
+  trafo:86-87
+
+=== Top 20 finite n-1 redistribution pairs -- |LODF| ===
+(fraction of the outaged branch's pre-outage flow that reappears on the other branch)
+  outage line:114-115                         ->  line:27-115                          LODF = +1.0000
+  outage line:114-115                         ->  line:32-114                          LODF = -1.0000
+  outage line:103-110                         ->  line:108-109                         LODF = +1.0000
+  outage line:103-110                         ->  line:105-108                         LODF = +1.0000
+  outage trafo:26-25                          ->  line:26-30                           LODF = +1.0000
+  outage line:70-71                           ->  line:71-72                           LODF = -1.0000
+  outage line:34-36                           ->  line:35-36                           LODF = +1.0000
+  outage line:103-110                         ->  line:109-110                         LODF = +1.0000
+  outage line:105-108                         ->  line:103-110                         LODF = +1.0000
+  outage line:32-114                          ->  line:114-115                         LODF = -1.0000
+  outage line:109-110                         ->  line:103-110                         LODF = +1.0000
+  outage line:32-114                          ->  line:27-115                          LODF = +1.0000
+  outage line:27-115                          ->  line:32-114                          LODF = +1.0000
+  outage line:77-78                           ->  line:79-80                           LODF = -1.0000
+  outage line:75-118                          ->  line:76-77                           LODF = -1.0000
+  outage line:56-57                           ->  line:49-50                           LODF = +1.0000
+  outage line:35-37                           ->  line:34-36                           LODF = -1.0000
+  outage line:77-78                           ->  line:78-79                           LODF = -1.0000
+  outage line:100-101                         ->  line:92-102                          LODF = +1.0000
+  outage line:34-36                           ->  line:35-37                           LODF = -1.0000
+
+=== Focus: overloaded line '26-30' (loading = 181.1 %) ===
+Top 10 buses whose injection change most affects this line's flow (|PTDF|):
+  bus CONNECTIVITY_NODE306      PTDF = -0.6997
+  bus CONNECTIVITY_NODE358      PTDF = -0.6786
+  bus CONNECTIVITY_NODE183      PTDF = -0.6674
+  bus CONNECTIVITY_NODE1018     PTDF = -0.6664
+  bus CONNECTIVITY_NODE140      PTDF = -0.6616
+  bus CONNECTIVITY_NODE59       PTDF = -0.6610
+  bus CONNECTIVITY_NODE55       PTDF = -0.6599
+  bus CONNECTIVITY_NODE144      PTDF = -0.6594
+  bus CONNECTIVITY_NODE187      PTDF = -0.6582
+  bus CONNECTIVITY_NODE9        PTDF = -0.6574
+
+If '26-30' itself trips, top 10 lines absorbing the most redistributed flow (|LODF| in column 'line:26-30'):
+  trafo:26-25                          LODF = +1.0000
+  line:23-25                           LODF = -0.6214
+  trafo:30-17                          LODF = -0.6010
+  line:25-27                           LODF = +0.3786
+  line:17-31                           LODF = -0.3080
+  line:17-113                          LODF = -0.2792
+  line:32-113                          LODF = +0.2792
+  line:30-38                           LODF = -0.2790
+  line:23-24                           LODF = +0.2281
+  line:23-32                           LODF = +0.2086
+
+Which other line outages would push MOST additional flow onto the already-overloaded '26-30' (|LODF| in row 'line:26-30'):
+  outage trafo:26-25                          ->  LODF = +1.0000
+  outage trafo:Aaa(1)                         ->  LODF = +0.5814
+  outage line:23-25                           ->  LODF = -0.5354
+  outage trafo:Aac                            ->  LODF = +0.5000
+  outage line:23-24                           ->  LODF = +0.4377
+  outage line:25-27                           ->  LODF = +0.4125
+  outage line:22-23                           ->  LODF = -0.3764
+  outage line:20-21                           ->  LODF = -0.3764
+  outage line:19-20                           ->  LODF = -0.3764
+  outage line:21-22                           ->  LODF = -0.3764
+
+Done. See C:\Users\AndreasMeyer\dvl\worldiety\openk\NSC\gitlab.com\openk-nsc\jag\pandapower\docs for the full PTDF/LODF CSVs.
