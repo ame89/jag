@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
 )
@@ -68,6 +69,14 @@ CREATE TABLE IF NOT EXISTS model_edge_endpoint (
 );
 CREATE INDEX IF NOT EXISTS idx_model_edge_endpoint_by_node
     ON model_edge_endpoint (node_id);
+-- UpsertEdges' delete-then-insert re-upsert strategy runs
+-- "DELETE FROM model_edge_endpoint WHERE edge_id = ?" once per Edge;
+-- without an index on edge_id this is a full table scan per delete, i.e.
+-- O(n^2) for n Edges (found via a lasttest-200 load-test hang: 84600
+-- Edges effectively never finished). This index makes that delete a plain
+-- indexed lookup, restoring the intended per-Edge O(log n) cost.
+CREATE INDEX IF NOT EXISTS idx_model_edge_endpoint_by_edge
+    ON model_edge_endpoint (edge_id);
 
 CREATE TABLE IF NOT EXISTS model_container (
     id        TEXT PRIMARY KEY,
@@ -108,8 +117,22 @@ CREATE INDEX IF NOT EXISTS idx_model_electrical_group_by_group
 // geometry.Store, topology/physical.Store, topology/electrical.Store and
 // technical.Store on top of a SQLite database. It shares its *sql.DB with a
 // StagingStore (see StagingStore.Model), same pattern as CatalogStore.
+//
+// writeMu serializes every Upsert* call (2026-07-14 fix): SQLite only ever
+// allows one writer at a time regardless of WAL mode/busy_timeout, so
+// concurrent station workers (see common.BuildSachdatenAndGeometryParallel)
+// calling UpsertAttributes/UpsertGeometry concurrently were racing for the
+// single write lock and occasionally exceeding even a generous
+// busy_timeout under load, surfacing as a hard "SQLITE_BUSY: database is
+// locked" error (found via the lasttest-200 load test). A Go-level mutex
+// avoids relying on retry/timeout luck entirely — at most one Upsert* call
+// executes its transaction at any time, others simply wait on the mutex
+// instead of spinning against the database lock. Reads (GetByIDs,
+// GetDescendants, ...) are NOT covered by writeMu — SQLite's WAL mode lets
+// readers proceed concurrently with a writer.
 type ModelStore struct {
-	db *sql.DB
+	db      *sql.DB
+	writeMu sync.Mutex
 }
 
 // Model returns a ModelStore sharing this StagingStore's database
@@ -182,6 +205,8 @@ func (m *ModelStore) UpsertEquipment(equipment []coremodel.Equipment) error {
 	if len(equipment) == 0 {
 		return nil
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO model_equipment (id, container_id) VALUES (?, ?)
@@ -271,6 +296,8 @@ func (m *ModelStore) UpsertContainers(containers []coremodel.Container) error {
 	if len(containers) == 0 {
 		return nil
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO model_container (id, type, parent_id) VALUES (?, ?, ?)
@@ -403,6 +430,8 @@ func (m *ModelStore) UpsertGeometry(geometries []coremodel.Geometry) error {
 	if len(geometries) == 0 {
 		return nil
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO model_geometry (owner_id, owner_kind, lat, lon) VALUES (?, ?, ?, ?)
@@ -563,6 +592,8 @@ func (m *ModelStore) UpsertNodes(nodes []coremodel.Node) error {
 	if len(nodes) == 0 {
 		return nil
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO model_node (id, kind) VALUES (?, ?)
@@ -590,6 +621,8 @@ func (m *ModelStore) UpsertEdges(edges []coremodel.Edge) error {
 	if len(edges) == 0 {
 		return nil
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
 		edgeStmt, err := tx.Prepare(`
 			INSERT INTO model_edge (equipment_id, terminal1_node_id, terminal2_node_id) VALUES (?, ?, ?)
@@ -724,6 +757,8 @@ func (m *ModelStore) UpsertElectricalGroups(groups map[string]string) error {
 	if len(groups) == 0 {
 		return nil
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`
 			INSERT INTO model_electrical_group (node_id, group_id) VALUES (?, ?)
@@ -794,6 +829,8 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 	if len(attributes) == 0 {
 		return nil
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
 		deleteStmt, err := tx.Prepare(`DELETE FROM model_attribute WHERE owner_id = ? AND key = ?`)
 		if err != nil {
