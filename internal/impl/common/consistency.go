@@ -324,6 +324,18 @@ func checkVoltageLevels(store staging.Store, version uint64, resolved map[string
 // loop with path halving, not recursive path compression). The largest
 // component is assumed to be the main network; every other (smaller)
 // component is reported as a disconnected island.
+//
+// GND is deliberately never traversed (bug fix 2026-07-14, found while
+// building the sibling checkStationConnectivity check): GND is a shared
+// virtual reference point every single-terminal piece of equipment's
+// Terminal 2 points at (see nodeedge.go's GNDNodeID), not a real physical
+// link between otherwise-unrelated equipment. Before this fix, an edge
+// with Terminal2NodeID == GNDNodeID was still passed to union() like any
+// other edge; since GNDNodeID is never itself present in the nodes slice,
+// find(GNDNodeID) resolved via Go's map zero-value default to a shared ""
+// root, silently merging every single-terminal equipment's own component
+// into one — masking real disconnected islands (false negative) instead of
+// reporting them.
 func checkConnectivity(nodes []coremodel.Node, edges []coremodel.Edge) []InvariantViolation {
 	if len(nodes) == 0 {
 		return nil
@@ -349,13 +361,25 @@ func checkConnectivity(nodes []coremodel.Node, edges []coremodel.Edge) []Invaria
 	}
 
 	for _, e := range edges {
-		if e.Terminal1NodeID != "" && e.Terminal2NodeID != "" {
-			union(e.Terminal1NodeID, e.Terminal2NodeID)
+		if e.Terminal1NodeID == "" || e.Terminal2NodeID == "" {
+			continue
 		}
+		if e.Terminal1NodeID == GNDNodeID || e.Terminal2NodeID == GNDNodeID {
+			continue // never traverse through GND for this check
+		}
+		union(e.Terminal1NodeID, e.Terminal2NodeID)
 	}
 
 	components := map[string][]string{}
 	for _, n := range nodes {
+		if n.EquipmentID == GNDNodeID {
+			// GND is virtual and, since it's never traversed above, always
+			// resolves to its own singleton component now — reporting it
+			// as "a disconnected component" would be meaningless noise,
+			// not a real anomaly (mirrors checkStationConnectivity, which
+			// excludes GND from consideration entirely).
+			continue
+		}
 		root := find(n.EquipmentID)
 		components[root] = append(components[root], n.EquipmentID)
 	}
