@@ -526,7 +526,7 @@ func main() {
 		// combined parallel path doesn't support that split, so fall back
 		// to the plain sequential calls whenever JAG_SACHDATEN_SAMPLE is
 		// in play (a diagnostic-only knob, not normal operation anyway).
-		if err := common.BuildAttributes(store, result.Version, 1000, sachdatenInput, sink); err != nil {
+		if err := common.BuildAttributes(store, result.Version, 1000, sachdatenInput, nil, sink); err != nil {
 			fmt.Fprintf(os.Stderr, "building attributes: %v\n", err)
 			os.Exit(1)
 		}

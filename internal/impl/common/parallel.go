@@ -112,6 +112,21 @@ type stationWorkResult struct {
 // chooses to do with them (persist, count, sample, ...). sink must be safe
 // for concurrent use (see sink.go's doc comment) since every worker calls
 // it concurrently.
+//
+// IMPORTANT (2026-07-15 fix, part of the RAM-growth investigation — see
+// Konzept.md's "Offene Punkte"): each worker used to build its own COPY of
+// resolved (a "sub" map holding only that worker's own Equipment subset)
+// before calling BuildAttributes — a second, full-model-sized copy of
+// resolved existing in RAM at once (split across workers, but summing to
+// ~model size), on top of the original resolved this function was already
+// given. Fixed: BuildAttributes now takes an explicit equipmentIDs []string
+// parameter (see its doc comment) so the shared, already-in-memory
+// resolved map can be passed straight through read-only to every worker —
+// no per-worker copy. The stationEquipment/stationContainers partition
+// maps built by this function (also full-model-sized, just regrouped by
+// station) are explicitly dropped (set to nil) as soon as jobs has been
+// built from them, instead of staying reachable for this function's whole
+// remaining runtime.
 func BuildSachdatenAndGeometryParallel(
 	store staging.Store,
 	version uint64,
@@ -218,6 +233,16 @@ func BuildSachdatenAndGeometryParallel(
 			contIDs:   stationContainers[aclineBucketKey],
 		})
 	}
+	// Release the partition-by-station intermediate maps now that every
+	// job's own []string slices have been populated from them — they are
+	// a full-model-sized duplicate of resolved's/containers' keys (just
+	// regrouped by station) and are no longer needed once jobs is built
+	// (2026-07-15 RAM-growth investigation, see Konzept.md's "Offene
+	// Punkte"). Explicitly nil-ing them lets the GC reclaim that memory
+	// before the (heavier, longer-running) worker goroutines below start,
+	// instead of leaving them reachable for the rest of this function.
+	stationEquipment = nil
+	stationContainers = nil
 
 	p := newProgress("sachdaten+geometry-parallel")
 	defer p.Done()
@@ -229,10 +254,8 @@ func BuildSachdatenAndGeometryParallel(
 		go func(i int, j stationJob) {
 			defer wg.Done()
 
-			sub := make(map[string]EquipmentTerminals, len(j.equipment))
 			eqIDSet := make(map[string]bool, len(j.equipment))
 			for _, id := range j.equipment {
-				sub[id] = resolved[id]
 				eqIDSet[id] = true
 			}
 			contIDSet := make(map[string]bool, len(j.contIDs))
@@ -240,7 +263,7 @@ func BuildSachdatenAndGeometryParallel(
 				contIDSet[id] = true
 			}
 
-			if err := BuildAttributes(store, version, chunkSize, sub, sink); err != nil {
+			if err := BuildAttributes(store, version, chunkSize, resolved, j.equipment, sink); err != nil {
 				results[i] = stationWorkResult{err: fmt.Errorf("common: %s: building attributes: %w", j.label, err)}
 				return
 			}

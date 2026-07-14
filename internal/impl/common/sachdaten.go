@@ -140,11 +140,31 @@ var DisableSatelliteWalk = false
 // keeps RAM bounded to batch size regardless of total model size, instead
 // of scaling with how much Equipment the caller/station-worker was
 // assigned).
-func BuildAttributes(store staging.Store, version uint64, chunkSize int, resolved map[string]EquipmentTerminals, sink Sink) error {
-	var equipmentIDs []string
-	for eqID := range resolved {
-		equipmentIDs = append(equipmentIDs, eqID)
+//
+// equipmentIDs selects which of resolved's Equipment to actually process
+// (nil/empty means "process every key of resolved" — the common single-
+// threaded case). resolved itself should always be the FULL model's
+// Terminal-resolution map, even when equipmentIDs only names a subset
+// (e.g. one station's worth, see parallel.go's BuildSachdatenAndGeometryParallel):
+// collectAttributesBatch's "isOtherEquipment" check (deciding whether a
+// satellite-walk neighbor belongs to some OTHER Equipment rather than
+// being a true satellite of the current owner) needs to see every
+// Equipment in the model to answer correctly, not just the caller's own
+// partition — passing a pre-filtered subset map here would silently
+// misclassify any satellite object shared across two different callers'
+// partitions. Passing equipmentIDs as a separate parameter (instead of
+// requiring the caller to build and pass a filtered copy of resolved)
+// avoids that pitfall AND avoids each parallel worker allocating its own
+// duplicate copy of (a slice of) resolved — see the 2026-07-15 RAM-growth
+// investigation in Konzept.md's "Offene Punkte".
+func BuildAttributes(store staging.Store, version uint64, chunkSize int, resolved map[string]EquipmentTerminals, equipmentIDs []string, sink Sink) error {
+	if len(equipmentIDs) == 0 {
+		equipmentIDs = make([]string, 0, len(resolved))
+		for eqID := range resolved {
+			equipmentIDs = append(equipmentIDs, eqID)
+		}
 	}
+	equipmentIDs = append([]string(nil), equipmentIDs...) // don't mutate caller's slice via sort.Strings below
 	sort.Strings(equipmentIDs)
 
 	p := newProgress("sachdaten")

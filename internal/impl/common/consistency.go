@@ -93,7 +93,31 @@ func CheckInvariants(
 	// }
 	// result.Violations = append(result.Violations, voltageViolations...)
 
-	result.Violations = append(result.Violations, checkConnectivity(nodes, edges)...)
+	// TODO(2026-07-15, temporarily disabled per explicit user decision —
+	// see "Offene Punkte" in Konzept.md, "Globale Zusammenhangsprüfung
+	// deaktiviert"): the GLOBAL "connectivity" check is switched off.
+	// Root cause: checkConnectivity loads and holds ALL []coremodel.Node/
+	// []coremodel.Edge of the entire model in the Go heap simultaneously
+	// to run an in-memory Union-Find — this is exactly the kind of
+	// full-model-in-RAM pattern the project's RAM budget forbids (see
+	// Idee.md/Impl.md's "10 concurrent requests at a few MB RAM each"
+	// goal) and was already identified as a real contributor to the
+	// measured RAM growth at 200->500 ONS (see Konzept.md's Lasttest
+	// section). The user has separately relaxed absolute
+	// cross-the-whole-model consistency before (this is not the first
+	// place it was found to be too strict/expensive) and decided it is
+	// not worth keeping at this cost — checkStationConnectivity below
+	// (same technique, but scoped per Station/House/KVS/ACLine, so its
+	// Node/Edge subsets stay small) remains ENABLED and covers the
+	// practically important case. This means Idee.md's stated invariant
+	// "all elements must form one connected graph from the highest
+	// voltage level down to GND" is now knowingly NOT enforced globally
+	// — open question, not yet decided either way, whether real global
+	// connectivity is actually wanted at all (see Konzept.md). Do not
+	// silently re-enable or remove checkConnectivity without addressing
+	// the RAM cost and this open question first.
+	//
+	// result.Violations = append(result.Violations, checkConnectivity(nodes, edges)...)
 	result.Violations = append(result.Violations, checkStationConnectivity(nodes, edges, containersResult)...)
 	result.Violations = append(result.Violations, checkBayCableCount(resolved, containersResult, isNSC)...)
 	result.Violations = append(result.Violations, checkContainerPaths(containersResult)...)
@@ -324,6 +348,23 @@ func checkVoltageLevels(store staging.Store, version uint64, resolved map[string
 // loop with path halving, not recursive path compression). The largest
 // component is assumed to be the main network; every other (smaller)
 // component is reported as a disconnected island.
+//
+// NOT CALLED currently (disabled 2026-07-15, kept for reference — see the
+// commented-out call site in CheckInvariants above for the full
+// reasoning). Root problem: this function requires the caller to hold the
+// ENTIRE model's []coremodel.Node/[]coremodel.Edge in RAM at once, which
+// scales with total model size — exactly what this project's RAM budget
+// says must NOT happen (see Idee.md/Impl.md's "10 concurrent requests at a
+// few MB RAM each, not scaling with model size" goal); it was measured as
+// a real contributor to the Phase-3 RAM growth found in the 200/500-ONS
+// load test (see Konzept.md). checkStationConnectivity (below) does the
+// same thing but scoped per Station/House/KVS/ACLine, keeping each
+// invocation's Node/Edge subset small — that remains enabled. Whether
+// truly global connectivity should be enforced at all (vs. only
+// per-container) is an open, undecided question — see Konzept.md's
+// "Offene Punkte". Do not silently delete this function or re-enable its
+// call site without first addressing both the RAM cost and that open
+// question.
 //
 // GND is deliberately never traversed (bug fix 2026-07-14, found while
 // building the sibling checkStationConnectivity check): GND is a shared
