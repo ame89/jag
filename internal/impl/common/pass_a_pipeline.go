@@ -3,11 +3,27 @@
 // Konzept.md, 2026-07 RAM-scaling session). ResolveBatchContainers
 // (pass_a.go) proved container resolution can be done per-batch; this file
 // wires the REST of Phase 2 (Terminal resolution, Node/Edge construction,
-// Circuits, ElectricalGroups, Sachdaten, Geometry) around it so a batch's
-// data is created, used, and discarded — never accumulated across
-// batches. ACLineSegment/Junction ("Pass B") is explicitly out of scope
-// here — see container.go's buildACLineChains, already bounded by class
-// size, run once, separately, not per-batch.
+// ElectricalGroups, Sachdaten, Geometry) around it so a batch's data is
+// created, used, and discarded — never accumulated across batches.
+// ACLineSegment/Junction ("Pass B") is explicitly out of scope here — see
+// container.go's buildACLineChains, already bounded by class size, run
+// once, separately, not per-batch.
+//
+// Deliberately NOT computed per batch: Circuit (BuildCircuits, "physische
+// Topologie"/physical reachability across ALL edges, not just switches).
+// Unlike ElectricalGroups (switch-state merge only), a Circuit CAN span
+// two different Substation/Building roots once Pass B's connecting
+// ACLineSegment chains are considered — so a per-batch BuildCircuits call
+// only ever sees one station in isolation and cannot produce a correct
+// answer; there is no cross-batch reconciliation for it, and adding one
+// would need its own explicit design (see Konzept.md's Pass A/B section).
+// Per the confirmed design decision, Circuits/Schaltkreise are a
+// query-time construct assembled from the persisted ElectricalGroups
+// snippets plus a dynamic switch-map (see Usecases.md UC2b/UC4/UC7), not
+// an import-time artifact — so this is not a missing feature, just a
+// stale call that used to exist here and was removed (2026-07-15) because
+// its result was batch-local and therefore actively misleading when
+// reported as if it were a whole-model answer.
 package common
 
 import (
@@ -51,9 +67,15 @@ type BatchResult struct {
 	Equipment  []coremodel.Equipment
 	Nodes      []coremodel.Node
 	Edges      []coremodel.Edge
-	Circuits   map[string]*Circuit
 	Groups     ElectricalGroups
 	Anomalies  []Anomaly // Terminal-resolution anomalies for this batch's own equipment
+	// Violations holds this batch's own Phase 3 results (checkStationConnectivity,
+	// checkBayCableCount, checkContainerPaths, checkKVSNoTransformer) — all four
+	// checks fit naturally per-batch (Konzept.md's "no cross-station shared
+	// ConnectivityNode identity" decision already rules out any cross-batch
+	// state for them), so Phase 3 no longer needs a separate whole-model pass
+	// for these rules (2026-07-15 rewiring — see consistency.go's doc comment).
+	Violations []InvariantViolation
 }
 
 // ProcessStationBatch runs the full per-station portion of Phase 2 for ONE
@@ -61,18 +83,26 @@ type BatchResult struct {
 // (ResolveBatchContainers), Terminal resolution (ResolveTerminalsForIDs,
 // already ID-scoped), Node/Edge construction (BuildNodesAndEdges, reused
 // unchanged — confirmed this session to be embarrassingly parallel per
-// equipment, not a true graph traversal, see plan.md), Circuits/
-// ElectricalGroups (BuildCircuits/BuildElectricalGroups, reused unchanged —
-// their cost is bounded by the batch's own Nodes/Edges since Circuits
-// cannot span two different Substation/Building roots, per the confirmed
-// "no cross-station shared ConnectivityNode identity" decision), and
+// equipment, not a true graph traversal, see plan.md), ElectricalGroups
+// (BuildElectricalGroups, reused unchanged — its cost is bounded by the
+// batch's own Nodes/Edges; unlike Circuit, an ElectricalGroup only ever
+// merges across a switch-like zero-ohm edge, and switches never span two
+// different Substation/Building roots, per the confirmed "no cross-station
+// shared ConnectivityNode identity" decision — so this one IS safe to
+// compute per batch, unlike Circuit, see this file's package doc comment),
 // Sachdaten/Geometry (BuildAttributes/BuildGeometry, already
-// equipmentIDs-scoped, flushed straight through sink).
+// equipmentIDs-scoped, flushed straight through sink), this batch's own
+// Phase 3 checks (see BatchResult.Violations), and — if flags is non-nil
+// (see flags.go) — marking FlagInstalledEquipment/FlagContainedEquipment/
+// FlagReferencedNode for this batch's own IDs so the final whole-model
+// completeness scans (checkUnreferencedNodesFlagged/
+// checkEquipmentWithoutContainerFlagged) can run once, after every batch,
+// without ever holding a full-model map.
 //
 // The only Container.Type this batch ever creates is substation/house/bay/
 // busbar — never acline (that's Pass B's job, run once, separately, see
 // this file's package doc comment).
-func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs []string, chunkSize int, sink Sink) (*BatchResult, error) {
+func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs []string, chunkSize int, sink Sink, flags FlagStore, isNSC bool) (*BatchResult, error) {
 	bc, err := ResolveBatchContainers(store, version, subIDs, houseIDs)
 	if err != nil {
 		return nil, fmt.Errorf("common: resolving batch containers: %w", err)
@@ -110,10 +140,6 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 	mergedResolved := MergeBusbarSectionNodes(junctionMerged, fullContainers, nodeRoleIDs)
 	nodes, edges := BuildNodesAndEdges(mergedResolved, nodeRoleIDs)
 
-	circuits, _, _, err := BuildCircuits(store, version, nodes, edges, nil)
-	if err != nil {
-		return nil, fmt.Errorf("common: building circuits for batch: %w", err)
-	}
 	groups, _, err := BuildElectricalGroups(store, version, nodes, edges, nil)
 	if err != nil {
 		return nil, fmt.Errorf("common: building electrical groups for batch: %w", err)
@@ -139,14 +165,69 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 		equipmentRows = append(equipmentRows, coremodel.Equipment{ID: eqID, ContainerID: contID})
 	}
 
+	// Batch-scoped Phase 3 checks — all four fit naturally here (see
+	// BatchResult.Violations' doc comment).
+	var violations []InvariantViolation
+	violations = append(violations, checkStationConnectivity(nodes, edges, fullContainers)...)
+	violations = append(violations, checkBayCableCount(mergedResolved, fullContainers, isNSC)...)
+	violations = append(violations, checkContainerPaths(fullContainers)...)
+	kvsViolations, err := checkKVSNoTransformer(store, version, fullContainers)
+	if err != nil {
+		return nil, fmt.Errorf("common: checking KVS-no-transformer for batch: %w", err)
+	}
+	violations = append(violations, kvsViolations...)
+
+	// Ephemeral existence flags for the two whole-model completeness
+	// checks (see flags.go) — every equipment ID this batch resolved is,
+	// by construction, both "installed" (Terminals resolved) and
+	// "contained" (bc.EquipmentToCont only ever contains IDs that already
+	// got a real container) — see FlagInstalledEquipment/
+	// FlagContainedEquipment's doc comments for why Pass A never produces
+	// a genuine mismatch between the two on its own (that only happens on
+	// Pass B's Junction handling).
+	if flags != nil {
+		if err := flags.MarkFlags(version, FlagInstalledEquipment, equipmentIDs); err != nil {
+			return nil, fmt.Errorf("common: marking installed-equipment flags for batch: %w", err)
+		}
+		if err := flags.MarkFlags(version, FlagContainedEquipment, equipmentIDs); err != nil {
+			return nil, fmt.Errorf("common: marking contained-equipment flags for batch: %w", err)
+		}
+		// Mark using the RAW (pre-merge) Node1/Node2/ExtraNodes from
+		// `resolved`, NOT the post-merge built `nodes` — MergeBusbarSectionNodes/
+		// MergeJunctionNodes intentionally remap a BusbarSection's/Junction's
+		// own ConnectivityNode ID away to a shared node identity (see
+		// busbarmerge.go), so a raw CN ID can be legitimately referenced by a
+		// Terminal yet never appear in the final built `nodes` list. Flagging
+		// off `nodes` would misreport those as "unreferenced-node" false
+		// positives — mirrors checkUnreferencedNodes' own doc comment
+		// (checks raw reference count, not built-Node-set membership).
+		nodeIDs := make([]string, 0, len(resolved)*2)
+		for _, et := range resolved {
+			if et.Node1 != "" && et.Node1 != GNDNodeID {
+				nodeIDs = append(nodeIDs, et.Node1)
+			}
+			if et.Node2 != "" && et.Node2 != GNDNodeID {
+				nodeIDs = append(nodeIDs, et.Node2)
+			}
+			for _, extra := range et.ExtraNodes {
+				if extra != "" && extra != GNDNodeID {
+					nodeIDs = append(nodeIDs, extra)
+				}
+			}
+		}
+		if err := flags.MarkFlags(version, FlagReferencedNode, nodeIDs); err != nil {
+			return nil, fmt.Errorf("common: marking referenced-node flags for batch: %w", err)
+		}
+	}
+
 	return &BatchResult{
 		Containers: bc.Containers,
 		Equipment:  equipmentRows,
 		Nodes:      nodes,
 		Edges:      edges,
-		Circuits:   circuits,
 		Groups:     groups,
 		Anomalies:  termAnomalies,
+		Violations: violations,
 	}, nil
 }
 
@@ -167,7 +248,7 @@ type rootBatch struct {
 // concurrent calls from multiple goroutines when workers > 1 (e.g. guard
 // with its own mutex, or write straight through to a store whose driver
 // already serializes writes) — mirrors Sink's concurrency contract.
-func RunPassA(store staging.Store, version uint64, chunkSize, batchSize, workers int, sink Sink, onBatchResult func(*BatchResult) error) error {
+func RunPassA(store staging.Store, version uint64, chunkSize, batchSize, workers int, sink Sink, flags FlagStore, isNSC bool, onBatchResult func(*BatchResult) error) error {
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
@@ -201,7 +282,7 @@ func RunPassA(store staging.Store, version uint64, chunkSize, batchSize, workers
 		go func() {
 			defer wg.Done()
 			for rb := range batches {
-				res, err := ProcessStationBatch(store, version, rb.subs, rb.houses, chunkSize, sink)
+				res, err := ProcessStationBatch(store, version, rb.subs, rb.houses, chunkSize, sink, flags, isNSC)
 				if err != nil {
 					workErrCh <- err
 					return

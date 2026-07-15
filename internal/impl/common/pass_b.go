@@ -48,13 +48,13 @@ type PassBResult struct {
 	LineRefs   []coremodel.Attribute // raw cim:Line reference kept as untrusted Sachdaten, see container.go's identical original logic
 	Groups     ElectricalGroups       // see RunPassB's doc comment: trivial, always-singleton groups for Pass B's own Nodes
 	Anomalies  []Anomaly              // Terminal-resolution anomalies for ACLineSegment/EquivalentInjection/Junction — previously silently dropped, see 2026-07-15 fix
+	Violations []InvariantViolation   // checkContainerPaths against Pass B's own acline containers (a top-level container type, its own path-template rule needs no cross-batch state)
 }
 
 // RunPassB resolves ACLineSegment (topological chain grouping, unchanged
 // from container.go's buildACLineChains) and standalone Junction/Muffe
-// (own Terminal -> ConnectivityNode -> ConnectivityNodeContainer chain,
-// scoped to just the Junction class — never a whole-model ConnectivityNode
-// scan, unlike BuildContainers' old generic "unresolvedIDs" fallback).
+// (folded into the same acline chain grouping — see
+// resolveStandaloneJunctions' doc comment).
 //
 // It also computes ElectricalGroups for its own Nodes/Edges. This is NOT a
 // cross-batch merge (see the package doc comment — no such merge is ever
@@ -71,20 +71,33 @@ type PassBResult struct {
 // node (no incorrect unioning) — for any Node ID a Pass A batch ALSO
 // produced a (non-trivial) group for, the caller should prefer Pass A's
 // entry over this trivial one when merging (Pass A's reflects the real
-// switching equipment at that shared boundary node).
+// switching equipment at that shared boundary node) — the caller MUST run
+// Pass B strictly after Pass A and persist Pass B's groups via
+// ModelStore.UpsertElectricalGroupsIfAbsent (INSERT OR IGNORE), never the
+// plain overwriting UpsertElectricalGroups (see that method's doc
+// comment).
 //
 // sink receives Sachdaten/Geometry batches for Pass B's own equipment
 // (ACLineSegment/EquivalentInjection/Junction) — previously entirely
 // missing (2026-07-15 fix, found while planning the cmd/phase2check
 // rewiring). Must be safe for concurrent use if the caller also passes it
 // to RunPassA concurrently (see Sink's own concurrency contract).
-func RunPassB(store staging.Store, version uint64, chunkSize int, sink Sink) (*PassBResult, error) {
+//
+// flags (may be nil — see flags.go) receives FlagInstalledEquipment/
+// FlagContainedEquipment/FlagReferencedNode marks for Pass B's own
+// ACLineSegment/Junction equipment and Nodes, mirroring ProcessStationBatch
+// — EquivalentInjection is deliberately excluded (it never gets a
+// container by design, see resolveBoundaryEquivalents, so marking it
+// "installed" would only produce false-positive "without container"
+// noise).
+func RunPassB(store staging.Store, version uint64, chunkSize int, sink Sink, flags FlagStore) (*PassBResult, error) {
 	res := &PassBResult{}
 
-	if err := resolveACLineSegments(store, version, chunkSize, sink, res); err != nil {
+	aclineNodeToContainer, err := resolveACLineSegments(store, version, chunkSize, sink, res, flags)
+	if err != nil {
 		return nil, err
 	}
-	if err := resolveStandaloneJunctions(store, version, chunkSize, sink, res); err != nil {
+	if err := resolveStandaloneJunctions(store, version, chunkSize, sink, res, aclineNodeToContainer, flags); err != nil {
 		return nil, err
 	}
 	groups, _, err := BuildElectricalGroups(store, version, res.Nodes, res.Edges, nil)
@@ -92,6 +105,7 @@ func RunPassB(store staging.Store, version uint64, chunkSize int, sink Sink) (*P
 		return nil, fmt.Errorf("common: BuildElectricalGroups on Pass B's own %d Nodes/%d Edges: %w", len(res.Nodes), len(res.Edges), err)
 	}
 	res.Groups = groups
+	res.Violations = checkContainerPaths(&BuildContainersResult{Containers: res.Containers})
 	return res, nil
 }
 
@@ -102,10 +116,15 @@ func RunPassB(store staging.Store, version uint64, chunkSize int, sink Sink) (*P
 // Nodes/Edges (BuildNodesAndEdges scoped to just aclIDs) since, unlike
 // BuildContainers (container-membership only), Pass B is also responsible
 // for the node-edge model rows this class contributes.
-func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, sink Sink, res *PassBResult) error {
+//
+// Returns buildACLineChains' own nodeToContainer map (ConnectivityNode ID
+// -> acline container ID) so the caller (RunPassB) can pass it on to
+// resolveStandaloneJunctions, which needs it to assign a Junction's own
+// container membership (see buildACLineChains' doc comment).
+func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, sink Sink, res *PassBResult, flags FlagStore) (map[string]string, error) {
 	lineIDs, lineIdx, err := scanClass(store, version, chunkSize, "Line")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lineExists := map[string]bool{}
 	for _, id := range lineIDs {
@@ -114,7 +133,7 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 
 	aclIDs, aclIdx, err := scanClass(store, version, chunkSize, "ACLineSegment")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	referencedLineIDs := map[string]bool{} // every Line ID actually referenced by an ACLineSegment, whether or not the Line object itself was imported (see below)
 	for _, id := range aclIDs {
@@ -138,9 +157,9 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 		}
 	}
 
-	aclineContainers, aclineOf, aclineNames, _, err := buildACLineChains(store, version, aclIDs)
+	aclineContainers, aclineOf, aclineNames, _, aclineNodeToContainer, err := buildACLineChains(store, version, aclIDs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	res.Containers = append(res.Containers, aclineContainers...)
 	res.Attributes = append(res.Attributes, aclineNames...)
@@ -152,12 +171,38 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 	// is an ordinary 2-terminal Zweipol), so nodeOnlyIDs is nil.
 	aclResolved, aclAnomalies, err := ResolveTerminalsForIDs(store, version, aclIDs, nil)
 	if err != nil {
-		return fmt.Errorf("common: resolving Terminals for %d ACLineSegment (Pass B node/edge build): %w", len(aclIDs), err)
+		return nil, fmt.Errorf("common: resolving Terminals for %d ACLineSegment (Pass B node/edge build): %w", len(aclIDs), err)
 	}
 	res.Anomalies = append(res.Anomalies, aclAnomalies...)
 	aclNodes, aclEdges := BuildNodesAndEdges(aclResolved, nil)
 	res.Nodes = append(res.Nodes, aclNodes...)
 	res.Edges = append(res.Edges, aclEdges...)
+
+	// Flag marking (see flags.go) — every ACLineSegment resolved here
+	// always gets an acline container (even a solo, unconnected segment
+	// gets its own singleton chain), so installed == contained for this
+	// class; mirrors ProcessStationBatch's identical reasoning.
+	if flags != nil {
+		resolvedIDs := make([]string, 0, len(aclResolved))
+		for id := range aclResolved {
+			resolvedIDs = append(resolvedIDs, id)
+		}
+		if err := flags.MarkFlags(version, FlagInstalledEquipment, resolvedIDs); err != nil {
+			return nil, fmt.Errorf("common: marking installed-equipment flags for ACLineSegment: %w", err)
+		}
+		if err := flags.MarkFlags(version, FlagContainedEquipment, resolvedIDs); err != nil {
+			return nil, fmt.Errorf("common: marking contained-equipment flags for ACLineSegment: %w", err)
+		}
+		nodeIDs := make([]string, 0, len(aclNodes))
+		for _, n := range aclNodes {
+			if n.EquipmentID != GNDNodeID {
+				nodeIDs = append(nodeIDs, n.EquipmentID)
+			}
+		}
+		if err := flags.MarkFlags(version, FlagReferencedNode, nodeIDs); err != nil {
+			return nil, fmt.Errorf("common: marking referenced-node flags for ACLineSegment: %w", err)
+		}
+	}
 
 	// Sachdaten/Geometry for the ACLineSegment class itself and its
 	// synthesized "acline" containers — previously entirely missing from
@@ -169,7 +214,7 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 	// buildACLineChains above already needed (see the documented
 	// ACLineSegment exception in Konzept.md's "Offene Punkte").
 	if err := BuildAttributes(store, version, chunkSize, aclResolved, aclIDs, sink); err != nil {
-		return fmt.Errorf("common: building attributes for %d ACLineSegment: %w", len(aclIDs), err)
+		return nil, fmt.Errorf("common: building attributes for %d ACLineSegment: %w", len(aclIDs), err)
 	}
 	aclEquipmentIDSet := make(map[string]bool, len(aclIDs))
 	for _, id := range aclIDs {
@@ -180,7 +225,7 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 		aclContainerIDSet[c.ID] = true
 	}
 	if err := BuildGeometry(store, version, chunkSize, aclEquipmentIDSet, aclContainerIDSet, sink); err != nil {
-		return fmt.Errorf("common: building geometry for %d ACLineSegment/%d acline containers: %w", len(aclIDs), len(aclineContainers), err)
+		return nil, fmt.Errorf("common: building geometry for %d ACLineSegment/%d acline containers: %w", len(aclIDs), len(aclineContainers), err)
 	}
 
 	// Boundary/external-grid equivalents (EquivalentInjection) are a
@@ -196,9 +241,9 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 	// references and missed the case where NO ACLineSegment references
 	// the same boundary container at all).
 	if err := resolveBoundaryEquivalents(store, version, chunkSize, sink, res); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return aclineNodeToContainer, nil
 }
 
 // resolveBoundaryEquivalents unconditionally builds Node/Edge rows for
@@ -252,18 +297,22 @@ func resolveBoundaryEquivalents(store staging.Store, version uint64, chunkSize i
 }
 
 // resolveStandaloneJunctions resolves the standalone Junction/Muffe class
-// (a node-role class, see terminals.go's nodeRoleClasses) via its own
-// Terminal -> ConnectivityNode -> ConnectivityNode.ConnectivityNodeContainer
-// chain — the same fallback BuildContainers' old "unresolvedIDs" mechanism
-// used, but scoped to just the (typically tiny) Junction class instead of
-// scanning every class in the model to find "equipment with no
-// EquipmentContainer at all". The ConnectivityNode lookup itself is also
-// scoped to just the ConnectivityNode IDs Junction's own Terminals actually
-// reference (getByIDsIndexed on that small set), never a full
-// ConnectivityNode class scan — fixing a second, previously unnoticed
-// whole-model-sized intermediate (BuildContainers' own cnToContainer map
-// was built from a full ConnectivityNode class scan, freed right after,
-// but still transiently whole-model-sized).
+// (a node-role class, see terminals.go's nodeRoleClasses). A Junction is
+// just a Node — Container membership for it is bookkeeping only, not
+// semantically load-bearing (real cross-cable/branch queries go through
+// topology, not Container.ParentID) — decided with the user 2026-07-15,
+// superseding an earlier "dedicated Muffen-Container" auto-creation idea.
+// So a Junction simply joins whichever "acline" container its own
+// ConnectivityNode(s) already belong to, per aclineNodeToContainer (built
+// by resolveACLineSegments/buildACLineChains, scoped to just the
+// ACLineSegment class — never a whole-model scan). Only if NO
+// ACLineSegment touches this Junction's ConnectivityNode(s) either (no
+// adjacent cable segment at all in this partial model) does it fall back
+// to the Junction's own Terminal -> ConnectivityNode ->
+// ConnectivityNode.ConnectivityNodeContainer chain, scoped to just the
+// (typically tiny) Junction class — never a full ConnectivityNode class
+// scan (getByIDsIndexed on just the small set of ConnectivityNode IDs
+// Junction's own Terminals reference).
 //
 // Per BuildContainers' own doc comment, this is currently the ONLY
 // empirically observed real-world case of Equipment with no
@@ -273,7 +322,7 @@ func resolveBoundaryEquivalents(store staging.Store, version uint64, chunkSize i
 // here — a deliberate trade-off, confirmed with the user (2026-07, this
 // session), to avoid reintroducing a whole-model scan for a case that has
 // never actually occurred.
-func resolveStandaloneJunctions(store staging.Store, version uint64, chunkSize int, sink Sink, res *PassBResult) error {
+func resolveStandaloneJunctions(store staging.Store, version uint64, chunkSize int, sink Sink, res *PassBResult, aclineNodeToContainer map[string]string, flags FlagStore) error {
 	junctionIDs, _, err := scanClass(store, version, chunkSize, "Junction")
 	if err != nil {
 		return err
@@ -313,12 +362,31 @@ func resolveStandaloneJunctions(store staging.Store, version uint64, chunkSize i
 	res.Edges = append(res.Edges, junEdges...)
 
 	junctionContainerIDs := make(map[string]bool, len(junctionIDs))
+	containedJunctionIDs := make([]string, 0, len(junctionIDs))
 	for _, id := range junctionIDs {
 		et, ok := junResolved[id]
 		if !ok {
 			continue // anomaly already reported by ResolveTerminalsForIDs (res.Anomalies above)
 		}
-		container := cnIdx.Ref(et.Node1, "ConnectivityNode.ConnectivityNodeContainer")
+		// Prefer joining the acline chain(s) already touching this
+		// Junction's own ConnectivityNode(s) — the primary, expected path
+		// for any standalone splice (Durchgangsmuffe/Abzweigmuffe) sitting
+		// between ACLineSegments. Only fall back to the raw
+		// ConnectivityNode.ConnectivityNodeContainer chain if no
+		// ACLineSegment touches it at all.
+		container := aclineNodeToContainer[et.Node1]
+		if container == "" {
+			container = aclineNodeToContainer[et.Node2]
+		}
+		for _, extra := range et.ExtraNodes {
+			if container != "" {
+				break
+			}
+			container = aclineNodeToContainer[extra]
+		}
+		if container == "" {
+			container = cnIdx.Ref(et.Node1, "ConnectivityNode.ConnectivityNodeContainer")
+		}
 		if container == "" {
 			container = cnIdx.Ref(et.Node2, "ConnectivityNode.ConnectivityNodeContainer")
 		}
@@ -336,12 +404,41 @@ func resolveStandaloneJunctions(store staging.Store, version uint64, chunkSize i
 			// of losing it.
 			res.Anomalies = append(res.Anomalies, Anomaly{
 				EquipmentID: id,
-				Message:     "Junction's ConnectivityNode(s) have no resolvable ConnectivityNode.ConnectivityNodeContainer",
+				Message:     "Junction's ConnectivityNode(s) have no adjacent ACLineSegment and no resolvable ConnectivityNode.ConnectivityNodeContainer either",
 			})
 			continue
 		}
 		res.Equipment = append(res.Equipment, coremodel.Equipment{ID: id, ContainerID: container})
 		junctionContainerIDs[container] = true
+		containedJunctionIDs = append(containedJunctionIDs, id)
+	}
+
+	// Flag marking (see flags.go): "installed" == every Junction whose
+	// Terminals resolved at all (junResolved); "contained" == only those
+	// that actually found an acline/fallback container above — tracked
+	// separately, unlike ACLineSegment, since a Junction CAN legitimately
+	// fail to find any container (reported as an anomaly, not silently
+	// dropped).
+	if flags != nil {
+		installedJunctionIDs := make([]string, 0, len(junResolved))
+		for id := range junResolved {
+			installedJunctionIDs = append(installedJunctionIDs, id)
+		}
+		if err := flags.MarkFlags(version, FlagInstalledEquipment, installedJunctionIDs); err != nil {
+			return fmt.Errorf("common: marking installed-equipment flags for Junction: %w", err)
+		}
+		if err := flags.MarkFlags(version, FlagContainedEquipment, containedJunctionIDs); err != nil {
+			return fmt.Errorf("common: marking contained-equipment flags for Junction: %w", err)
+		}
+		nodeIDs := make([]string, 0, len(junNodes))
+		for _, n := range junNodes {
+			if n.EquipmentID != GNDNodeID {
+				nodeIDs = append(nodeIDs, n.EquipmentID)
+			}
+		}
+		if err := flags.MarkFlags(version, FlagReferencedNode, nodeIDs); err != nil {
+			return fmt.Errorf("common: marking referenced-node flags for Junction: %w", err)
+		}
 	}
 
 	// Sachdaten/Geometry for the Junction class itself and its

@@ -9,10 +9,19 @@ Umgebungsvariablen, um die Verarbeitung zu steuern, ohne den Code anzufassen:
 | Variable | Wirkung | Default |
 |---|---|---|
 | `JAG_DB_PATH` | Pfad der SQLite-Datei, in die importiert wird (bewusst eine echte Datei, nicht `:memory:`, damit Timings echte Disk-I/O widerspiegeln). Wird bei jedem Lauf vorher gelöscht (frischer Import). | `phase2check.db` |
-| `JAG_FORCE_NSC` | `1` erzwingt den NSC-Dialekt-Import (`phase1.RunNSCFiles`) auch für ein Verzeichnis, das nur `.xml`- (nicht `.rdf`-)Dateien enthält, z. B. `example_as_cim.xml`. Ohne diese Variable entscheidet die Dateiendung. | unset (Endungs-Heuristik) |
-| `JAG_CHUNK_SIZE` | Cursor-Batch-Größe (`staging.Store.GetByClass`-Limit) für alle klassenweisen Scans (`BuildContainers`, `ResolveTerminals`, ConnectivityNode-Referenzcheck). Größer = weniger DB-Roundtrips, aber mehr RAM pro Batch (jeder geholte Datensatz + seine aufgelösten Referenzen liegen währenddessen im Speicher); kleiner = mehr Roundtrips, aber niedrigerer RAM-Peak. | `1000` |
-| `JAG_TERMINAL_WORKERS` | Worker-Zahl für die parallelen Klassen-Scans in `common.ResolveTerminalsParallel` ("Schritt (a)" der Parallel-Import-Entscheidung). Pendant zu `JAG_STATION_WORKERS` für die andere parallele Phase. | `8` (`common.DefaultTerminalScanWorkers`) |
-| `JAG_STATION_WORKERS` | Worker-Zahl (Stationen pro Goroutine) für `common.BuildSachdatenAndGeometryParallel` ("Schritt (b)", Sachdaten+Geometrie-Aufbau). | `common.DefaultStationWorkers` |
-| `JAG_DISABLE_ANHAENGSEL` | `1` deaktiviert den Sachdaten-Satelliten-("Anhängsel"-)Walk vollständig — nur die literalen Equipment-Attribute werden noch emittiert. Reines Diagnose-Werkzeug, um die Sachdaten-Phase-Baseline ohne Hub-Risiko zu messen. | unset (Satelliten-Walk aktiv) |
-| `JAG_SACHDATEN_SAMPLE` | Beschränkt `BuildAttributes` auf die ersten N (sortierten) Equipment-IDs. Reines Diagnose-Werkzeug, um z. B. ein CPU-Profil des Sachdaten-Walks in überschaubarer Zeit gegen einen großen Datensatz aufzunehmen. | unset (alle Equipment) |
+| `JAG_FORCE_NSC` | `1` erzwingt den NSC-Dialekt-Import (`phase1.RunNSCFiles`) auch für ein Verzeichnis, das nur `.xml`- (nicht `.rdf`-)Dateien enthält, z. B. `example_as_cim.xml`. Ohne diese Variable entscheidet die Dateiendung (`.rdf`-Dateien im Verzeichnis ⇒ NSC). | unset (Endungs-Heuristik) |
+| `JAG_CHUNK_SIZE` | Cursor-Batch-Größe (`staging.Store.GetByClass`-Limit) für alle klassenweisen Scans innerhalb eines Pass-A-Batches bzw. in Pass B (z. B. Substation-/Building-Paging, ACLineSegment-/Junction-Scans, die abschließenden flag-basierten Vollständigkeitsprüfungen). Größer = weniger DB-Roundtrips; seit dem Pass-A/B-Umbau ist dies **nicht** mehr der RAM-bestimmende Parameter (das ist `JAG_BATCH_SIZE`, s. u.) — nur noch eine reine DB-Roundtrip-Effizienz-Stellschraube. | `2000` |
+| `JAG_BATCH_SIZE` | Anzahl Substation-/Building-Wurzeln pro Pass-A-Batch (`common.RunPassA`). Dies ist der eigentliche RAM-Begrenzer der Pipeline: der Node-/Edge-/Attribut-/Geometrie-Fußabdruck eines Batches skaliert mit dieser Zahl, nicht mit der Gesamtmodellgröße. | `50` (`common.DefaultBatchSize`) |
+| `JAG_STATION_WORKERS` | Anzahl paralleler Pull-Pool-Worker-Goroutinen in Pass A (`common.RunPassA`) — jeder Worker verarbeitet nacheinander ganze Batches (siehe `JAG_BATCH_SIZE`) über `ProcessStationBatch`. | `4` (`common.DefaultPassAWorkers`) |
 | `JAG_CPU_PROFILE` | Pfad, unter dem ein `pprof`-CPU-Profil des gesamten Laufs geschrieben wird. | unset (kein Profil) |
+
+**Hinweis (aktueller Implementierungsstand)**: Phase 2/3 laufen seit dem Pass-A/B-Umbau
+(siehe `spec/Konzept.md`, Abschnitt "Pass A/B: Batch-weise Phase-2/3-Pipeline") nicht mehr als
+einzelne whole-model-Schritte, sondern batch-weise über `common.RunPassA` (Stationen) gefolgt
+von `common.RunPassB` (stationsübergreifende ACLineSegment-/Junction-Ketten) und einer
+abschließenden, paged flag-basierten Vollständigkeitsprüfung (`common.CheckInvariantsFlagged`).
+Frühere Umgebungsvariablen `JAG_TERMINAL_WORKERS`, `JAG_STATION_WORKERS` (alte Bedeutung:
+Sachdaten+Geometrie-Worker), `JAG_DISABLE_ANHAENGSEL` und `JAG_SACHDATEN_SAMPLE` existieren im
+aktuellen Code nicht mehr (die whole-model-Funktionen, die sie steuerten, werden von
+`cmd/phase2check` nicht mehr aufgerufen) und wurden aus dieser Tabelle entfernt.
+

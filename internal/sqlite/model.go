@@ -111,6 +111,23 @@ CREATE TABLE IF NOT EXISTS model_electrical_group (
 );
 CREATE INDEX IF NOT EXISTS idx_model_electrical_group_by_group
     ON model_electrical_group (group_id);
+
+-- import_flag is a purely EPHEMERAL, import-scoped bookkeeping table (NOT
+-- part of the permanent model — see flags.go's doc comment): batches
+-- mark "this ID was seen/installed/contained" as they process their own
+-- small chunk, so the two whole-model completeness checks
+-- ("unreferenced-node", "equipment-without-container", see consistency.go)
+-- can run as one paged scan against these small flag rows at the very
+-- end of import, instead of holding the whole model's resolved/container
+-- maps in RAM at once. version-scoped like every other model_* table;
+-- rows are deleted once Phase 3's final scan for that version completes
+-- (see ClearFlags) — a fresh import's flags never linger.
+CREATE TABLE IF NOT EXISTS import_flag (
+    version INTEGER NOT NULL,
+    kind    TEXT NOT NULL,
+    id      TEXT NOT NULL,
+    PRIMARY KEY (version, kind, id)
+);
 `
 
 // ModelStore implements hierarchy.Store, hierarchy.EquipmentStore,
@@ -772,6 +789,37 @@ func (m *ModelStore) UpsertElectricalGroups(groups map[string]string) error {
 		for nodeID, groupID := range groups {
 			if _, err := stmt.Exec(nodeID, groupID); err != nil {
 				return fmt.Errorf("sqlite: upserting electrical group for node %s: %w", nodeID, err)
+			}
+		}
+		return nil
+	})
+}
+
+// UpsertElectricalGroupsIfAbsent writes group assignments WITHOUT
+// overwriting any node_id that already has an entry — used by Pass B
+// (pass_b.go's RunPassB), which must run strictly after Pass A and must
+// never clobber Pass A's real, non-trivial group for a shared boundary
+// Node with its own trivial (always-singleton) group for that same Node
+// (see RunPassB's doc comment: "Pass A's entry wins over Pass B's trivial
+// one"). INSERT OR IGNORE gives exactly that semantics at the DB level —
+// no read-then-conditionally-write round trip needed, and safe under
+// concurrent callers touching different node_ids.
+func (m *ModelStore) UpsertElectricalGroupsIfAbsent(groups map[string]string) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	return withTx(m.db, func(tx *sql.Tx) error {
+		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO model_electrical_group (node_id, group_id) VALUES (?, ?)`)
+		if err != nil {
+			return fmt.Errorf("sqlite: preparing electrical group insert-if-absent: %w", err)
+		}
+		defer stmt.Close()
+
+		for nodeID, groupID := range groups {
+			if _, err := stmt.Exec(nodeID, groupID); err != nil {
+				return fmt.Errorf("sqlite: insert-if-absent electrical group for node %s: %w", nodeID, err)
 			}
 		}
 		return nil

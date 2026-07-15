@@ -74,7 +74,7 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 			var gotNodes []coremodel.Node
 			var gotEdges []coremodel.Edge
 			var gotGroups ElectricalGroups = ElectricalGroups{}
-			err = RunPassA(store, result.Version, 1000, DefaultBatchSize, 4, nopSink{}, func(b *BatchResult) error {
+			err = RunPassA(store, result.Version, 1000, DefaultBatchSize, 4, nopSink{}, nil, false, func(b *BatchResult) error {
 				gotNodes = append(gotNodes, b.Nodes...)
 				gotEdges = append(gotEdges, b.Edges...)
 				for id, gid := range b.Groups {
@@ -89,7 +89,7 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 				t.Fatalf("RunPassA produced no Nodes/Edges at all — batch never ran?")
 			}
 
-			passB, err := RunPassB(store, result.Version, 1000, nopSink{})
+			passB, err := RunPassB(store, result.Version, 1000, nopSink{}, nil)
 			if err != nil {
 				t.Fatalf("RunPassB: %v", err)
 			}

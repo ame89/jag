@@ -254,22 +254,33 @@ func main() {
 		chunkSize = n
 	}
 
-	// JAG_TERMINAL_WORKERS controls the number of per-class scan
-	// goroutines inside common.ResolveTerminalsParallel ("step (a)" of the
-	// parallel-import decision — see terminals.go's doc comment). 0/unset
-	// uses common.DefaultTerminalScanWorkers (8). Previously this worker
-	// count was only reachable via the internal constant — ResolveTerminals
-	// (the wrapper called below) always used the default. This is the
-	// counterpart to JAG_STATION_WORKERS, which already controls the other
-	// parallel phase (sachdaten+geometry).
-	terminalWorkers := 0
-	if v := os.Getenv("JAG_TERMINAL_WORKERS"); v != "" {
+	// JAG_BATCH_SIZE controls Pass A's per-batch Substation/Building root
+	// count (common.DefaultBatchSize=50 if unset/0) — see
+	// pass_a_pipeline.go's doc comment: this, not chunkSize, is now the
+	// real RAM-bounding knob (a batch's own Node/Edge/Attribute/Geometry
+	// footprint scales with batchSize, not with total model size).
+	batchSize := 0
+	if v := os.Getenv("JAG_BATCH_SIZE"); v != "" {
 		n, convErr := strconv.Atoi(v)
 		if convErr != nil {
-			fmt.Fprintf(os.Stderr, "invalid JAG_TERMINAL_WORKERS: %v\n", convErr)
+			fmt.Fprintf(os.Stderr, "invalid JAG_BATCH_SIZE: %v\n", convErr)
 			os.Exit(1)
 		}
-		terminalWorkers = n
+		batchSize = n
+	}
+
+	// JAG_STATION_WORKERS controls the number of Pass A pull-pool worker
+	// goroutines (common.DefaultPassAWorkers=4 if unset/0) — each worker
+	// pulls one batch of Substation/Building roots at a time and runs the
+	// full per-station Phase 2/3 pipeline on it (ProcessStationBatch).
+	stationWorkers := 0
+	if v := os.Getenv("JAG_STATION_WORKERS"); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_STATION_WORKERS: %v\n", convErr)
+			os.Exit(1)
+		}
+		stationWorkers = n
 	}
 
 	overallStart := time.Now()
@@ -281,6 +292,7 @@ func main() {
 	defer store.Close()
 	fmt.Printf("using sqlite file: %s\n", dbPath)
 	modelStore := store.Model()
+	flags := store.Flags()
 
 	phase1Start := time.Now()
 	var result phase1.Result
@@ -298,399 +310,184 @@ func main() {
 		fmt.Printf("  parse error: %s line=%d offset=%d: %s\n", e.SourceFile, e.Line, e.ByteOffset, e.Message)
 	}
 
-	// BuildContainers no longer depends on ResolveTerminals' output (see
-	// its doc comment — top-down restructuring, 2026-07-16): container
-	// membership comes directly from Equipment.EquipmentContainer, with a
-	// small targeted Terminal lookup only for the few exceptions
-	// (standalone Junction). Called first so any container-resolution
-	// anomaly is visible even if the full-model Terminal scan below never
-	// runs (e.g. aborts early).
-	contStart := time.Now()
-	containers, err := common.BuildContainers(store, result.Version, chunkSize)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "building containers: %v\n", err)
-		os.Exit(1)
-	}
+	// report accumulates only small, issue-count-scaled state across Pass
+	// A's per-batch results (never a whole-model Node/Edge/Attribute
+	// slice) — this is the RAM-bounded replacement for the old pipeline's
+	// single big in-memory containers/resolved/nodes/edges variables.
+	report := newPassReport()
 
-	termStart := time.Now()
-	resolved, nodeRoleIDs, anomalies, err := common.ResolveTerminalsParallel(store, result.Version, chunkSize, terminalWorkers)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve terminals: %v\n", err)
-		os.Exit(1)
-	}
-
-	oneTerm, twoTerm := 0, 0
-	nodeSet := map[string]bool{}
-	for _, et := range resolved {
-		if et.Node2 == "" {
-			oneTerm++
-		} else {
-			twoTerm++
-		}
-		if et.Node1 != "" {
-			nodeSet[et.Node1] = true
-		}
-		if et.Node2 != "" {
-			nodeSet[et.Node2] = true
-		}
-	}
-
-	fmt.Printf("\nresolved equipment: %d (1-terminal=%d, 2-terminal=%d) (%s)\n", len(resolved), oneTerm, twoTerm, time.Since(termStart))
-	fmt.Printf("distinct ConnectivityNode IDs referenced (-> Nodes): %d\n", len(nodeSet))
-	fmt.Printf("anomalies: %d\n", len(anomalies))
-	for i, a := range anomalies {
-		if i >= 30 {
-			fmt.Printf("  ... (%d more)\n", len(anomalies)-i)
-			break
-		}
-		fmt.Printf("  %s: %s (%d raw terminals)\n", a.EquipmentID, a.Message, len(a.Terminals))
-	}
-
-	byType := map[string]int{}
-	for _, c := range containers.Containers {
-		byType[string(c.Type)]++
-	}
-	fmt.Printf("\ncontainers: %d total (%s)\n", len(containers.Containers), time.Since(contStart))
-	for _, t := range []string{"substation", "bay", "busbar", "acline", "junction", "distribution-box"} {
-		fmt.Printf("  %-18s %d\n", t, byType[t])
-	}
-	fmt.Printf("equipment assigned to a container: %d / %d resolved\n", len(containers.EquipmentToCont), len(resolved))
-	fmt.Printf("container anomalies: %d\n", len(containers.Anomalies))
-	for i, a := range containers.Anomalies {
-		if i >= 15 {
-			fmt.Printf("  ... and %d more\n", len(containers.Anomalies)-i)
-			break
-		}
-		fmt.Printf("  %s: %s\n", a.ObjectID, a.Message)
-	}
-	fmt.Printf("cim:Line references kept as Sachdaten (untrusted): %d\n", len(containers.LineRefs))
-
-	persistStart := time.Now()
-	if err := chunkUpsert(containers.Containers, modelStore.UpsertContainers); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting containers: %v\n", err)
-		os.Exit(1)
-	}
-	equipmentRows := make([]coremodel.Equipment, 0, len(resolved))
-	for eqID := range resolved {
-		equipmentRows = append(equipmentRows, coremodel.Equipment{ID: eqID, ContainerID: containers.EquipmentToCont[eqID]})
-	}
-	if err := chunkUpsert(equipmentRows, modelStore.UpsertEquipment); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting equipment: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("persisted %d containers, %d equipment rows (%s)\n", len(containers.Containers), len(equipmentRows), time.Since(persistStart))
-
-	// acline chain size distribution — sanity check for the topology-based
-	// grouping (see BuildContainers doc comment).
-	chainSize := map[string]int{}
-	for _, cid := range containers.EquipmentToCont {
-		chainSize[cid]++
-	}
-	sizeHist := map[int]int{}
-	for cid, n := range chainSize {
-		if byType["acline"] > 0 {
-			for _, c := range containers.Containers {
-				if c.ID == cid && c.Type == common.ContainerTypeACLine {
-					sizeHist[n]++
-				}
-			}
-		}
-	}
-	fmt.Printf("acline chain size histogram (segments per acline container): %v\n", sizeHist)
-
-	busbarContainerSet := map[string]bool{}
-	for _, c := range containers.Containers {
-		if c.Type == common.ContainerTypeBusbar {
-			busbarContainerSet[c.ID] = true
-		}
-	}
-	busbarSectionIDs := map[string]bool{}
-	for eqID, contID := range containers.EquipmentToCont {
-		if busbarContainerSet[contID] {
-			busbarSectionIDs[eqID] = true
-		}
-	}
-
-	junctionMerged := common.MergeJunctionNodes(resolved, nodeRoleIDs)
-	junctionMerges := 0
-	for eqID := range nodeRoleIDs {
-		if junctionMerged[eqID].Node1 != resolved[eqID].Node1 {
-			junctionMerges++
-		}
-	}
-	fmt.Printf("\njunction nodes remapped (own multi-terminal splice unified): %d\n", junctionMerges)
-
-	nodeOnlyIDs := map[string]bool{}
-	for eqID := range busbarSectionIDs {
-		nodeOnlyIDs[eqID] = true
-	}
-	for eqID := range nodeRoleIDs {
-		nodeOnlyIDs[eqID] = true
-	}
-
-	mergedResolved := common.MergeBusbarSectionNodes(junctionMerged, containers, nodeOnlyIDs)
-	merges := 0
-	for eqID := range busbarSectionIDs {
-		if mergedResolved[eqID].Node1 != resolved[eqID].Node1 {
-			merges++
-		}
-	}
-	fmt.Printf("busbar-section nodes remapped (previously disconnected, same busbar container): %d\n", merges)
-
-	nodes, edges := common.BuildNodesAndEdges(mergedResolved, nodeOnlyIDs)
-	fmt.Printf("built %d Nodes, %d Edges\n", len(nodes), len(edges))
-	nodesEdgesPersistStart := time.Now()
-	if err := chunkUpsert(nodes, modelStore.UpsertNodes); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting nodes: %v\n", err)
-		os.Exit(1)
-	}
-	if err := chunkUpsert(edges, modelStore.UpsertEdges); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting edges: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("persisted %d nodes, %d edges (%s)\n", len(nodes), len(edges), time.Since(nodesEdgesPersistStart))
-	gndEdges := 0
-	for _, e := range edges {
-		if e.Terminal2NodeID == common.GNDNodeID {
-			gndEdges++
-		}
-	}
-	fmt.Printf("edges pointing to GND: %d\n", gndEdges)
-
-	circStart := time.Now()
-	circuits, _, _, err := common.BuildCircuits(store, result.Version, nodes, edges, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "building circuits: %v\n", err)
-		os.Exit(1)
-	}
-	circSizes := make([]int, 0, len(circuits))
-	for _, c := range circuits {
-		circSizes = append(circSizes, len(c.Nodes))
-	}
-	sort.Sort(sort.Reverse(sort.IntSlice(circSizes)))
-	fmt.Printf("circuits: %d (node-count sizes desc: %v) (%s)\n", len(circuits), circSizes, time.Since(circStart))
-
-	// Cross-check: does every ConnectivityNode object in the source
-	// actually appear among our built Nodes (Idee.md invariant: a
-	// ConnectivityNode with reference count 0 is an error)?
-	nodeIDSet := map[string]bool{}
-	for _, n := range nodes {
-		nodeIDSet[n.EquipmentID] = true
-	}
-	afterID := ""
-	unreferenced := 0
-	total := 0
-	for {
-		records, err := store.GetByClass(result.Version, "ConnectivityNode", afterID, chunkSize)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "checking ConnectivityNodes: %v\n", err)
-			os.Exit(1)
-		}
-		if len(records) == 0 {
-			break
-		}
-		seen := map[string]bool{}
-		var ids []string
-		for _, r := range records {
-			if !seen[r.ID] {
-				seen[r.ID] = true
-				ids = append(ids, r.ID)
-			}
-		}
-		for _, id := range ids {
-			total++
-			if !nodeIDSet[id] {
-				unreferenced++
-				fmt.Printf("  unreferenced ConnectivityNode: %s\n", id)
-			}
-		}
-		afterID = ids[len(ids)-1]
-		if len(ids) < chunkSize {
-			break
-		}
-	}
-	fmt.Printf("ConnectivityNode objects in source: %d, unreferenced (ref-count 0): %d\n", total, unreferenced)
-
-	// JAG_STATION_WORKERS controls the number of station-worker goroutines
-	// for common.BuildSachdatenAndGeometryParallel ("step (b)" of the
-	// parallel-import decision — see that function's doc comment); 0/unset
-	// uses common.DefaultStationWorkers. Only used on the normal (no
-	// JAG_SACHDATEN_SAMPLE) path below, since the sample diagnostic
-	// restricts BuildAttributes' input without restricting BuildGeometry's
-	// equipmentIDs/containerIDs the same way, which the combined parallel
-	// function doesn't support.
-	stationWorkers := 0
-	if v := os.Getenv("JAG_STATION_WORKERS"); v != "" {
-		n, convErr := strconv.Atoi(v)
-		if convErr != nil {
-			fmt.Fprintf(os.Stderr, "invalid JAG_STATION_WORKERS: %v\n", convErr)
-			os.Exit(1)
-		}
-		stationWorkers = n
-	}
-
-	// JAG_DISABLE_ANHAENGSEL is a diagnostic-only switch (see
-	// common.DisableSatelliteWalk's doc comment): when "1", the Sachdaten
-	// phase never walks into any satellite/Anhängsel object at all, only
-	// emitting each Equipment's own literal attributes. Used to measure the
-	// Sachdaten phase's baseline duration/RAM without any many-to-one hub
-	// risk, while hunting for hub classes to add to structuralClasses.
-	if os.Getenv("JAG_DISABLE_ANHAENGSEL") == "1" {
-		common.DisableSatelliteWalk = true
-		fmt.Println("JAG_DISABLE_ANHAENGSEL=1: satellite/Anhängsel walk disabled, only literal Equipment attributes will be emitted")
-	}
-
-	attrsStart := time.Now()
-	sachdatenInput := resolved
-	if v := os.Getenv("JAG_SACHDATEN_SAMPLE"); v != "" {
-		// Diagnostic-only knob: restrict BuildAttributes to the first N
-		// equipment IDs (sorted) so a CPU profile of the Sachdaten/
-		// Anhängsel walk can be captured in a reasonable time against a
-		// large dataset, instead of waiting for the full run. Not used in
-		// normal operation.
-		n, convErr := strconv.Atoi(v)
-		if convErr != nil {
-			fmt.Fprintf(os.Stderr, "invalid JAG_SACHDATEN_SAMPLE: %v\n", convErr)
-			os.Exit(1)
-		}
-		var ids []string
-		for id := range resolved {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		if n < len(ids) {
-			ids = ids[:n]
-		}
-		sample := make(map[string]common.EquipmentTerminals, len(ids))
-		for _, id := range ids {
-			sample[id] = resolved[id]
-		}
-		sachdatenInput = sample
-		fmt.Printf("\n[diagnostic] JAG_SACHDATEN_SAMPLE=%d -> sampling %d/%d equipment for BuildAttributes\n", n, len(sample), len(resolved))
-	}
-	sampled := sachdatenInput != nil && len(sachdatenInput) != len(resolved)
-
-	equipmentIDs := map[string]bool{}
-	for eqID := range resolved {
-		equipmentIDs[eqID] = true
-	}
-	containerIDs := map[string]bool{}
-	for _, c := range containers.Containers {
-		containerIDs[c.ID] = true
-	}
-
-	geoStart := attrsStart
 	sink := &persistSink{reportSink: newReportSink(), model: modelStore}
-	if sampled {
-		// Sampling restricts BuildAttributes' input without restricting
-		// BuildGeometry's equipmentIDs/containerIDs the same way — the
-		// combined parallel path doesn't support that split, so fall back
-		// to the plain sequential calls whenever JAG_SACHDATEN_SAMPLE is
-		// in play (a diagnostic-only knob, not normal operation anyway).
-		if err := common.BuildAttributes(store, result.Version, 1000, sachdatenInput, nil, sink); err != nil {
-			fmt.Fprintf(os.Stderr, "building attributes: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("\nsachdaten: %d attribute rows (%s)\n", sink.totalAttrs, time.Since(attrsStart))
 
-		geoStart = time.Now()
-		if err := common.BuildGeometry(store, result.Version, 1000, equipmentIDs, containerIDs, sink); err != nil {
-			fmt.Fprintf(os.Stderr, "building geometry: %v\n", err)
-			os.Exit(1)
+	passAStart := time.Now()
+	err = common.RunPassA(store, result.Version, chunkSize, batchSize, stationWorkers, sink, flags, isNSC, func(b *common.BatchResult) error {
+		if err := chunkUpsert(b.Containers, modelStore.UpsertContainers); err != nil {
+			return fmt.Errorf("persisting containers: %w", err)
 		}
-	} else {
-		// Normal path: step (b) of the parallel-import decision — station
-		// workers build Sachdaten+Geometry concurrently, one station (or
-		// bundle of stations) per goroutine, plus one dedicated goroutine
-		// for ACLine/unassigned equipment (see BuildSachdatenAndGeometryParallel's
-		// doc comment). Each worker flushes through sink as it goes (see
-		// reportSink/Sink's 2026-07-14 fix doc comments) instead of this
-		// call returning the whole model's Attributes/Geometries at once.
-		if err := common.BuildSachdatenAndGeometryParallel(store, result.Version, 1000, resolved, containers, stationWorkers, sink); err != nil {
-			fmt.Fprintf(os.Stderr, "building sachdaten+geometry (parallel): %v\n", err)
-			os.Exit(1)
+		if err := chunkUpsert(b.Equipment, modelStore.UpsertEquipment); err != nil {
+			return fmt.Errorf("persisting equipment: %w", err)
 		}
-		fmt.Printf("\nsachdaten+geometry (parallel, %d workers): %d attribute rows, %d geometries (%s)\n", stationWorkers, sink.totalAttrs, sink.totalGeoms, time.Since(attrsStart))
+		if err := chunkUpsert(b.Nodes, modelStore.UpsertNodes); err != nil {
+			return fmt.Errorf("persisting nodes: %w", err)
+		}
+		if err := chunkUpsert(b.Edges, modelStore.UpsertEdges); err != nil {
+			return fmt.Errorf("persisting edges: %w", err)
+		}
+		// Pass A's own groups are the "real" switch-aware groups — plain
+		// upsert (ON CONFLICT DO UPDATE), see UpsertElectricalGroups' doc
+		// comment. Pass B's trivial singleton groups (below) must never
+		// overwrite these.
+		groupMap := make(map[string]string, len(b.Groups))
+		for id, g := range b.Groups {
+			groupMap[id] = g
+		}
+		if err := chunkUpsertMap(groupMap, modelStore.UpsertElectricalGroups); err != nil {
+			return fmt.Errorf("persisting electrical groups: %w", err)
+		}
+		report.addBatch(b)
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pass A: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("\npass A (batchSize=%d, workers=%d): %d containers, %d equipment, %d nodes, %d edges, %d groups (%s)\n",
+		batchSizeOrDefault(batchSize), stationWorkers, report.containers, report.equipment, report.nodes, report.edges, len(report.distinctGroups), time.Since(passAStart))
+	fmt.Printf("pass A anomalies: %d\n", len(report.anomalies))
+	for i, a := range report.anomalies {
+		if i >= 30 {
+			fmt.Printf("  ... (%d more)\n", len(report.anomalies)-i)
+			break
+		}
+		fmt.Printf("  %s: %s\n", a.EquipmentID, a.Message)
+	}
+
+	passBStart := time.Now()
+	passB, err := common.RunPassB(store, result.Version, chunkSize, sink, flags)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pass B: %v\n", err)
+		os.Exit(1)
+	}
+	if err := chunkUpsert(passB.Containers, modelStore.UpsertContainers); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B containers: %v\n", err)
+		os.Exit(1)
+	}
+	if err := chunkUpsert(passB.Equipment, modelStore.UpsertEquipment); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B equipment: %v\n", err)
+		os.Exit(1)
+	}
+	if err := chunkUpsert(passB.Nodes, modelStore.UpsertNodes); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B nodes: %v\n", err)
+		os.Exit(1)
+	}
+	if err := chunkUpsert(passB.Edges, modelStore.UpsertEdges); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B edges: %v\n", err)
+		os.Exit(1)
+	}
+	if err := chunkUpsert(passB.Attributes, modelStore.UpsertAttributes); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B acline-name attributes: %v\n", err)
+		os.Exit(1)
+	}
+	if err := chunkUpsert(passB.LineRefs, modelStore.UpsertAttributes); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B cim:Line references: %v\n", err)
+		os.Exit(1)
+	}
+	// Pass B's groups are trivial always-singleton groups (see RunPassB's
+	// doc comment) — INSERT OR IGNORE so they never clobber a real group
+	// Pass A already wrote for a shared boundary node.
+	passBGroupMap := make(map[string]string, len(passB.Groups))
+	for id, g := range passB.Groups {
+		passBGroupMap[id] = g
+	}
+	if err := chunkUpsertMap(passBGroupMap, modelStore.UpsertElectricalGroupsIfAbsent); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B electrical groups: %v\n", err)
+		os.Exit(1)
+	}
+	report.addPassB(passB)
+	fmt.Printf("\npass B: %d containers, %d equipment, %d nodes, %d edges, %d groups (%s)\n",
+		len(passB.Containers), len(passB.Equipment), len(passB.Nodes), len(passB.Edges), len(passB.Groups), time.Since(passBStart))
+	fmt.Printf("pass B anomalies: %d\n", len(passB.Anomalies))
+	for i, a := range passB.Anomalies {
+		if i >= 30 {
+			fmt.Printf("  ... (%d more)\n", len(passB.Anomalies)-i)
+			break
+		}
+		fmt.Printf("  %s: %s\n", a.EquipmentID, a.Message)
+	}
+
+	fmt.Printf("\ncontainers by type:\n")
+	for _, t := range []string{"substation", "bay", "busbar", "acline", "distribution-box", "house"} {
+		fmt.Printf("  %-18s %d\n", t, report.byType[t])
+	}
+
+	fmt.Printf("\nphase3 invariant violations (batch-scoped, from pass A+B): %d\n", len(report.violations))
+	byRule := map[string]int{}
+	for _, v := range report.violations {
+		byRule[v.Rule]++
+	}
+	for rule, n := range byRule {
+		fmt.Printf("  %-20s %d\n", rule, n)
+	}
+	for i, v := range report.violations {
+		if i >= 30 {
+			fmt.Printf("  ... and %d more\n", len(report.violations)-i)
+			break
+		}
+		fmt.Printf("  [%s] %s: %s\n", v.Rule, v.ObjectID, v.Message)
+	}
+
+	// Final, genuinely paged whole-model completeness scans
+	// ("unreferenced-node", "equipment-without-container") — see flags.go/
+	// CheckInvariantsFlagged's doc comments. RAM stays bounded by
+	// chunkSize regardless of model size; an empty result means no
+	// anomaly.
+	flaggedStart := time.Now()
+	flaggedViolations, err := common.CheckInvariantsFlagged(store, flags, result.Version, chunkSize)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "phase3 (flagged completeness checks): %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("\nphase3 flagged completeness violations (unreferenced-node / equipment-without-container): %d (%s)\n", len(flaggedViolations), time.Since(flaggedStart))
+	for i, v := range flaggedViolations {
+		if i >= 30 {
+			fmt.Printf("  ... and %d more\n", len(flaggedViolations)-i)
+			break
+		}
+		fmt.Printf("  [%s] %s: %s\n", v.Rule, v.ObjectID, v.Message)
+	}
+
+	// Flags are purely ephemeral import-time bookkeeping (see flags.go) —
+	// clear them now that the final completeness scans have run.
+	if err := flags.ClearFlags(result.Version); err != nil {
+		fmt.Fprintf(os.Stderr, "clearing import flags: %v\n", err)
+		os.Exit(1)
 	}
 
 	byOwner := sink.byOwner
 	if len(byOwner) > 0 {
-		fmt.Printf("sachdaten: %d attribute rows across %d equipments (avg %.1f/equipment)\n", sink.totalAttrs, len(byOwner), float64(sink.totalAttrs)/float64(len(byOwner)))
+		fmt.Printf("\nsachdaten: %d attribute rows across %d equipments (avg %.1f/equipment)\n", sink.totalAttrs, len(byOwner), float64(sink.totalAttrs)/float64(len(byOwner)))
 	}
-
-	// Show a SynchronousMachine's attributes as a spot check (should include
-	// its own RotatingMachine.* fields plus GeneratingUnit/FossilFuel/
-	// ControlAreaGeneratingUnit satellite attributes) — sampleAttrs was
-	// captured by reportSink on the fly (first owner seen with >15
-	// attributes), instead of scanning the whole model's attrs afterward.
 	if sink.sampleOwner != "" {
 		fmt.Printf("\nsample equipment %s (%d attributes):\n", sink.sampleOwner, len(sink.sampleAttrs))
 		for _, a := range sink.sampleAttrs {
 			fmt.Printf("  %-45s = %v\n", a.Key, a.Value)
 		}
 	}
+	fmt.Printf("geometries resolved: %d\n", sink.totalGeoms)
 
-	fmt.Printf("\ngeometries resolved: %d (0 expected — Espheim ships no GL profile) (%s)\n", sink.totalGeoms, time.Since(geoStart))
-
-	phase3Start := time.Now()
-	phase3, err := common.CheckInvariants(store, result.Version, mergedResolved, containers, nodes, edges, isNSC)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "phase3: %v\n", err)
-		os.Exit(1)
-	}
-	byRule := map[string]int{}
-	for _, v := range phase3.Violations {
-		byRule[v.Rule]++
-	}
-	fmt.Printf("\nphase3 invariant violations: %d (%s)\n", len(phase3.Violations), time.Since(phase3Start))
-	for rule, n := range byRule {
-		fmt.Printf("  %-20s %d\n", rule, n)
-	}
-	for i, v := range phase3.Violations {
-		if i >= 30 {
-			fmt.Printf("  ... and %d more\n", len(phase3.Violations)-i)
-			break
-		}
-		fmt.Printf("  [%s] %s: %s\n", v.Rule, v.ObjectID, v.Message)
-	}
-
-	// PROTOTYPE: electrical topology (Zero-Ohm reduction), not yet wired
-	// into CheckInvariants/Phase 3 — see internal/impl/common/electrical.go.
-	elecStart := time.Now()
-	groups, switches, err := common.BuildElectricalGroups(store, result.Version, nodes, edges, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "electrical topology: %v\n", err)
-		os.Exit(1)
-	}
-	closed, open := 0, 0
-	byClass := map[string]int{}
-	for _, s := range switches {
-		byClass[s.Class]++
-		if s.Open {
-			open++
-		} else {
-			closed++
-		}
-	}
-	distinctGroups := map[string]bool{}
-	for _, g := range groups {
-		distinctGroups[g] = true
-	}
-	fmt.Printf("\nelectrical topology (prototype): %d switch-like equipment (closed=%d, open=%d), classes=%v\n", len(switches), closed, open, byClass)
-	fmt.Printf("  %d physical Nodes reduced to %d electrical groups (%s)\n", len(nodes), len(distinctGroups), time.Since(elecStart))
-
-	groupsPersistStart := time.Now()
-	if err := chunkUpsertMap(groups, modelStore.UpsertElectricalGroups); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting electrical groups: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("  persisted %d electrical group assignments (%s)\n", len(groups), time.Since(groupsPersistStart))
-
-	// Re-derive the "circuits: N (sizes desc)" report from the persisted
-	// DB state itself (model_electrical_group), not from the in-memory
-	// `groups` map above — this is the same report as during import, but
-	// now sourced from the final DB model to confirm the DB round-trip is
-	// faithful (GROUP BY-computed, no full node-ID scan into Go memory).
+	// Electrical groups (switch-state merge, see BuildElectricalGroups) are
+	// re-derived from the persisted DB state itself
+	// (model_electrical_group), not from in-memory groups — confirms the
+	// DB round-trip (Pass A upsert + Pass B upsert-if-absent) is faithful,
+	// GROUP BY-computed, no full node-ID scan into Go memory. This is the
+	// only globally-correct grouping number Pass A/B produces at import
+	// time: Circuit ("Schaltkreis", full physical reachability across ALL
+	// edges, not just switches) is deliberately NOT computed here — a
+	// per-batch/per-station BuildCircuits call cannot see the ACLineSegment
+	// chains (Pass B) connecting one station to the next, so it would only
+	// ever report batch-local, misleadingly small circuit sizes. Circuits
+	// are a query-time construct per the confirmed design (assembled from
+	// these persisted ElectricalGroups snippets plus a dynamic switch-map,
+	// see Usecases.md UC2b/UC4/UC7), not an import-time report metric.
 	dbGroupSizes, err := modelStore.GroupSizes()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reading electrical group sizes from DB: %v\n", err)
@@ -701,53 +498,66 @@ func main() {
 		dbCircSizes = append(dbCircSizes, n)
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(dbCircSizes)))
-	fmt.Printf("  circuits from DB model_electrical_group: %d (node-count sizes desc: %v)\n", len(dbGroupSizes), dbCircSizes)
+	fmt.Printf("electrical groups from DB model_electrical_group: %d (node-count sizes desc: %v)\n", len(dbGroupSizes), dbCircSizes)
 
-	// Dynamic switch-map demo: JAG itself doesn't track live switching
-	// state (see Konzept.md), but BuildElectricalGroups/BuildCircuits
-	// already accept a SwitchStateOverrides map for a caller that does
-	// (e.g. SCADA-driven). Flip the first closed switch found to "open"
-	// as a smoke test, recompute in-memory only (not persisted — the
-	// model_electrical_group table above stays the static import-default
-	// grouping), and show how the circuit count/sizes react.
-	var demoSwitchID string
-	for _, sw := range switches {
-		if !sw.Open {
-			demoSwitchID = sw.EquipmentID
-			break
-		}
-	}
-	if demoSwitchID != "" {
-		overrides := common.SwitchStateOverrides{demoSwitchID: true} // force open
-		dynGroups, _, err := common.BuildElectricalGroups(store, result.Version, nodes, edges, overrides)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "electrical topology (dynamic override): %v\n", err)
-			os.Exit(1)
-		}
-		dynDistinct := map[string]bool{}
-		for _, g := range dynGroups {
-			dynDistinct[g] = true
-		}
-		fmt.Printf("  dynamic switch-map demo: forcing %s open -> %d electrical groups (was %d)\n",
-			demoSwitchID, len(dynDistinct), len(distinctGroups))
-	} else {
-		fmt.Printf("  dynamic switch-map demo: no closed switch found, skipped\n")
-	}
-
-	mismatchStart := time.Now()
-	mismatches, err := common.CheckElectricalTopologyAgainstCGMES(store, result.Version, groups)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "electrical topology cross-check: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("  cross-check vs. CGMES TopologicalNode: %d mismatches (%s)\n", len(mismatches), time.Since(mismatchStart))
-	for i, m := range mismatches {
-		if i >= 15 {
-			fmt.Printf("    ... and %d more\n", len(mismatches)-i)
-			break
-		}
-		fmt.Printf("    [%s] %s: %s\n", m.Rule, m.ObjectID, m.Message)
-	}
-
-	fmt.Printf("\ntotal wall-clock (open+phase1+phase2+phase3): %s\n", time.Since(overallStart))
+	fmt.Printf("\ntotal wall-clock (open+phase1+passA+passB+phase3): %s\n", time.Since(overallStart))
 }
+
+// batchSizeOrDefault mirrors common.RunPassA's own "0 -> DefaultBatchSize"
+// substitution, purely for the report line above (RunPassA itself already
+// applies the same default internally).
+func batchSizeOrDefault(batchSize int) int {
+	if batchSize <= 0 {
+		return common.DefaultBatchSize
+	}
+	return batchSize
+}
+
+// passReport accumulates only small, issue-count-scaled state across every
+// Pass A/B result — never a whole-model Node/Edge/Attribute slice (that
+// would reintroduce exactly the RAM-scaling bug this rewiring fixes).
+// Per-container-type counts and a small capped violation/anomaly sample
+// are all safe to keep in memory: in a healthy model they stay at or near
+// zero regardless of how many Substations/ACLineSegments were processed.
+type passReport struct {
+	containers, equipment, nodes, edges int
+	byType                              map[string]int
+	distinctGroups                      map[string]bool
+	violations                          []common.InvariantViolation
+	anomalies                           []common.Anomaly
+}
+
+func newPassReport() *passReport {
+	return &passReport{byType: map[string]int{}, distinctGroups: map[string]bool{}}
+}
+
+func (r *passReport) addBatch(b *common.BatchResult) {
+	r.containers += len(b.Containers)
+	r.equipment += len(b.Equipment)
+	r.nodes += len(b.Nodes)
+	r.edges += len(b.Edges)
+	for _, c := range b.Containers {
+		r.byType[string(c.Type)]++
+	}
+	for _, g := range b.Groups {
+		r.distinctGroups[g] = true
+	}
+	r.violations = append(r.violations, b.Violations...)
+	r.anomalies = append(r.anomalies, b.Anomalies...)
+}
+
+func (r *passReport) addPassB(b *common.PassBResult) {
+	r.containers += len(b.Containers)
+	r.equipment += len(b.Equipment)
+	r.nodes += len(b.Nodes)
+	r.edges += len(b.Edges)
+	for _, c := range b.Containers {
+		r.byType[string(c.Type)]++
+	}
+	for _, g := range b.Groups {
+		r.distinctGroups[g] = true
+	}
+	r.violations = append(r.violations, b.Violations...)
+	r.anomalies = append(r.anomalies, b.Anomalies...)
+}
+

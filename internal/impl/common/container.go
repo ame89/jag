@@ -446,6 +446,59 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 		}
 	}
 
+	lineIDs, lineIdx, err := scanClass(store, version, chunkSize, "Line")
+	if err != nil {
+		return nil, err
+	}
+	lineExists := map[string]bool{}
+	for _, id := range lineIDs {
+		lineExists[id] = true
+	}
+
+	aclIDs, aclIdx, err := scanClass(store, version, chunkSize, "ACLineSegment")
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range aclIDs {
+		lineRef := aclIdx.Ref(id, "Equipment.EquipmentContainer")
+		if lineRef == "" {
+			continue
+		}
+		res.LineRefs = append(res.LineRefs, coremodel.Attribute{OwnerID: id, Key: "cim:ACLineSegment.Line", Value: lineRef})
+		if !lineExists[lineRef] {
+			continue // dangling external reference (missing boundary profile) — nothing to pull attributes from
+		}
+		// Line's own literal attributes (e.g. IdentifiedObject.name,
+		// Line.Region) are attached to the ACLineSegment as untrusted
+		// Sachdaten too, prefixed with "cim:Line." to distinguish them from
+		// the segment's own attributes — never used for container/topology
+		// decisions (per the "CIM's Line grouping isn't trustworthy"
+		// decision), just carried along losslessly.
+		for attr, values := range lineIdx.AllAttrs(lineRef) {
+			for _, v := range values {
+				res.LineRefs = append(res.LineRefs, coremodel.Attribute{
+					OwnerID: id,
+					Key:     coremodel.AttributeKey("cim:Line." + attr),
+					Value:   v.Value,
+				})
+			}
+		}
+	}
+	// Built BEFORE the unresolved-Equipment/Junction fallback below (moved
+	// up 2026-07-15) so aclineNodeToContainer is available when resolving a
+	// standalone Junction's own container membership — see that map's doc
+	// comment on buildACLineChains for why.
+	aclineContainers, aclineOf, aclineNames, aclAnomalies, aclineNodeToContainer, err := buildACLineChains(store, version, aclIDs)
+	if err != nil {
+		return nil, err
+	}
+	res.Anomalies = append(res.Anomalies, aclAnomalies...)
+	res.Containers = append(res.Containers, aclineContainers...)
+	res.Attributes = append(res.Attributes, aclineNames...)
+	for segID, containerID := range aclineOf {
+		res.EquipmentToCont[segID] = containerID
+	}
+
 	if len(unresolvedIDs) > 0 {
 		sort.Strings(unresolvedIDs)
 		nodeRoleIDs := map[string]bool{}
@@ -488,6 +541,41 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 				res.EquipmentToCont[id] = container
 			case houseSet[container]:
 				res.EquipmentToCont[id] = container
+			case unresolvedClass[id] == "Junction":
+				// Junction/Muffe never gets its own dedicated container
+				// type (decided with the user 2026-07-15, superseding the
+				// earlier "Muffen-Container" auto-creation idea): a
+				// standalone splice is just a NODE, and Container
+				// membership for it is bookkeeping only — it joins
+				// whichever "acline" its own ConnectivityNode(s) already
+				// belong to (built just above, before this block, exactly
+				// so it's available here). Deterministic tie-break for a
+				// branch point (Abzweigmuffe touching multiple chains) is
+				// handled inside buildACLineChains' nodeToContainer
+				// construction (smallest containerID wins).
+				aclContainer := aclineNodeToContainer[et.Node1]
+				if aclContainer == "" {
+					aclContainer = aclineNodeToContainer[et.Node2]
+				}
+				for _, extra := range et.ExtraNodes {
+					if aclContainer != "" {
+						break
+					}
+					aclContainer = aclineNodeToContainer[extra]
+				}
+				if aclContainer == "" {
+					// No ACLineSegment touches this Junction's
+					// ConnectivityNode(s) either (e.g. a Junction with no
+					// adjacent cable segment in this partial model) —
+					// nothing to attach it to; report instead of silently
+					// dropping it.
+					res.Anomalies = append(res.Anomalies, ContainerAnomaly{
+						ObjectID: id,
+						Message:  "Junction's ConnectivityNode(s) have no resolvable ConnectivityNodeContainer and no adjacent ACLineSegment to derive an acline container from",
+					})
+					continue
+				}
+				res.EquipmentToCont[id] = aclContainer
 			default:
 				res.Anomalies = append(res.Anomalies, ContainerAnomaly{
 					ObjectID: id,
@@ -495,55 +583,6 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 				})
 			}
 		}
-	}
-
-	lineIDs, lineIdx, err := scanClass(store, version, chunkSize, "Line")
-	if err != nil {
-		return nil, err
-	}
-	lineExists := map[string]bool{}
-	for _, id := range lineIDs {
-		lineExists[id] = true
-	}
-
-	aclIDs, aclIdx, err := scanClass(store, version, chunkSize, "ACLineSegment")
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range aclIDs {
-		lineRef := aclIdx.Ref(id, "Equipment.EquipmentContainer")
-		if lineRef == "" {
-			continue
-		}
-		res.LineRefs = append(res.LineRefs, coremodel.Attribute{OwnerID: id, Key: "cim:ACLineSegment.Line", Value: lineRef})
-		if !lineExists[lineRef] {
-			continue // dangling external reference (missing boundary profile) — nothing to pull attributes from
-		}
-		// Line's own literal attributes (e.g. IdentifiedObject.name,
-		// Line.Region) are attached to the ACLineSegment as untrusted
-		// Sachdaten too, prefixed with "cim:Line." to distinguish them from
-		// the segment's own attributes — never used for container/topology
-		// decisions (per the "CIM's Line grouping isn't trustworthy"
-		// decision), just carried along losslessly.
-		for attr, values := range lineIdx.AllAttrs(lineRef) {
-			for _, v := range values {
-				res.LineRefs = append(res.LineRefs, coremodel.Attribute{
-					OwnerID: id,
-					Key:     coremodel.AttributeKey("cim:Line." + attr),
-					Value:   v.Value,
-				})
-			}
-		}
-	}
-	aclineContainers, aclineOf, aclineNames, aclAnomalies, err := buildACLineChains(store, version, aclIDs)
-	if err != nil {
-		return nil, err
-	}
-	res.Anomalies = append(res.Anomalies, aclAnomalies...)
-	res.Containers = append(res.Containers, aclineContainers...)
-	res.Attributes = append(res.Attributes, aclineNames...)
-	for segID, containerID := range aclineOf {
-		res.EquipmentToCont[segID] = containerID
 	}
 
 	return res, nil
@@ -568,10 +607,17 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 // skipped — its own Anomaly from the full-model ResolveTerminals was
 // reported elsewhere in the old pipeline, but this function itself never
 // surfaced it).
-func buildACLineChains(store staging.Store, version uint64, aclIDs []string) ([]coremodel.Container, map[string]string, []coremodel.Attribute, []ContainerAnomaly, error) {
+//
+// The final return value, nodeToContainer, maps every ConnectivityNode ID
+// touched by at least one grouped ACLineSegment to that chain's container
+// ID — see its own doc comment below (near where it's built) for why this
+// exists: it lets a caller assign a standalone Junction/Muffe (a Node, not
+// an Edge) to the same "acline" container its physical location belongs
+// to, instead of giving Junction its own dedicated container type.
+func buildACLineChains(store staging.Store, version uint64, aclIDs []string) ([]coremodel.Container, map[string]string, []coremodel.Attribute, []ContainerAnomaly, map[string]string, error) {
 	resolved, termAnomalies, err := ResolveTerminalsForIDs(store, version, aclIDs, nil)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("common: resolving Terminals for %d ACLineSegment: %w", len(aclIDs), err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("common: resolving Terminals for %d ACLineSegment: %w", len(aclIDs), err)
 	}
 	var anomalies []ContainerAnomaly
 	for _, a := range termAnomalies {
@@ -650,5 +696,34 @@ func buildACLineChains(store staging.Store, version uint64, aclIDs []string) ([]
 			aclineOf[m] = containerID
 		}
 	}
-	return containers, aclineOf, names, anomalies, nil
+
+	// nodeToContainer lets callers assign a standalone Junction/Muffe (a
+	// Node, not an ACLineSegment/Edge) to the SAME "acline" container as
+	// the ACLineSegment chain(s) touching its own ConnectivityNode(s) —
+	// decided with the user 2026-07-15: a Junction's Container membership
+	// is bookkeeping only (real cross-cable queries go through topology,
+	// not Container.ParentID), so a Junction should never get its own
+	// dedicated container type — it simply joins whichever "acline" its
+	// physical location already belongs to. A branch point (an
+	// Abzweigmuffe/T-Muffe touching 3+ segments, or any node where
+	// multiple different chains meet) intentionally does NOT merge those
+	// chains (see the ACLine-boundary decision: a branch always ends one
+	// chain and starts new ones) — it just means this map may see more
+	// than one candidate containerID for the same node; keep the
+	// lexicographically smallest one for a deterministic, stable
+	// tie-break (no special multi-parent handling needed).
+	nodeToContainer := map[string]string{}
+	for node, segs := range nodeToSegments {
+		for _, segID := range segs {
+			containerID, ok := aclineOf[segID]
+			if !ok {
+				continue
+			}
+			if existing, has := nodeToContainer[node]; !has || containerID < existing {
+				nodeToContainer[node] = containerID
+			}
+		}
+	}
+
+	return containers, aclineOf, names, anomalies, nodeToContainer, nil
 }

@@ -93,31 +93,23 @@ func CheckInvariants(
 	// }
 	// result.Violations = append(result.Violations, voltageViolations...)
 
-	// TODO(2026-07-15, temporarily disabled per explicit user decision —
-	// see "Offene Punkte" in Konzept.md, "Globale Zusammenhangsprüfung
-	// deaktiviert"): the GLOBAL "connectivity" check is switched off.
-	// Root cause: checkConnectivity loads and holds ALL []coremodel.Node/
-	// []coremodel.Edge of the entire model in the Go heap simultaneously
-	// to run an in-memory Union-Find — this is exactly the kind of
-	// full-model-in-RAM pattern the project's RAM budget forbids (see
-	// Idee.md/Impl.md's "10 concurrent requests at a few MB RAM each"
-	// goal) and was already identified as a real contributor to the
-	// measured RAM growth at 200->500 ONS (see Konzept.md's Lasttest
-	// section). The user has separately relaxed absolute
-	// cross-the-whole-model consistency before (this is not the first
-	// place it was found to be too strict/expensive) and decided it is
-	// not worth keeping at this cost — checkStationConnectivity below
-	// (same technique, but scoped per Station/House/KVS/ACLine, so its
-	// Node/Edge subsets stay small) remains ENABLED and covers the
-	// practically important case. This means Idee.md's stated invariant
-	// "all elements must form one connected graph from the highest
-	// voltage level down to GND" is now knowingly NOT enforced globally
-	// — open question, not yet decided either way, whether real global
-	// connectivity is actually wanted at all (see Konzept.md). Do not
-	// silently re-enable or remove checkConnectivity without addressing
-	// the RAM cost and this open question first.
-	//
-	// result.Violations = append(result.Violations, checkConnectivity(nodes, edges)...)
+	// Global "connectivity" check PERMANENTLY REMOVED (decided with the
+	// user 2026-07-15, RAM-scaling session): the whole-model Union-Find
+	// (former checkConnectivity) required holding ALL []coremodel.Node/
+	// []coremodel.Edge of the entire model in the Go heap at once — exactly
+	// the full-model-in-RAM pattern this project's RAM budget forbids, and
+	// a confirmed contributor to the 200->500 ONS RAM growth (see
+	// Konzept.md's Lasttest section). checkStationConnectivity below (same
+	// technique, but scoped per Station/House/KVS/ACLine, so its Node/Edge
+	// subsets stay small) remains ENABLED and covers the practically
+	// relevant case. Idee.md's stated invariant "all elements must form one
+	// connected graph from the highest voltage level down to GND" is
+	// therefore now KNOWINGLY only enforced locally (per top-level
+	// Container), never globally across the whole model — open question,
+	// not yet decided, whether true global connectivity is wanted at all
+	// (see Konzept.md's "Offene Punkte"). Do not reintroduce a
+	// whole-model connectivity check without first addressing that
+	// question and its RAM cost.
 	result.Violations = append(result.Violations, checkStationConnectivity(nodes, edges, containersResult)...)
 	result.Violations = append(result.Violations, checkBayCableCount(resolved, containersResult, isNSC)...)
 	result.Violations = append(result.Violations, checkContainerPaths(containersResult)...)
@@ -143,6 +135,39 @@ func CheckInvariants(
 	return result, nil
 }
 
+
+// CheckInvariantsFlagged runs the two Phase 3 completeness checks that
+// need whole-model visibility to detect an ABSENCE
+// ("unreferenced-node", "equipment-without-container") — but via the
+// flag-based, genuinely paged mechanism (see flags.go), never by holding a
+// full-model resolved/containers map in RAM. Call once, after BOTH Pass A
+// (ProcessStationBatch/RunPassA) and Pass B (RunPassB) have finished
+// marking their own IDs' flags — see those functions' doc comments. The
+// caller should call flags.ClearFlags(version) afterward; these flags are
+// purely ephemeral import-time bookkeeping.
+//
+// This is the Pass A/B pipeline's replacement for CheckInvariants' last
+// two whole-model checks (checkUnreferencedNodes/
+// checkEquipmentWithoutContainer above) — the other four rules
+// (checkStationConnectivity/checkBayCableCount/checkContainerPaths/
+// checkKVSNoTransformer) are batch-scoped and already returned per-batch
+// via BatchResult.Violations/PassBResult.Violations, so they never need a
+// separate whole-model pass at all.
+func CheckInvariantsFlagged(store staging.Store, flags FlagStore, version uint64, chunkSize int) ([]InvariantViolation, error) {
+	var violations []InvariantViolation
+	unreferenced, err := checkUnreferencedNodesFlagged(store, flags, version, chunkSize)
+	if err != nil {
+		return nil, fmt.Errorf("common: checking unreferenced nodes (flagged): %w", err)
+	}
+	violations = append(violations, unreferenced...)
+
+	missingContainer, err := checkEquipmentWithoutContainerFlagged(store, flags, version, chunkSize)
+	if err != nil {
+		return nil, fmt.Errorf("common: checking equipment-without-container (flagged): %w", err)
+	}
+	violations = append(violations, missingContainer...)
+	return violations, nil
+}
 
 // checkVoltageLevels enforces "every Equipment belongs to exactly one
 // voltage level, except the Transformer (which spans two)". The voltage
@@ -339,123 +364,14 @@ func checkVoltageLevels(store staging.Store, version uint64, resolved map[string
 	return violations, nil
 }
 
-// checkConnectivity enforces "all elements form one connected graph from
-// the highest voltage level down to GND" by computing connected components
-// over the whole physical Node/Edge graph via Union-Find. Everything is
-// already resident in memory (built by Phase 2's BuildNodesAndEdges), so
-// this is a plain iterative Union-Find over that in-memory adjacency —
-// no DB round-trips, no Go-side stack recursion (find() uses an iterative
-// loop with path halving, not recursive path compression). The largest
-// component is assumed to be the main network; every other (smaller)
-// component is reported as a disconnected island.
-//
-// NOT CALLED currently (disabled 2026-07-15, kept for reference — see the
-// commented-out call site in CheckInvariants above for the full
-// reasoning). Root problem: this function requires the caller to hold the
-// ENTIRE model's []coremodel.Node/[]coremodel.Edge in RAM at once, which
-// scales with total model size — exactly what this project's RAM budget
-// says must NOT happen (see Idee.md/Impl.md's "10 concurrent requests at a
-// few MB RAM each, not scaling with model size" goal); it was measured as
-// a real contributor to the Phase-3 RAM growth found in the 200/500-ONS
-// load test (see Konzept.md). checkStationConnectivity (below) does the
-// same thing but scoped per Station/House/KVS/ACLine, keeping each
-// invocation's Node/Edge subset small — that remains enabled. Whether
-// truly global connectivity should be enforced at all (vs. only
-// per-container) is an open, undecided question — see Konzept.md's
-// "Offene Punkte". Do not silently delete this function or re-enable its
-// call site without first addressing both the RAM cost and that open
-// question.
-//
-// GND is deliberately never traversed (bug fix 2026-07-14, found while
-// building the sibling checkStationConnectivity check): GND is a shared
-// virtual reference point every single-terminal piece of equipment's
-// Terminal 2 points at (see nodeedge.go's GNDNodeID), not a real physical
-// link between otherwise-unrelated equipment. Before this fix, an edge
-// with Terminal2NodeID == GNDNodeID was still passed to union() like any
-// other edge; since GNDNodeID is never itself present in the nodes slice,
-// find(GNDNodeID) resolved via Go's map zero-value default to a shared ""
-// root, silently merging every single-terminal equipment's own component
-// into one — masking real disconnected islands (false negative) instead of
-// reporting them.
-func checkConnectivity(nodes []coremodel.Node, edges []coremodel.Edge) []InvariantViolation {
-	if len(nodes) == 0 {
-		return nil
-	}
-
-	parent := map[string]string{}
-	for _, n := range nodes {
-		parent[n.EquipmentID] = n.EquipmentID
-	}
-
-	find := func(x string) string {
-		for parent[x] != x {
-			parent[x] = parent[parent[x]] // path halving
-			x = parent[x]
-		}
-		return x
-	}
-	union := func(a, b string) {
-		ra, rb := find(a), find(b)
-		if ra != rb {
-			parent[ra] = rb
-		}
-	}
-
-	for _, e := range edges {
-		if e.Terminal1NodeID == "" || e.Terminal2NodeID == "" {
-			continue
-		}
-		if e.Terminal1NodeID == GNDNodeID || e.Terminal2NodeID == GNDNodeID {
-			continue // never traverse through GND for this check
-		}
-		union(e.Terminal1NodeID, e.Terminal2NodeID)
-	}
-
-	components := map[string][]string{}
-	for _, n := range nodes {
-		if n.EquipmentID == GNDNodeID {
-			// GND is virtual and, since it's never traversed above, always
-			// resolves to its own singleton component now — reporting it
-			// as "a disconnected component" would be meaningless noise,
-			// not a real anomaly (mirrors checkStationConnectivity, which
-			// excludes GND from consideration entirely).
-			continue
-		}
-		root := find(n.EquipmentID)
-		components[root] = append(components[root], n.EquipmentID)
-	}
-	if len(components) <= 1 {
-		return nil
-	}
-
-	var roots []string
-	for r := range components {
-		roots = append(roots, r)
-	}
-	sort.Slice(roots, func(i, j int) bool {
-		if len(components[roots[i]]) != len(components[roots[j]]) {
-			return len(components[roots[i]]) > len(components[roots[j]])
-		}
-		return roots[i] < roots[j] // deterministic tie-break
-	})
-
-	var violations []InvariantViolation
-	for _, r := range roots[1:] { // keep the largest component as "the main network"
-		members := components[r]
-		sort.Strings(members)
-		violations = append(violations, InvariantViolation{
-			ObjectID: members[0],
-			Rule:     "connectivity",
-			Message:  fmt.Sprintf("disconnected component of %d node(s) not connected to the main network (e.g. member %s)", len(members), members[0]),
-		})
-	}
-	return violations
-}
-
-// checkStationConnectivity is the local counterpart to checkConnectivity
-// (decided with the user 2026-07-14): checkConnectivity only verifies that
-// the WHOLE physical Node/Edge graph forms one component across the entire
-// imported model; it says nothing about whether the equipment INSIDE one
+// checkStationConnectivity is the local counterpart to the former global
+// "connectivity" check (checkConnectivity, PERMANENTLY REMOVED 2026-07-15
+// — see CheckInvariants' doc comment). The global version used to verify
+// that the WHOLE physical Node/Edge graph forms one component across the
+// entire imported model, at the cost of holding the entire model's
+// []coremodel.Node/[]coremodel.Edge in RAM at once — a confirmed
+// contributor to full-model RAM growth, and now gone for good. This local
+// check says nothing about whether the equipment INSIDE one individual
 // individual Station (Substation/distribution-box), House, or ACLine is
 // itself correctly wired together. A piece of equipment could be correctly
 // assigned to a Container (equipment-without-container passes) yet still
@@ -760,7 +676,7 @@ func checkContainerPaths(cr *BuildContainersResult) []InvariantViolation {
 	for _, id := range ids {
 		c := byID[id]
 		switch c.Type {
-		case ContainerTypeSubstation, ContainerTypeACLine, ContainerTypeJunction, ContainerTypeDistributionBox:
+		case ContainerTypeSubstation, ContainerTypeACLine, ContainerTypeDistributionBox:
 			if c.ParentID != "" {
 				violations = append(violations, InvariantViolation{
 					ObjectID: id,
@@ -969,6 +885,128 @@ func checkEquipmentWithoutContainer(store staging.Store, version uint64, resolve
 			Rule:     "equipment-without-container",
 			Message:  fmt.Sprintf("%s %s has no assigned container (Equipment.EquipmentContainer missing or unresolved)", class, id),
 		})
+	}
+	return violations, nil
+}
+
+// checkUnreferencedNodesFlagged is the flag-based, genuinely paged
+// replacement for checkUnreferencedNodes/checkUnreferencedNodesOfClass —
+// run once after both Pass A and Pass B have finished (see flags.go's doc
+// comment and pass_a_pipeline.go/pass_b.go's FlagReferencedNode marking).
+// Unlike the old whole-model version, this NEVER accumulates the full
+// ConnectivityNode/TopologicalNode ID universe in memory: it walks
+// store.GetByClass page by page and, for each page, asks flags which of
+// that page's IDs were never marked FlagReferencedNode by any batch —
+// RAM is therefore bounded by chunkSize, not by model size. An empty
+// result means every node in the model was touched by at least one
+// Equipment's Terminal (reference count > 0).
+//
+// Only ONE of ConnectivityNode/TopologicalNode is ever checked, matching
+// terminals.go's own dialect fallback exactly (Terminal.ConnectivityNode
+// preferred, Terminal.TopologicalNode used only when a source has NO
+// ConnectivityNode class at all — see scanTerminals/ResolveTerminalsForIDs'
+// identical fallback and this function's own FlagReferencedNode marking,
+// which only ever flags whichever ID Phase 2 actually chose per Terminal).
+// A fully node-breaker CGMES source commonly also ships a populated TP
+// profile (Terminal.TopologicalNode raw references exist even though
+// Phase 2 never uses them, preferring ConnectivityNode) — checking
+// TopologicalNode's reference count in that case would misreport every
+// TopologicalNode as "unreferenced" purely because JAG's own model doesn't
+// rely on that redundant profile, not because the source data is actually
+// broken. Confirmed empirically against ReliCapGrid_Espheim (178
+// false-positive TopologicalNode violations before this dialect check was
+// added).
+func checkUnreferencedNodesFlagged(store staging.Store, flags FlagStore, version uint64, chunkSize int) ([]InvariantViolation, error) {
+	cnRecords, err := store.GetByClass(version, "ConnectivityNode", "", 1)
+	if err != nil {
+		return nil, fmt.Errorf("common: probing for ConnectivityNode class presence: %w", err)
+	}
+	if len(cnRecords) > 0 {
+		return checkUnreferencedNodesOfClassFlagged(store, flags, version, chunkSize, "ConnectivityNode")
+	}
+	// Pure bus-branch source (no ConnectivityNode class at all) — Phase 2
+	// falls back to TopologicalNode as the only node layer, see
+	// terminals.go's doc comment.
+	return checkUnreferencedNodesOfClassFlagged(store, flags, version, chunkSize, "TopologicalNode")
+}
+
+// checkUnreferencedNodesOfClassFlagged is the shared per-class paging
+// implementation behind checkUnreferencedNodesFlagged.
+func checkUnreferencedNodesOfClassFlagged(store staging.Store, flags FlagStore, version uint64, chunkSize int, class string) ([]InvariantViolation, error) {
+	var violations []InvariantViolation
+	afterID := ""
+	for {
+		records, err := store.GetByClass(version, class, afterID, chunkSize)
+		if err != nil {
+			return nil, fmt.Errorf("common: scanning class %s for unreferenced-node check: %w", class, err)
+		}
+		if len(records) == 0 {
+			break
+		}
+		pageIDs := distinctIDsInOrder(records)
+		afterID = pageIDs[len(pageIDs)-1]
+
+		unreferenced, err := flags.UnmarkedIDs(version, FlagReferencedNode, pageIDs)
+		if err != nil {
+			return nil, fmt.Errorf("common: checking FlagReferencedNode for %d %s: %w", len(pageIDs), class, err)
+		}
+		for _, id := range unreferenced {
+			violations = append(violations, InvariantViolation{
+				ObjectID: id,
+				Rule:     "unreferenced-node",
+				Message:  fmt.Sprintf("%s %s (CIM class %s) is never referenced by any Terminal — reference count 0", class, id, class),
+			})
+		}
+		if len(pageIDs) < chunkSize {
+			break
+		}
+	}
+	return violations, nil
+}
+
+// checkEquipmentWithoutContainerFlagged is the flag-based, genuinely paged
+// replacement for checkEquipmentWithoutContainer — run once after both
+// Pass A and Pass B have finished. It enumerates the FlagInstalledEquipment
+// universe page by page via flags.PagedFlagIDs (never the whole model's
+// equipment IDs at once) and, for each page, asks which of those IDs never
+// got FlagContainedEquipment. RAM is bounded by chunkSize.
+func checkEquipmentWithoutContainerFlagged(store staging.Store, flags FlagStore, version uint64, chunkSize int) ([]InvariantViolation, error) {
+	var violations []InvariantViolation
+	afterID := ""
+	for {
+		page, err := flags.PagedFlagIDs(version, FlagInstalledEquipment, afterID, chunkSize)
+		if err != nil {
+			return nil, fmt.Errorf("common: paging FlagInstalledEquipment: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		afterID = page[len(page)-1]
+
+		missingIDs, err := flags.UnmarkedIDs(version, FlagContainedEquipment, page)
+		if err != nil {
+			return nil, fmt.Errorf("common: checking FlagContainedEquipment for %d equipment: %w", len(page), err)
+		}
+		if len(missingIDs) > 0 {
+			missingRecords, err := getByIDsIndexed(store, version, missingIDs)
+			if err != nil {
+				return nil, fmt.Errorf("common: looking up classes of equipment without container: %w", err)
+			}
+			for _, id := range missingIDs {
+				class := "unknown class"
+				if records := missingRecords[id]; len(records) > 0 {
+					class = records[0].Class
+				}
+				violations = append(violations, InvariantViolation{
+					ObjectID: id,
+					Rule:     "equipment-without-container",
+					Message:  fmt.Sprintf("%s %s has no assigned container (Equipment.EquipmentContainer missing or unresolved)", class, id),
+				})
+			}
+		}
+		if len(page) < chunkSize {
+			break
+		}
 	}
 	return violations, nil
 }
