@@ -245,6 +245,20 @@ func main() {
 		fmt.Printf("  parse error: %s line=%d offset=%d: %s\n", e.SourceFile, e.Line, e.ByteOffset, e.Message)
 	}
 
+	// BuildContainers no longer depends on ResolveTerminals' output (see
+	// its doc comment — top-down restructuring, 2026-07-16): container
+	// membership comes directly from Equipment.EquipmentContainer, with a
+	// small targeted Terminal lookup only for the few exceptions
+	// (standalone Junction). Called first so any container-resolution
+	// anomaly is visible even if the full-model Terminal scan below never
+	// runs (e.g. aborts early).
+	contStart := time.Now()
+	containers, err := common.BuildContainers(store, result.Version, 1000)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "building containers: %v\n", err)
+		os.Exit(1)
+	}
+
 	termStart := time.Now()
 	resolved, nodeRoleIDs, anomalies, err := common.ResolveTerminals(store, result.Version, 1000)
 	if err != nil {
@@ -279,12 +293,6 @@ func main() {
 		fmt.Printf("  %s: %s (%d raw terminals)\n", a.EquipmentID, a.Message, len(a.Terminals))
 	}
 
-	contStart := time.Now()
-	containers, err := common.BuildContainers(store, result.Version, 1000, resolved)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "building containers: %v\n", err)
-		os.Exit(1)
-	}
 	byType := map[string]int{}
 	for _, c := range containers.Containers {
 		byType[string(c.Type)]++

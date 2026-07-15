@@ -286,13 +286,13 @@ func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int
 		t.Fatalf("Run*Files reported %d collected errors: %+v", len(result.Errors), result.Errors)
 	}
 
+	containers, err := BuildContainers(store, result.Version, 1000)
+	if err != nil {
+		t.Fatalf("BuildContainers: %v", err)
+	}
 	resolved, nodeRoleIDs, _, err := ResolveTerminals(store, result.Version, 1000)
 	if err != nil {
 		t.Fatalf("ResolveTerminals: %v", err)
-	}
-	containers, err := BuildContainers(store, result.Version, 1000, resolved)
-	if err != nil {
-		t.Fatalf("BuildContainers: %v", err)
 	}
 
 	busbarContainerSet := map[string]bool{}

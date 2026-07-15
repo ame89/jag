@@ -63,14 +63,19 @@ func main() {
 	fmt.Printf("phase1: version=%d records=%d errors=%d\n", result.Version, result.RecordCount, len(result.Errors))
 
 	// --- Phase 2: build the node-edge model + hierarchy -----------------
+	// BuildContainers no longer depends on ResolveTerminals' output (see
+	// its doc comment — top-down restructuring, 2026-07-16): container
+	// membership comes directly from Equipment.EquipmentContainer, with
+	// only a small targeted Terminal lookup for the few exceptions
+	// (standalone Junction). Called first so a container-resolution
+	// problem is reported before paying ResolveTerminals' full-model cost.
+	containers, err := common.BuildContainers(store, result.Version, 1000)
+	if err != nil {
+		fatalf("building containers: %v", err)
+	}
 	resolved, nodeRoleIDs, _, err := common.ResolveTerminals(store, result.Version, 1000)
 	if err != nil {
 		fatalf("resolve terminals: %v", err)
-	}
-
-	containers, err := common.BuildContainers(store, result.Version, 1000, resolved)
-	if err != nil {
-		fatalf("building containers: %v", err)
 	}
 	if err := model.UpsertContainers(containers.Containers); err != nil {
 		fatalf("persisting containers: %v", err)

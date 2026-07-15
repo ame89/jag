@@ -565,3 +565,71 @@ func distinctIDsInOrder(records []model.StagingRecord) []string {
 	}
 	return ids
 }
+
+// ResolveTerminalsForIDs is a TARGETED counterpart to
+// ResolveTerminalsParallel: instead of one sequential scan over the whole
+// "Terminal" class (the full-model-sized RAM cost documented in
+// Konzept.md's "Offene Punkte" RAM section), it resolves Terminal->Node
+// info for only the given equipmentIDs, via the same batched/indexed
+// lookup style as BuildAttributes/BuildGeometry (see batch.go) — cost/RAM
+// scales with len(equipmentIDs), never with total model size.
+//
+// Added 2026-07-15 for container.go's top-down container-membership
+// resolution (see BuildContainers' doc comment): a few callers only ever
+// need Terminal info for a small, already-known subset of equipment
+// (ACLineSegment chain topology, Junction's ConnectivityNode-container
+// fallback) — for those, a full Terminal-class scan is unnecessary and
+// exactly the kind of full-model RAM cost the project's resource goals
+// (Idee.md) rule out. nodeRoleIDs marks which of equipmentIDs must be
+// classified via classifyNodeRoleTerminals instead of classifyTerminals
+// (see classifyAll) — pass nil/empty if none of them are node-role
+// Equipment (e.g. for a pure ACLineSegment lookup).
+func ResolveTerminalsForIDs(store staging.Store, version uint64, equipmentIDs []string, nodeRoleIDs map[string]bool) (map[string]EquipmentTerminals, []Anomaly, error) {
+	if len(equipmentIDs) == 0 {
+		return map[string]EquipmentTerminals{}, nil, nil
+	}
+
+	refsByEquipment, err := getReferencesToAnyIndexed(store, version, equipmentIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("common: fetching Terminal references for %d equipment IDs: %w", len(equipmentIDs), err)
+	}
+
+	var terminalIDs []string
+	eqOfTerminal := map[string]string{}
+	for eqID, refs := range refsByEquipment {
+		for _, r := range refs {
+			if r.Class == "Terminal" && r.Attribute == "Terminal.ConductingEquipment" {
+				terminalIDs = append(terminalIDs, r.ID)
+				eqOfTerminal[r.ID] = eqID
+			}
+		}
+	}
+
+	termRecords, err := getByIDsIndexed(store, version, terminalIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("common: fetching %d Terminal objects: %w", len(terminalIDs), err)
+	}
+	var flat []model.StagingRecord
+	for _, recs := range termRecords {
+		flat = append(flat, recs...)
+	}
+	idx := BuildObjectIndex(flat)
+
+	byEquipment := map[string][]rawTerminal{}
+	for _, tID := range terminalIDs {
+		eqID := eqOfTerminal[tID]
+		node := idx.Ref(tID, "Terminal.ConnectivityNode")
+		if node == "" {
+			// Bus-branch CGMES fallback, see scanTerminals' identical
+			// handling.
+			node = idx.Ref(tID, "Terminal.TopologicalNode")
+		}
+		seq := idx.Attr(tID, "ACDCTerminal.sequenceNumber")
+		byEquipment[eqID] = append(byEquipment[eqID], rawTerminal{
+			TerminalRef{TerminalID: tID, SequenceNumber: seq, ConnectivityNode: node},
+		})
+	}
+
+	result, anomalies := classifyAll(byEquipment, nodeRoleIDs)
+	return result, anomalies, nil
+}
