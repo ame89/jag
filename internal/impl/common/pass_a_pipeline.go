@@ -28,6 +28,7 @@ package common
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
@@ -39,24 +40,28 @@ import (
 // via an env var at the cmd layer, analogous to JAG_CHUNK_SIZE/
 // JAG_STATION_WORKERS).
 //
-// Chosen as a reasoned starting default (2026-07-15), not an empirically
-// swept value: the earlier chunk/worker sweep (Konzept.md's "Offene
-// Punkte") turned out to be measuring noise, since it varied parameters
-// while the real RAM driver was the (now-replaced) whole-model pipeline.
-// Under Pass A/B's batched design, RAM is bounded by batch size x worker
-// count, not model size — 50 stations/batch keeps a single batch's own
-// Node/Edge/Attribute/Geometry footprint small while still large enough
-// for efficient bulk DB roundtrips (Idee.md's bulk-operations mandate).
-// Should be re-validated against a real lt200/lt500 rerun once
-// cmd/phase2check is fully wired to Pass A/B.
-const DefaultBatchSize = 50
+// Empirically re-validated (2026-07-15) against real lasttest-200-10-10/
+// lasttest-500-10-10 reruns on the actual Pass A/B pipeline (see
+// Konzept.md's "Lasttest-Ergebnisse" section for the full sweep and
+// per-phase timing/RAM tables) — a "good enough", not perfectly optimal,
+// choice per the user's explicit request. Swept batchSize in {10, 25, 50,
+// 100, 500, 1000, 2000, 5000} x workers in {2, 4, 8}: within that range,
+// Pass A's own peak RAM turned out to be largely INSENSITIVE to batchSize/
+// workers (roughly 270-360 MB across the whole sweep on lasttest-200) —
+// the real peak-RAM driver is Pass B (see pass_b.go's package doc comment
+// for the still-open root-cause analysis), not Pass A's batch size. 1000
+// was chosen because it consistently landed within a few percent of the
+// fastest tested configurations at both tested scales, without the added
+// complexity of higher worker counts for only marginal RAM benefit.
+const DefaultBatchSize = 1000
 
 // DefaultPassAWorkers is the default pull-pool worker count for Pass A.
 //
-// Same caveat as DefaultBatchSize: a reasoned starting default (4,
-// matching a typical modest multi-core machine and mirroring the old
-// JAG_STATION_WORKERS default), not yet re-measured against Pass A/B's
-// actual RAM/throughput profile.
+// Empirically re-validated alongside DefaultBatchSize (2026-07-15, see
+// above) — 4 workers stayed within the "good enough" default per the
+// user's request; 8 workers gave only a marginal (~5-10%) peak-RAM
+// reduction at both tested scales for no consistent speed benefit, not
+// worth the added complexity.
 const DefaultPassAWorkers = 4
 
 // BatchResult is everything one Pass A batch produces — small, transient,
@@ -135,14 +140,167 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 		return nil, fmt.Errorf("common: resolving terminals for %d batch equipment: %w", len(equipmentIDs), err)
 	}
 
-	junctionMerged := MergeJunctionNodes(resolved, nodeRoleIDs) // no-op here (no Junction in this batch), kept for symmetry with the whole-model pipeline
 	fullContainers := &BuildContainersResult{Containers: bc.Containers, EquipmentToCont: bc.EquipmentToCont}
-	mergedResolved := MergeBusbarSectionNodes(junctionMerged, fullContainers, nodeRoleIDs)
-	nodes, edges := BuildNodesAndEdges(mergedResolved, nodeRoleIDs)
 
-	groups, _, err := BuildElectricalGroups(store, version, nodes, edges, nil)
-	if err != nil {
-		return nil, fmt.Errorf("common: building electrical groups for batch: %w", err)
+	// Station-scoped graph construction (fixed 2026-07-15, confirmed with
+	// the user via a real-data regression on ReliCapGrid_Espheim):
+	// MergeJunctionNodes/MergeBusbarSectionNodes/BuildNodesAndEdges/
+	// BuildElectricalGroups all build a Union-Find (or, for
+	// BuildNodesAndEdges, a plain map keyed by raw ConnectivityNode ID)
+	// over WHATEVER Equipment/Nodes/Edges they are handed. A Pass A batch
+	// legitimately bundles MANY stations together (for DB-roundtrip
+	// efficiency — batchSize is a throughput knob, not a station-isolation
+	// boundary), so calling any of these ONCE over the whole batch's
+	// pooled data means their result can depend on which OTHER,
+	// electrically unrelated stations happen to share this batch — e.g. a
+	// same-model.ID collision (data anomaly) or the mere presence/absence
+	// of another station's equipment in the union-find can silently
+	// change a busbar's own canonical-node choice, purely as an artifact
+	// of the chosen batchSize (confirmed: the SAME dataset produced 1132
+	// vs. 1133 Circuit nodes depending only on whether batchSize grouped
+	// two stations together or not). Per the model's own invariant ("a
+	// ConnectivityNode belongs to exactly one station"), this must never
+	// happen — so each of these four steps now runs PER STATION (the
+	// batch's own subIDs/houseIDs, never split further), using only that
+	// station's own slice of `resolved`/`bc.Containers`/
+	// `bc.EquipmentToCont`, and the per-station results are concatenated
+	// into this batch's BatchResult. This keeps the DB-bulk-fetch
+	// (ResolveBatchContainers/ResolveTerminalsForIDs above) batched for
+	// throughput while making the actual graph/topology construction
+	// fully deterministic and independent of batchSize.
+	byID := make(map[string]coremodel.Container, len(bc.Containers))
+	for _, c := range bc.Containers {
+		byID[c.ID] = c
+	}
+	stationEquipment := map[string][]string{}
+	for eqID, contID := range bc.EquipmentToCont {
+		owner := stationOwnerOf(contID, byID)
+		stationEquipment[owner] = append(stationEquipment[owner], eqID)
+	}
+	stationContainers := map[string][]coremodel.Container{}
+	for _, c := range bc.Containers {
+		owner := stationOwnerOf(c.ID, byID)
+		stationContainers[owner] = append(stationContainers[owner], c)
+	}
+	var owners []string
+	for owner := range stationEquipment {
+		owners = append(owners, owner)
+	}
+	sort.Strings(owners)
+
+	var nodes []coremodel.Node
+	var edges []coremodel.Edge
+	// nodeStationGroups collects, for every node ID, which station-local
+	// group ID (see BuildElectricalGroups' doc comment: group ID = smallest
+	// node ID in that group) each station that saw this node ID assigned to
+	// it. A node ID appearing under more than one station here is a real,
+	// physically shared boundary ConnectivityNode (confirmed 2026-07-15,
+	// same ReliCapGrid_Espheim regression, see Konzept.md's "Offene Punkte"
+	// for the full analysis) — e.g. two closed Disconnectors, one in each
+	// of two neighbouring Substations, both terminating on the very same
+	// raw ConnectivityNode ID. Unlike MergeBusbarSectionNodes (which needed
+	// per-station scoping to fix a GND-pooling batch-size bug, see this
+	// file's comment above), BuildElectricalGroups never touches GND at
+	// all — it only unions closed-switch endpoints — so per-station
+	// scoping here does NOT introduce any batch-size-dependence risk; it
+	// only means a real cross-station union (which a switch on EITHER
+	// side's own equipment establishes towards a shared node) needs to be
+	// reconciled explicitly across the stations that saw it, which the
+	// merge step below does.
+	nodeStationGroups := map[string]map[string]string{}
+	mergedResolved := make(map[string]EquipmentTerminals, len(resolved)) // batch-wide, post-merge — only used by checkBayCableCount below
+	for _, owner := range owners {
+		stEqIDs := stationEquipment[owner]
+		stResolved := make(map[string]EquipmentTerminals, len(stEqIDs))
+		stNodeRoleIDs := map[string]bool{}
+		stEquipmentToCont := make(map[string]string, len(stEqIDs))
+		for _, eqID := range stEqIDs {
+			if et, ok := resolved[eqID]; ok {
+				stResolved[eqID] = et
+			}
+			if nodeRoleIDs[eqID] {
+				stNodeRoleIDs[eqID] = true
+			}
+			stEquipmentToCont[eqID] = bc.EquipmentToCont[eqID]
+		}
+		stContainers := &BuildContainersResult{Containers: stationContainers[owner], EquipmentToCont: stEquipmentToCont}
+
+		stJunctionMerged := MergeJunctionNodes(stResolved, stNodeRoleIDs)
+		stMergedResolved := MergeBusbarSectionNodes(stJunctionMerged, stContainers, stNodeRoleIDs)
+		stNodes, stEdges := BuildNodesAndEdges(stMergedResolved, stNodeRoleIDs)
+
+		stGroups, _, err := BuildElectricalGroups(store, version, stNodes, stEdges, nil)
+		if err != nil {
+			return nil, fmt.Errorf("common: building electrical groups for station %s: %w", owner, err)
+		}
+
+		nodes = append(nodes, stNodes...)
+		edges = append(edges, stEdges...)
+		for id, gid := range stGroups {
+			if nodeStationGroups[id] == nil {
+				nodeStationGroups[id] = map[string]string{}
+			}
+			nodeStationGroups[id][owner] = gid
+		}
+		for id, et := range stMergedResolved {
+			mergedResolved[id] = et
+		}
+	}
+
+	// Cross-station ElectricalGroups merge step (added 2026-07-15, see the
+	// nodeStationGroups doc comment above and Konzept.md's "Offene Punkte"
+	// for the full write-up): a node ID seen by more than one station's own
+	// BuildElectricalGroups call means that node genuinely bridges two
+	// stations — their two station-local groups must become one. Union-Find
+	// over the station-local group-representative IDs (which are
+	// themselves real node IDs, see ElectricalGroups' doc comment), then
+	// recompute the final, canonical group ID per the same convention
+	// (lexicographically smallest actual node ID among ALL merged members,
+	// across every station involved) so the result is indistinguishable
+	// from a single, whole-model BuildElectricalGroups call.
+	parent := map[string]string{}
+	find := func(x string) string {
+		if _, ok := parent[x]; !ok {
+			parent[x] = x
+		}
+		for parent[x] != x {
+			parent[x] = parent[parent[x]] // path halving
+			x = parent[x]
+		}
+		return x
+	}
+	union := func(a, b string) {
+		ra, rb := find(a), find(b)
+		if ra != rb {
+			parent[ra] = rb
+		}
+	}
+	for _, byOwner := range nodeStationGroups {
+		if len(byOwner) <= 1 {
+			continue
+		}
+		var reps []string
+		for _, gid := range byOwner {
+			reps = append(reps, gid)
+		}
+		for i := 1; i < len(reps); i++ {
+			union(reps[0], reps[i])
+		}
+	}
+	minPerRoot := map[string]string{}
+	for nodeID, byOwner := range nodeStationGroups {
+		for _, gid := range byOwner {
+			root := find(gid)
+			if cur, ok := minPerRoot[root]; !ok || nodeID < cur {
+				minPerRoot[root] = nodeID
+			}
+		}
+	}
+	groups := ElectricalGroups{}
+	for nodeID, byOwner := range nodeStationGroups {
+		for _, gid := range byOwner {
+			groups[nodeID] = minPerRoot[find(gid)]
+		}
 	}
 
 	if err := BuildAttributes(store, version, chunkSize, resolved, equipmentIDs, sink); err != nil {

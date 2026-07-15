@@ -519,12 +519,25 @@ func batchSizeOrDefault(batchSize int) int {
 // Per-container-type counts and a small capped violation/anomaly sample
 // are all safe to keep in memory: in a healthy model they stay at or near
 // zero regardless of how many Substations/ACLineSegments were processed.
+//
+// addBatch is invoked from RunPassA's onBatchResult callback, which
+// RunPassA's doc comment explicitly requires to be safe for concurrent
+// calls from multiple worker goroutines (workers > 1) — mu guards exactly
+// that. Found the hard way (2026-07-15 lasttest-500 run): with
+// stationWorkers=4 and enough batches to make a same-millisecond overlap
+// likely, the previously unguarded map writes below crashed with "fatal
+// error: concurrent map writes" — lasttest-200 (fewer, and thus less
+// likely to race, batches) had not exposed it. addPassB is only ever
+// called once, single-threaded, after RunPassA's own wg.Wait() returns,
+// but takes the same lock for consistency/defensiveness at negligible
+// cost.
 type passReport struct {
-	containers, equipment, nodes, edges int
-	byType                              map[string]int
-	distinctGroups                      map[string]bool
-	violations                          []common.InvariantViolation
-	anomalies                           []common.Anomaly
+	mu                                   sync.Mutex
+	containers, equipment, nodes, edges  int
+	byType                               map[string]int
+	distinctGroups                       map[string]bool
+	violations                           []common.InvariantViolation
+	anomalies                            []common.Anomaly
 }
 
 func newPassReport() *passReport {
@@ -532,6 +545,8 @@ func newPassReport() *passReport {
 }
 
 func (r *passReport) addBatch(b *common.BatchResult) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.containers += len(b.Containers)
 	r.equipment += len(b.Equipment)
 	r.nodes += len(b.Nodes)
@@ -547,6 +562,8 @@ func (r *passReport) addBatch(b *common.BatchResult) {
 }
 
 func (r *passReport) addPassB(b *common.PassBResult) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.containers += len(b.Containers)
 	r.equipment += len(b.Equipment)
 	r.nodes += len(b.Nodes)

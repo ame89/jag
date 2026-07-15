@@ -118,28 +118,26 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 			}
 			sort.Sort(sort.Reverse(sort.IntSlice(gotSizes)))
 
-			// Known test-data anomaly in ReliCapGrid_Espheim (confirmed with
-			// the user, 2026-07, this session): one ConnectivityNode
-			// ("f8084e45-...") is directly shared between two DIFFERENT CIM
-			// Substation objects (0453fbf4.../045de701...) — one side is a
-			// BusbarSection literally named "CONNECTIVITY_NODE577", an
-			// auto-generated-looking placeholder name typical of a
-			// bus-branch-to-node-breaker conversion artifact, with no
-			// switching equipment or ACLineSegment actually connecting the
-			// two stations. This violates the model's own invariant ("a
-			// ConnectivityNode belongs to exactly one station; two stations
-			// are only ever connected via their own ACLineSegment/Edge") and
-			// is treated as a data anomaly in this specific example dataset,
-			// not a case the pipeline needs to support — Pass A's per-
-			// station batching correctly does NOT reach across station
-			// boundaries for it. Accounted for here as a documented,
-			// dataset-specific -1 node adjustment on the largest circuit
-			// instead of chasing a "fix" for it.
-			if name == "ReliCapGrid_Espheim" && len(wantSizes) > 0 {
-				wantSizes = append([]int(nil), wantSizes...)
-				wantSizes[0]--
-			}
-
+			// NOTE (2026-07-15, root-caused via a dedicated diagnostic run,
+			// not the stale comment previously here): what looked like a
+			// "ReliCapGrid_Espheim cross-station ConnectivityNode-sharing
+			// data anomaly" needing a -1 adjustment was actually a real
+			// Pass A bug, now fixed. MergeJunctionNodes/
+			// MergeBusbarSectionNodes/BuildNodesAndEdges/
+			// BuildElectricalGroups used to run ONCE over an entire Pass A
+			// batch's pooled multi-station data instead of per station —
+			// so a busbar's own canonical-node choice (inside
+			// MergeBusbarSectionNodes' Union-Find) could depend on which
+			// OTHER, electrically unrelated stations happened to share the
+			// same batch, purely a function of batchSize. Confirmed by
+			// running the exact same dataset through ProcessStationBatch
+			// with batchSize=50 vs. batchSize=1000: 1132 vs. 1133 Circuit
+			// nodes for the same physical data. Fixed by scoping all four
+			// of those steps to one station's own Equipment/Containers at
+			// a time (see ProcessStationBatch's doc comment) — Pass A +
+			// Pass B now reproduces the whole-model baseline exactly,
+			// batchSize-independent, no special-casing needed for this
+			// dataset anymore.
 			if len(gotCircuits) != wantCircuits {
 				t.Errorf("Pass A + Pass B Circuit count = %d, want %d (whole-model baseline)", len(gotCircuits), wantCircuits)
 			}
@@ -148,17 +146,7 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 			}
 
 			if !samePartition(gotGroups, wantGroups) {
-				// The ReliCapGrid_Espheim anomaly (see the Circuit-size
-				// comment above) inherently also changes ElectricalGroups
-				// partitioning: the whole-model baseline joins the two
-				// stations' groups through the shared ConnectivityNode,
-				// while Pass A correctly keeps them separate per-station.
-				// This is the expected, documented consequence of the same
-				// anomaly, not a new bug — skip this assertion only for
-				// this dataset.
-				if name != "ReliCapGrid_Espheim" {
-					t.Errorf("Pass A's own per-batch ElectricalGroups partition (no cross-batch merge) differs from whole-model ElectricalGroups partition")
-				}
+				t.Errorf("Pass A's own per-batch ElectricalGroups partition (no cross-batch merge) differs from whole-model ElectricalGroups partition")
 			}
 		})
 	}
