@@ -143,20 +143,26 @@ var DisableSatelliteWalk = false
 //
 // equipmentIDs selects which of resolved's Equipment to actually process
 // (nil/empty means "process every key of resolved" — the common single-
-// threaded case). resolved itself should always be the FULL model's
-// Terminal-resolution map, even when equipmentIDs only names a subset
-// (e.g. one station's worth, see parallel.go's BuildSachdatenAndGeometryParallel):
-// collectAttributesBatch's "isOtherEquipment" check (deciding whether a
-// satellite-walk neighbor belongs to some OTHER Equipment rather than
-// being a true satellite of the current owner) needs to see every
-// Equipment in the model to answer correctly, not just the caller's own
-// partition — passing a pre-filtered subset map here would silently
-// misclassify any satellite object shared across two different callers'
-// partitions. Passing equipmentIDs as a separate parameter (instead of
-// requiring the caller to build and pass a filtered copy of resolved)
-// avoids that pitfall AND avoids each parallel worker allocating its own
-// duplicate copy of (a slice of) resolved — see the 2026-07-15 RAM-growth
-// investigation in Konzept.md's "Offene Punkte".
+// threaded case). Unlike an earlier version of this function, resolved
+// does NOT need to be the full model's Terminal-resolution map — it may
+// be scoped to just the caller's own batch/partition (e.g. one station
+// batch, see pass_a_pipeline.go's ProcessStationBatch). This is safe
+// because collectAttributesBatch's "isOtherEquipment" check (deciding
+// whether a satellite-walk neighbor belongs to some OTHER Equipment
+// rather than being a true satellite of the current owner) is answered
+// purely from the neighbor object's OWN staging attributes — specifically
+// whether it carries an Equipment.EquipmentContainer attribute, the
+// generic CIM marker for "this object is itself a piece of Equipment"
+// (see hasEquipmentContainerAttr) — not by looking it up in resolved. This
+// keeps the check correct regardless of which batch/partition the actual
+// owning Equipment was resolved in, without ever needing a full-model map
+// in RAM (a hard requirement — see the 2026-07-15 RAM-growth investigation
+// in Konzept.md's "Offene Punkte": JAG's RAM use must not grow with total
+// model size, only with batch size × worker count). The one known
+// exception is a standalone Junction (no EquipmentContainer at all, since
+// it isn't inside any Bay/VoltageLevel/Substation) — but Junction is
+// exclusively handled by Pass B's own dedicated resolution
+// (pass_b.go), so this exception does not arise in practice here.
 func BuildAttributes(store staging.Store, version uint64, chunkSize int, resolved map[string]EquipmentTerminals, equipmentIDs []string, sink Sink) error {
 	if len(equipmentIDs) == 0 {
 		equipmentIDs = make([]string, 0, len(resolved))
@@ -172,7 +178,7 @@ func BuildAttributes(store staging.Store, version uint64, chunkSize int, resolve
 	for start := 0; start < len(equipmentIDs); start += sachdatenBatchSize {
 		end := min(start+sachdatenBatchSize, len(equipmentIDs))
 		batch := equipmentIDs[start:end]
-		batchAttrs, err := collectAttributesBatch(store, version, resolved, batch, p)
+		batchAttrs, err := collectAttributesBatch(store, version, batch, p)
 		if err != nil {
 			return fmt.Errorf("common: collecting attributes for batch starting at %s: %w", batch[0], err)
 		}
@@ -202,7 +208,7 @@ type ownerWalk struct {
 // instead of going silent for the batch's whole duration — see
 // internal/progress's doc comment on why silence vs. stuck must stay
 // distinguishable.
-func collectAttributesBatch(store staging.Store, version uint64, resolved map[string]EquipmentTerminals, equipmentIDs []string, p *progress.Reporter) ([]coremodel.Attribute, error) {
+func collectAttributesBatch(store staging.Store, version uint64, equipmentIDs []string, p *progress.Reporter) ([]coremodel.Attribute, error) {
 	walks := make([]*ownerWalk, len(equipmentIDs))
 	rootIDs := make(map[string]bool, len(equipmentIDs))
 	for i, eqID := range equipmentIDs {
@@ -281,7 +287,7 @@ func collectAttributesBatch(store staging.Store, version uint64, resolved map[st
 					if structuralClasses[class] || irrelevantClasses[class] {
 						continue // never walked into as a satellite
 					}
-					if _, isOtherEquipment := resolved[objID]; isOtherEquipment {
+					if hasEquipmentContainerAttr(records) {
 						continue // belongs to its own Equipment, not a satellite of ownerID
 					}
 				}
@@ -308,6 +314,24 @@ func collectAttributesBatch(store staging.Store, version uint64, resolved map[st
 		attrs = append(attrs, w.attrs...)
 	}
 	return attrs, nil
+}
+
+// hasEquipmentContainerAttr reports whether records (one object's own
+// staging attributes) include an Equipment.EquipmentContainer entry — CIM's
+// generic marker for "this object is itself a piece of Equipment",
+// regardless of its concrete CIM subclass. Used by collectAttributesBatch
+// to decide whether a satellite-walk neighbor belongs to some OTHER
+// Equipment (and must not be folded into the current owner's Sachdaten)
+// purely from the neighbor's own attributes — see BuildAttributes' doc
+// comment for why this replaced an earlier full-model resolved[objID]
+// lookup (which would have defeated batching's RAM bound).
+func hasEquipmentContainerAttr(records []model.StagingRecord) bool {
+	for _, r := range records {
+		if r.Attribute == "Equipment.EquipmentContainer" {
+			return true
+		}
+	}
+	return false
 }
 
 // attributesAndNeighbors emits objID's own literal attributes (attributed to

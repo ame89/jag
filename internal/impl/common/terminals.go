@@ -588,7 +588,6 @@ func ResolveTerminalsForIDs(store staging.Store, version uint64, equipmentIDs []
 	if len(equipmentIDs) == 0 {
 		return map[string]EquipmentTerminals{}, nil, nil
 	}
-
 	refsByEquipment, err := getReferencesToAnyIndexed(store, version, equipmentIDs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("common: fetching Terminal references for %d equipment IDs: %w", len(equipmentIDs), err)
@@ -604,7 +603,6 @@ func ResolveTerminalsForIDs(store staging.Store, version uint64, equipmentIDs []
 			}
 		}
 	}
-
 	termRecords, err := getByIDsIndexed(store, version, terminalIDs)
 	if err != nil {
 		return nil, nil, fmt.Errorf("common: fetching %d Terminal objects: %w", len(terminalIDs), err)

@@ -310,6 +310,7 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 			cnToContainer[id] = c
 		}
 	}
+	cnIDs, cnIdx = nil, nil // free the scanClass-accumulated records now that only the small map is needed
 
 	var unresolvedIDs []string
 	unresolvedClass := map[string]string{}
@@ -318,6 +319,64 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 	if err != nil {
 		return nil, fmt.Errorf("common: listing classes: %w", err)
 	}
+
+	// Pass 1: propagate PowerElectronicsUnit satellite containers to their
+	// PowerElectronicsConnection (PEC) BEFORE the ordinary resolution pass
+	// below, so that pass's `already resolved` check works regardless of
+	// alphabetical class scan order (a PEC's own class is scanned before its
+	// satellite's class in a single combined pass, e.g.
+	// "PowerElectronicsConnection" < "Wallbox" — without this separate first
+	// pass, PEC would be judged "no Equipment.EquipmentContainer at all" and
+	// silently skipped before ever seeing its satellite). See the detailed
+	// rationale at the satellite-handling branch in pass 2 below.
+	for _, class := range classes {
+		afterID := ""
+		for {
+			records, err := store.GetByClass(version, class, afterID, chunkSize)
+			if err != nil {
+				return nil, fmt.Errorf("common: scanning class %s (satellite pre-pass): %w", class, err)
+			}
+			if len(records) == 0 {
+				break
+			}
+			idx := BuildObjectIndex(records)
+			ids := distinctIDsInOrder(records)
+			for _, id := range ids {
+				pecID := idx.Ref(id, "PowerElectronicsUnit.PowerElectronicsConnection")
+				if pecID == "" {
+					continue
+				}
+				if _, already := res.EquipmentToCont[pecID]; already {
+					continue
+				}
+				container := idx.Ref(id, "Equipment.EquipmentContainer")
+				if container == "" {
+					continue
+				}
+				switch {
+				case bayToContainer[container] != "":
+					res.EquipmentToCont[pecID] = bayToContainer[container]
+				case vlToSubstation[container] != "":
+					res.EquipmentToCont[pecID] = vlToSubstation[container]
+				case subSet[container]:
+					res.EquipmentToCont[pecID] = container
+				case houseSet[container]:
+					res.EquipmentToCont[pecID] = container
+				}
+			}
+			afterID = ids[len(ids)-1]
+			if len(ids) < chunkSize {
+				break
+			}
+		}
+	}
+
+	// Pass 2: ordinary Equipment.EquipmentContainer resolution. Any PEC
+	// already resolved by pass 1 above is skipped immediately via the
+	// `already` check — it never reaches the "no EquipmentContainer at all"
+	// branch, so it never needs the Terminal/ConnectivityNode-based fallback
+	// below (empirically confirmed 2026-07-15: every PEC in
+	// lasttest-200-10-10 has exactly one such satellite).
 	for _, class := range classes {
 		switch class {
 		case "Terminal", "ConnectivityNode", "Substation", "VoltageLevel", "Bay", "Feeder", "BusbarSection", "ACLineSegment", "Building":
@@ -343,7 +402,23 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 					continue
 				}
 				if idx.HasAttr(id, "PowerElectronicsUnit.PowerElectronicsConnection") {
-					continue // satellite metadata, not node-edge model Equipment
+					continue // satellite metadata, not node-edge model Equipment — its PEC's container was already handled in pass 1 above
+				}
+				if !idx.HasAttr(id, "Equipment.EquipmentContainer") {
+					// Not CIM Equipment at all (e.g. UsagePoint, Location,
+					// TimeSchedule, RegulatingControl, PositionPoint — ancillary
+					// satellite/Sachdaten classes that ride along with their
+					// owning Equipment but never carry their own container
+					// membership or Terminals). These must never be pushed into
+					// unresolvedIDs/the Terminal-based fallback below — doing so
+					// was a real bug (found 2026-07-15): it inflated the
+					// "unresolved" set from ~20,000 genuine container-less
+					// Equipment (PowerElectronicsConnection) to 205,000+ objects,
+					// causing ResolveTerminalsForIDs' single batched
+					// GetReferencesToAny call to blow up in RAM. Mirrors the
+					// same HasAttr guard already used by
+					// scanClassMissingEquipment in terminals.go.
+					continue
 				}
 				container := idx.Ref(id, "Equipment.EquipmentContainer")
 				switch {

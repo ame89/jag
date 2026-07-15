@@ -219,6 +219,59 @@ func main() {
 	}
 	os.Remove(dbPath) // fresh run each time, avoid stale data from a previous invocation
 
+	// JAG_CHUNK_SIZE controls the cursor-based batch size (staging.Store.
+	// GetByClass "limit" argument) used by every per-class scan below
+	// (BuildContainers, ResolveTerminals, the ConnectivityNode
+	// unreferenced-check loop): how many distinct IDs are fetched from the
+	// staging store per DB roundtrip. Larger values mean fewer roundtrips
+	// but a bigger transient batch in RAM (each fetched record + its
+	// resolved references live in memory at once); smaller values mean
+	// more roundtrips but a lower RAM high-water-mark.
+	//
+	// UPDATE 2026-07-15: the 2026-07-14 sweep that originally picked 1000
+	// here (chunk=1000/2000/3000/5000 x workers=2/4/8/16 on lt200/lt500,
+	// see Konzept.md's "Offene Punkte") turned out to be measuring noise —
+	// it varied this value while the REAL RAM driver (whole-model
+	// structures held by BuildContainers/ResolveTerminals/CheckInvariants/
+	// BuildElectricalGroups, now replaced by Pass A/B's per-batch design,
+	// see pass_a_pipeline.go/pass_b.go) dominated regardless, so no value
+	// in that sweep was meaningfully better than another. Now that Pass
+	// A/B bounds RAM by batch size (not this chunk size), a larger default
+	// only helps DB roundtrip efficiency (fewer roundtrips, consistent
+	// with Idee.md's bulk-operations mandate) without the earlier RAM
+	// risk — raised to 2000. Should be re-validated against a real
+	// lt200/lt500 rerun once cmd/phase2check is fully wired to Pass A/B
+	// (see wire-and-validate/ram-scaling-global-model todos); not yet
+	// re-measured, so treat this as a reasoned starting default, not a
+	// finally confirmed one.
+	chunkSize := 2000
+	if v := os.Getenv("JAG_CHUNK_SIZE"); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_CHUNK_SIZE: %v\n", convErr)
+			os.Exit(1)
+		}
+		chunkSize = n
+	}
+
+	// JAG_TERMINAL_WORKERS controls the number of per-class scan
+	// goroutines inside common.ResolveTerminalsParallel ("step (a)" of the
+	// parallel-import decision — see terminals.go's doc comment). 0/unset
+	// uses common.DefaultTerminalScanWorkers (8). Previously this worker
+	// count was only reachable via the internal constant — ResolveTerminals
+	// (the wrapper called below) always used the default. This is the
+	// counterpart to JAG_STATION_WORKERS, which already controls the other
+	// parallel phase (sachdaten+geometry).
+	terminalWorkers := 0
+	if v := os.Getenv("JAG_TERMINAL_WORKERS"); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_TERMINAL_WORKERS: %v\n", convErr)
+			os.Exit(1)
+		}
+		terminalWorkers = n
+	}
+
 	overallStart := time.Now()
 	store, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -253,14 +306,14 @@ func main() {
 	// anomaly is visible even if the full-model Terminal scan below never
 	// runs (e.g. aborts early).
 	contStart := time.Now()
-	containers, err := common.BuildContainers(store, result.Version, 1000)
+	containers, err := common.BuildContainers(store, result.Version, chunkSize)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "building containers: %v\n", err)
 		os.Exit(1)
 	}
 
 	termStart := time.Now()
-	resolved, nodeRoleIDs, anomalies, err := common.ResolveTerminals(store, result.Version, 1000)
+	resolved, nodeRoleIDs, anomalies, err := common.ResolveTerminalsParallel(store, result.Version, chunkSize, terminalWorkers)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve terminals: %v\n", err)
 		os.Exit(1)
@@ -428,7 +481,7 @@ func main() {
 	unreferenced := 0
 	total := 0
 	for {
-		records, err := store.GetByClass(result.Version, "ConnectivityNode", afterID, 1000)
+		records, err := store.GetByClass(result.Version, "ConnectivityNode", afterID, chunkSize)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "checking ConnectivityNodes: %v\n", err)
 			os.Exit(1)
@@ -452,7 +505,7 @@ func main() {
 			}
 		}
 		afterID = ids[len(ids)-1]
-		if len(ids) < 1000 {
+		if len(ids) < chunkSize {
 			break
 		}
 	}

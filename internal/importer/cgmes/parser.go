@@ -46,8 +46,22 @@ func DetectProfile(filename string) string {
 	return m[1]
 }
 
+// stripRef normalizes an rdf:ID/rdf:about/rdf:resource value down to its
+// bare local ID, regardless of whether the source uses a plain fragment
+// ("#_uuid", the common CGMES convention) or a full absolute URI
+// ("http://example.org/model#_uuid" — seen in some CIM exporters/dialects
+// for rdf:resource, though not currently in any example dataset). Taking
+// everything after the LAST "#" (if any) handles both forms uniformly, so
+// the same real-world object always normalizes to the same ID string no
+// matter which representation a given file/profile happens to use — this
+// is essential for Pass A/Pass B (pass_a.go/pass_b.go): they independently
+// resolve the same ConnectivityNode ID from different Terminal references
+// and rely on getting back byte-identical strings to "join" without any
+// separate reconciliation step.
 func stripRef(s string) string {
-	s = strings.TrimPrefix(s, "#")
+	if i := strings.LastIndex(s, "#"); i >= 0 {
+		s = s[i+1:]
+	}
 	s = strings.TrimPrefix(s, "_")
 	return s
 }
