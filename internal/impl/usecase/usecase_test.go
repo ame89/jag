@@ -60,10 +60,13 @@ func setupService(t *testing.T) *usecase.Service {
 
 	// fuse1 closed (busbarA/cnB share a group), fuse2 open (cnC is its own
 	// group) — mirrors how BuildElectricalGroups would have grouped them.
-	groups := map[string]string{
-		"busbarA": "busbarA",
-		"cnB":     "busbarA",
-		"cnC":     "cnC",
+	// All in one owner ("station1") for this simple single-station test.
+	groups := map[string]map[string]string{
+		"station1": {
+			"busbarA": "busbarA",
+			"cnB":     "busbarA",
+			"cnC":     "cnC",
+		},
 	}
 	if err := m.UpsertElectricalGroups(groups); err != nil {
 		t.Fatalf("upserting electrical groups: %v", err)
@@ -155,6 +158,56 @@ func TestElectricallyConnected(t *testing.T) {
 	}
 	if connected {
 		t.Errorf("expected busbarA and cnC to NOT be electrically connected (open fuse2 in between), got true")
+	}
+}
+
+// TestElectricallyConnected_BoundaryNode verifies the multi-owner
+// reconciliation (see electrical.Store's doc comment): two Nodes that only
+// end up in the same electrical group TRANSITIVELY, through a boundary
+// Node shared by two different owners (stations), must still be reported
+// as connected — the expansion in Service.ElectricallyConnected must
+// follow the boundary Node's second group, not just compare group IDs
+// directly.
+func TestElectricallyConnected_BoundaryNode(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening sqlite store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	m := store.Model()
+
+	// stationA's own local grouping: nodeA and nodeShared share "groupA".
+	// stationB's own local grouping: nodeShared and nodeB share "groupB".
+	// Neither station sees the other's side, so nodeShared legitimately
+	// carries BOTH group IDs.
+	owned := map[string]map[string]string{
+		"stationA": {
+			"nodeA":      "groupA",
+			"nodeShared": "groupA",
+		},
+		"stationB": {
+			"nodeShared": "groupB",
+			"nodeB":      "groupB",
+		},
+	}
+	if err := m.UpsertElectricalGroups(owned); err != nil {
+		t.Fatalf("upserting electrical groups: %v", err)
+	}
+
+	svc := usecase.NewService(
+		sqlite.ContainerAdapter{ModelStore: m},
+		sqlite.EquipmentAdapter{ModelStore: m},
+		sqlite.GeometryAdapter{ModelStore: m},
+		m,
+		sqlite.ElectricalAdapter{ModelStore: m},
+	)
+
+	connected, err := svc.ElectricallyConnected("nodeA", "nodeB")
+	if err != nil {
+		t.Fatalf("ElectricallyConnected(nodeA, nodeB): %v", err)
+	}
+	if !connected {
+		t.Errorf("expected nodeA and nodeB to be electrically connected via the shared boundary Node, got false")
 	}
 }
 

@@ -72,7 +72,14 @@ type BatchResult struct {
 	Equipment  []coremodel.Equipment
 	Nodes      []coremodel.Node
 	Edges      []coremodel.Edge
-	Groups     ElectricalGroups
+	// Groups is keyed by owner ID (a station root Container ID — see
+	// stationOwnerOf), one entry per owner touched by this batch. Each
+	// owner's ElectricalGroups is its own independently-computed local
+	// result — never merged with any other owner's, here or anywhere else
+	// at import time (see the ElectricalGroups persistence comment in
+	// ProcessStationBatch below, and internal/sqlite/model.go's
+	// model_electrical_group (node_id, owner_id) composite key).
+	Groups     map[string]ElectricalGroups
 	Anomalies  []Anomaly // Terminal-resolution anomalies for this batch's own equipment
 	// Violations holds this batch's own Phase 3 results (checkStationConnectivity,
 	// checkBayCableCount, checkContainerPaths, checkKVSNoTransformer) — all four
@@ -190,25 +197,25 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 
 	var nodes []coremodel.Node
 	var edges []coremodel.Edge
-	// nodeStationGroups collects, for every node ID, which station-local
-	// group ID (see BuildElectricalGroups' doc comment: group ID = smallest
-	// node ID in that group) each station that saw this node ID assigned to
-	// it. A node ID appearing under more than one station here is a real,
-	// physically shared boundary ConnectivityNode (confirmed 2026-07-15,
-	// same ReliCapGrid_Espheim regression, see Konzept.md's "Offene Punkte"
-	// for the full analysis) — e.g. two closed Disconnectors, one in each
-	// of two neighbouring Substations, both terminating on the very same
-	// raw ConnectivityNode ID. Unlike MergeBusbarSectionNodes (which needed
-	// per-station scoping to fix a GND-pooling batch-size bug, see this
-	// file's comment above), BuildElectricalGroups never touches GND at
-	// all — it only unions closed-switch endpoints — so per-station
-	// scoping here does NOT introduce any batch-size-dependence risk; it
-	// only means a real cross-station union (which a switch on EITHER
-	// side's own equipment establishes towards a shared node) needs to be
-	// reconciled explicitly across the stations that saw it, which the
-	// merge step below does.
-	nodeStationGroups := map[string]map[string]string{}
+	// ElectricalGroups is persisted PER-OWNER (one owner = one station root
+	// ID here), never merged across stations at import time (see this
+	// file's package doc comment on Circuit/BuildCircuits, and Konzept.md's
+	// "Offene Punkte" for the full write-up of why an earlier cross-station
+	// merge attempt was reverted). A raw ConnectivityNode legitimately
+	// shared by equipment from two different stations (a real
+	// inter-station switch coupling, confirmed real in
+	// ReliCapGrid_Espheim's Riverlands/Needlehole pair) therefore ends up
+	// with one independently-computed group PER owning station rather than
+	// a single, arbitrarily-overwritten value — model_electrical_group's
+	// (node_id, owner_id) composite key (see internal/sqlite/model.go)
+	// stores exactly that, and any correct merged/reconciled view across
+	// such a boundary Node is deferred entirely to query time (see
+	// usecase.ElectricallyConnected's group-expansion). This is
+	// deterministic and batch-size-independent: each owner's own local
+	// result never depends on any other owner's, or on goroutine/batch
+	// scheduling order.
 	mergedResolved := make(map[string]EquipmentTerminals, len(resolved)) // batch-wide, post-merge — only used by checkBayCableCount below
+	ownedGroups := map[string]ElectricalGroups{}
 	for _, owner := range owners {
 		stEqIDs := stationEquipment[owner]
 		stResolved := make(map[string]EquipmentTerminals, len(stEqIDs))
@@ -236,70 +243,9 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 
 		nodes = append(nodes, stNodes...)
 		edges = append(edges, stEdges...)
-		for id, gid := range stGroups {
-			if nodeStationGroups[id] == nil {
-				nodeStationGroups[id] = map[string]string{}
-			}
-			nodeStationGroups[id][owner] = gid
-		}
+		ownedGroups[owner] = stGroups
 		for id, et := range stMergedResolved {
 			mergedResolved[id] = et
-		}
-	}
-
-	// Cross-station ElectricalGroups merge step (added 2026-07-15, see the
-	// nodeStationGroups doc comment above and Konzept.md's "Offene Punkte"
-	// for the full write-up): a node ID seen by more than one station's own
-	// BuildElectricalGroups call means that node genuinely bridges two
-	// stations — their two station-local groups must become one. Union-Find
-	// over the station-local group-representative IDs (which are
-	// themselves real node IDs, see ElectricalGroups' doc comment), then
-	// recompute the final, canonical group ID per the same convention
-	// (lexicographically smallest actual node ID among ALL merged members,
-	// across every station involved) so the result is indistinguishable
-	// from a single, whole-model BuildElectricalGroups call.
-	parent := map[string]string{}
-	find := func(x string) string {
-		if _, ok := parent[x]; !ok {
-			parent[x] = x
-		}
-		for parent[x] != x {
-			parent[x] = parent[parent[x]] // path halving
-			x = parent[x]
-		}
-		return x
-	}
-	union := func(a, b string) {
-		ra, rb := find(a), find(b)
-		if ra != rb {
-			parent[ra] = rb
-		}
-	}
-	for _, byOwner := range nodeStationGroups {
-		if len(byOwner) <= 1 {
-			continue
-		}
-		var reps []string
-		for _, gid := range byOwner {
-			reps = append(reps, gid)
-		}
-		for i := 1; i < len(reps); i++ {
-			union(reps[0], reps[i])
-		}
-	}
-	minPerRoot := map[string]string{}
-	for nodeID, byOwner := range nodeStationGroups {
-		for _, gid := range byOwner {
-			root := find(gid)
-			if cur, ok := minPerRoot[root]; !ok || nodeID < cur {
-				minPerRoot[root] = nodeID
-			}
-		}
-	}
-	groups := ElectricalGroups{}
-	for nodeID, byOwner := range nodeStationGroups {
-		for _, gid := range byOwner {
-			groups[nodeID] = minPerRoot[find(gid)]
 		}
 	}
 
@@ -383,7 +329,7 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 		Equipment:  equipmentRows,
 		Nodes:      nodes,
 		Edges:      edges,
-		Groups:     groups,
+		Groups:     ownedGroups,
 		Anomalies:  termAnomalies,
 		Violations: violations,
 	}, nil

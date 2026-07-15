@@ -105,9 +105,21 @@ CREATE TABLE IF NOT EXISTS model_attribute (
 CREATE INDEX IF NOT EXISTS idx_model_attribute_by_owner
     ON model_attribute (owner_id);
 
+-- owner_id disambiguates independent per-station (or Pass B) perspectives
+-- on the SAME raw node_id: a ConnectivityNode legitimately referenced by
+-- equipment from more than one station (a real cross-station switch
+-- coupling, confirmed in examples/cgmes/ReliCapGrid_Espheim) gets one row
+-- PER OWNER instead of a single, arbitrarily-overwritten row — see
+-- Konzept.md's "Offene Punkte" for the full write-up of why a single
+-- node_id-keyed row was found to be nondeterministic (worker-scheduling-
+-- dependent) under concurrent Pass A processing. A node touched by only
+-- one station (the overwhelming majority) simply has exactly one row, as
+-- before.
 CREATE TABLE IF NOT EXISTS model_electrical_group (
-    node_id  TEXT PRIMARY KEY,
-    group_id TEXT NOT NULL
+    node_id  TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    PRIMARY KEY (node_id, owner_id)
 );
 CREATE INDEX IF NOT EXISTS idx_model_electrical_group_by_group
     ON model_electrical_group (group_id);
@@ -686,8 +698,13 @@ func (m *ModelStore) UpsertEdges(edges []coremodel.Edge) error {
 
 // --- Electrical topology (grouping) --------------------------------------
 
-// GetElectricalGroup implements topology/electrical.Store.
-func (m *ModelStore) GetElectricalGroup(nodeIDs []string) (map[string]string, error) {
+// GetElectricalGroup implements topology/electrical.Store. A node touched
+// by more than one owner (a real cross-station boundary Node, see the
+// model_electrical_group DDL comment above) legitimately returns more than
+// one group id — callers that need "are these two nodes connected"
+// semantics must treat a multi-group node as a union point and expand
+// across all of its groups (see usecase.ElectricallyConnected).
+func (m *ModelStore) GetElectricalGroup(nodeIDs []string) (map[string][]string, error) {
 	if len(nodeIDs) == 0 {
 		return nil, nil
 	}
@@ -700,13 +717,13 @@ func (m *ModelStore) GetElectricalGroup(nodeIDs []string) (map[string]string, er
 	}
 	defer rows.Close()
 
-	result := map[string]string{}
+	result := map[string][]string{}
 	for rows.Next() {
 		var nodeID, groupID string
 		if err := rows.Scan(&nodeID, &groupID); err != nil {
 			return nil, fmt.Errorf("sqlite: scanning electrical group row: %w", err)
 		}
-		result[nodeID] = groupID
+		result[nodeID] = append(result[nodeID], groupID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sqlite: iterating electrical group rows: %w", err)
@@ -714,13 +731,16 @@ func (m *ModelStore) GetElectricalGroup(nodeIDs []string) (map[string]string, er
 	return result, nil
 }
 
-// GetGroupMembers implements topology/electrical.Store.
+// GetGroupMembers implements topology/electrical.Store. DISTINCT because a
+// boundary node could in principle contribute the identical group_id value
+// from two different owners (unlikely given group ids are derived from
+// per-owner local computations, but not structurally impossible).
 func (m *ModelStore) GetGroupMembers(groupIDs []string) ([]string, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
 	}
 	rows, err := m.db.Query(fmt.Sprintf(
-		`SELECT node_id FROM model_electrical_group WHERE group_id IN (%s)`,
+		`SELECT DISTINCT node_id FROM model_electrical_group WHERE group_id IN (%s)`,
 		placeholders(len(groupIDs)),
 	), idArgs(groupIDs)...)
 	if err != nil {
@@ -745,8 +765,10 @@ func (m *ModelStore) GetGroupMembers(groupIDs []string) ([]string, error) {
 // GroupSizes implements topology/electrical.Store. Computed with a single
 // GROUP BY query DB-side so a caller reporting "N circuits, sizes desc"
 // never has to pull every Node ID into Go memory just to count them.
+// COUNT(DISTINCT node_id) so a boundary node contributing to the same
+// group from two owners isn't double-counted.
 func (m *ModelStore) GroupSizes() (map[string]int, error) {
-	rows, err := m.db.Query(`SELECT group_id, COUNT(*) FROM model_electrical_group GROUP BY group_id`)
+	rows, err := m.db.Query(`SELECT group_id, COUNT(DISTINCT node_id) FROM model_electrical_group GROUP BY group_id`)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: querying electrical group sizes: %w", err)
 	}
@@ -770,56 +792,46 @@ func (m *ModelStore) GroupSizes() (map[string]int, error) {
 // UpsertElectricalGroups implements topology/electrical.Store.Upsert
 // (renamed from plain Upsert to avoid colliding with the other Upsert*
 // methods on this same ModelStore type).
-func (m *ModelStore) UpsertElectricalGroups(groups map[string]string) error {
-	if len(groups) == 0 {
+//
+// owned is keyed by owner id (a station root Container id for Pass A, or
+// the fixed Pass B sentinel owner id — see pass_b.go) mapping to that
+// owner's own, independently-computed node_id -> group_id assignment. Each
+// owner's contribution is replaced wholesale (delete-then-insert) within
+// one transaction, and different owners never touch each other's rows —
+// this is what makes concurrent Pass A station workers and Pass B safe to
+// run in any order/interleaving without nondeterministic overwrites: a
+// station whose local grouping changes (e.g. a switch's default state
+// flips between closed and open on re-import, growing or shrinking its
+// local group) simply replaces its own prior rows from scratch, and a
+// shared boundary node keeps one row per owning station rather than a
+// single arbitrarily-overwritten row.
+func (m *ModelStore) UpsertElectricalGroups(owned map[string]map[string]string) error {
+	if len(owned) == 0 {
 		return nil
 	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`
-			INSERT INTO model_electrical_group (node_id, group_id) VALUES (?, ?)
-			ON CONFLICT (node_id) DO UPDATE SET group_id = excluded.group_id
-		`)
+		deleteStmt, err := tx.Prepare(`DELETE FROM model_electrical_group WHERE owner_id = ?`)
 		if err != nil {
-			return fmt.Errorf("sqlite: preparing electrical group upsert: %w", err)
+			return fmt.Errorf("sqlite: preparing electrical group delete-by-owner: %w", err)
 		}
-		defer stmt.Close()
+		defer deleteStmt.Close()
 
-		for nodeID, groupID := range groups {
-			if _, err := stmt.Exec(nodeID, groupID); err != nil {
-				return fmt.Errorf("sqlite: upserting electrical group for node %s: %w", nodeID, err)
+		insertStmt, err := tx.Prepare(`INSERT INTO model_electrical_group (node_id, owner_id, group_id) VALUES (?, ?, ?)`)
+		if err != nil {
+			return fmt.Errorf("sqlite: preparing electrical group insert: %w", err)
+		}
+		defer insertStmt.Close()
+
+		for owner, groups := range owned {
+			if _, err := deleteStmt.Exec(owner); err != nil {
+				return fmt.Errorf("sqlite: deleting prior electrical groups for owner %s: %w", owner, err)
 			}
-		}
-		return nil
-	})
-}
-
-// UpsertElectricalGroupsIfAbsent writes group assignments WITHOUT
-// overwriting any node_id that already has an entry — used by Pass B
-// (pass_b.go's RunPassB), which must run strictly after Pass A and must
-// never clobber Pass A's real, non-trivial group for a shared boundary
-// Node with its own trivial (always-singleton) group for that same Node
-// (see RunPassB's doc comment: "Pass A's entry wins over Pass B's trivial
-// one"). INSERT OR IGNORE gives exactly that semantics at the DB level —
-// no read-then-conditionally-write round trip needed, and safe under
-// concurrent callers touching different node_ids.
-func (m *ModelStore) UpsertElectricalGroupsIfAbsent(groups map[string]string) error {
-	if len(groups) == 0 {
-		return nil
-	}
-	m.writeMu.Lock()
-	defer m.writeMu.Unlock()
-	return withTx(m.db, func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO model_electrical_group (node_id, group_id) VALUES (?, ?)`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing electrical group insert-if-absent: %w", err)
-		}
-		defer stmt.Close()
-
-		for nodeID, groupID := range groups {
-			if _, err := stmt.Exec(nodeID, groupID); err != nil {
-				return fmt.Errorf("sqlite: insert-if-absent electrical group for node %s: %w", nodeID, err)
+			for nodeID, groupID := range groups {
+				if _, err := insertStmt.Exec(nodeID, owner, groupID); err != nil {
+					return fmt.Errorf("sqlite: inserting electrical group for node %s (owner %s): %w", nodeID, owner, err)
+				}
 			}
 		}
 		return nil

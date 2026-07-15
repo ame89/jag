@@ -42,26 +42,6 @@ func chunkUpsert[T any](items []T, upsert func([]T) error) error {
 	return nil
 }
 
-// chunkUpsertMap splits a map (electrical groups: node_id -> group_id) into
-// bounded-size sub-maps before handing each to upsert, for the same
-// transaction-size reason as chunkUpsert above.
-func chunkUpsertMap(items map[string]string, upsert func(map[string]string) error) error {
-	chunk := make(map[string]string, persistChunkSize)
-	for k, v := range items {
-		chunk[k] = v
-		if len(chunk) >= persistChunkSize {
-			if err := upsert(chunk); err != nil {
-				return err
-			}
-			chunk = make(map[string]string, persistChunkSize)
-		}
-	}
-	if len(chunk) > 0 {
-		return upsert(chunk)
-	}
-	return nil
-}
-
 // reportSink is phase2check's common.Sink implementation: it only needs
 // counts/a small sample for reporting, so (unlike the old code, which held
 // every Attribute/Geometry of the whole model in RAM) it never
@@ -332,15 +312,17 @@ func main() {
 		if err := chunkUpsert(b.Edges, modelStore.UpsertEdges); err != nil {
 			return fmt.Errorf("persisting edges: %w", err)
 		}
-		// Pass A's own groups are the "real" switch-aware groups — plain
-		// upsert (ON CONFLICT DO UPDATE), see UpsertElectricalGroups' doc
-		// comment. Pass B's trivial singleton groups (below) must never
-		// overwrite these.
-		groupMap := make(map[string]string, len(b.Groups))
-		for id, g := range b.Groups {
-			groupMap[id] = g
+		// Pass A's own groups: one independently-computed
+		// map[node_id]group_id per owner (station root ID) — persisted
+		// via UpsertElectricalGroups, which replaces only each owner's own
+		// rows (see that method's doc comment), so this never clobbers any
+		// other owner's (including Pass B's) rows for a shared boundary
+		// node.
+		owned := make(map[string]map[string]string, len(b.Groups))
+		for owner, groups := range b.Groups {
+			owned[owner] = groups
 		}
-		if err := chunkUpsertMap(groupMap, modelStore.UpsertElectricalGroups); err != nil {
+		if err := modelStore.UpsertElectricalGroups(owned); err != nil {
 			return fmt.Errorf("persisting electrical groups: %w", err)
 		}
 		report.addBatch(b)
@@ -391,20 +373,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "persisting pass B cim:Line references: %v\n", err)
 		os.Exit(1)
 	}
-	// Pass B's groups are trivial always-singleton groups (see RunPassB's
-	// doc comment) — INSERT OR IGNORE so they never clobber a real group
-	// Pass A already wrote for a shared boundary node.
-	passBGroupMap := make(map[string]string, len(passB.Groups))
-	for id, g := range passB.Groups {
-		passBGroupMap[id] = g
+	// Pass B's groups persist under their own fixed sentinel owner ID
+	// (common.PassBOwnerID, see RunPassB's doc comment) — this coexists
+	// independently alongside any Pass A station's rows for the same Node
+	// ID, with no run-order requirement and no special "if absent" logic
+	// needed (UpsertElectricalGroups always replaces only the given
+	// owner's own rows).
+	passBOwned := make(map[string]map[string]string, len(passB.Groups))
+	for owner, groups := range passB.Groups {
+		passBOwned[owner] = groups
 	}
-	if err := chunkUpsertMap(passBGroupMap, modelStore.UpsertElectricalGroupsIfAbsent); err != nil {
+	if err := modelStore.UpsertElectricalGroups(passBOwned); err != nil {
 		fmt.Fprintf(os.Stderr, "persisting pass B electrical groups: %v\n", err)
 		os.Exit(1)
 	}
 	report.addPassB(passB)
+	passBGroupNodeCount := 0
+	for _, groups := range passB.Groups {
+		passBGroupNodeCount += len(groups)
+	}
 	fmt.Printf("\npass B: %d containers, %d equipment, %d nodes, %d edges, %d groups (%s)\n",
-		len(passB.Containers), len(passB.Equipment), len(passB.Nodes), len(passB.Edges), len(passB.Groups), time.Since(passBStart))
+		len(passB.Containers), len(passB.Equipment), len(passB.Nodes), len(passB.Edges), passBGroupNodeCount, time.Since(passBStart))
 	fmt.Printf("pass B anomalies: %d\n", len(passB.Anomalies))
 	for i, a := range passB.Anomalies {
 		if i >= 30 {
@@ -554,8 +543,10 @@ func (r *passReport) addBatch(b *common.BatchResult) {
 	for _, c := range b.Containers {
 		r.byType[string(c.Type)]++
 	}
-	for _, g := range b.Groups {
-		r.distinctGroups[g] = true
+	for _, groups := range b.Groups {
+		for _, g := range groups {
+			r.distinctGroups[g] = true
+		}
 	}
 	r.violations = append(r.violations, b.Violations...)
 	r.anomalies = append(r.anomalies, b.Anomalies...)
@@ -571,8 +562,10 @@ func (r *passReport) addPassB(b *common.PassBResult) {
 	for _, c := range b.Containers {
 		r.byType[string(c.Type)]++
 	}
-	for _, g := range b.Groups {
-		r.distinctGroups[g] = true
+	for _, groups := range b.Groups {
+		for _, g := range groups {
+			r.distinctGroups[g] = true
+		}
 	}
 	r.violations = append(r.violations, b.Violations...)
 	r.anomalies = append(r.anomalies, b.Anomalies...)

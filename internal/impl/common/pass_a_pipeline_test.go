@@ -73,12 +73,12 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 
 			var gotNodes []coremodel.Node
 			var gotEdges []coremodel.Edge
-			var gotGroups ElectricalGroups = ElectricalGroups{}
+			ownedGroups := map[string]ElectricalGroups{}
 			err = RunPassA(store, result.Version, 1000, DefaultBatchSize, 4, nopSink{}, nil, false, func(b *BatchResult) error {
 				gotNodes = append(gotNodes, b.Nodes...)
 				gotEdges = append(gotEdges, b.Edges...)
-				for id, gid := range b.Groups {
-					gotGroups[id] = gid
+				for owner, groups := range b.Groups {
+					ownedGroups[owner] = groups
 				}
 				return nil
 			})
@@ -93,17 +93,12 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RunPassB: %v", err)
 			}
-			// Pass B's Groups are trivial (always-singleton, see RunPassB's
-			// doc comment) — only fill in node IDs Pass A never saw at all
-			// (nodes touched exclusively by Pass B equipment, e.g. a purely
-			// internal ACLineSegment endpoint with no other station
-			// equipment). Pass A's own entry always wins for a shared
-			// boundary node, since it reflects the real switching equipment
-			// there.
-			for id, gid := range passB.Groups {
-				if _, ok := gotGroups[id]; !ok {
-					gotGroups[id] = gid
-				}
+			// Pass B persists its own (trivial, always-singleton) Groups
+			// under its own fixed sentinel owner ID (PassBOwnerID) —
+			// coexists independently alongside every Pass A station
+			// owner's entry, no special merge/precedence needed.
+			for owner, groups := range passB.Groups {
+				ownedGroups[owner] = groups
 			}
 
 			mergedNodes, mergedEdges := mergeNodesAndEdges(gotNodes, gotEdges, passB.Nodes, passB.Edges)
@@ -123,21 +118,20 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 			// "ReliCapGrid_Espheim cross-station ConnectivityNode-sharing
 			// data anomaly" needing a -1 adjustment was actually a real
 			// Pass A bug, now fixed. MergeJunctionNodes/
-			// MergeBusbarSectionNodes/BuildNodesAndEdges/
-			// BuildElectricalGroups used to run ONCE over an entire Pass A
-			// batch's pooled multi-station data instead of per station —
-			// so a busbar's own canonical-node choice (inside
-			// MergeBusbarSectionNodes' Union-Find) could depend on which
-			// OTHER, electrically unrelated stations happened to share the
-			// same batch, purely a function of batchSize. Confirmed by
-			// running the exact same dataset through ProcessStationBatch
-			// with batchSize=50 vs. batchSize=1000: 1132 vs. 1133 Circuit
-			// nodes for the same physical data. Fixed by scoping all four
-			// of those steps to one station's own Equipment/Containers at
-			// a time (see ProcessStationBatch's doc comment) — Pass A +
-			// Pass B now reproduces the whole-model baseline exactly,
-			// batchSize-independent, no special-casing needed for this
-			// dataset anymore.
+			// MergeBusbarSectionNodes/BuildNodesAndEdges used to run ONCE
+			// over an entire Pass A batch's pooled multi-station data
+			// instead of per station — so a busbar's own canonical-node
+			// choice (inside MergeBusbarSectionNodes' Union-Find) could
+			// depend on which OTHER, electrically unrelated stations
+			// happened to share the same batch, purely a function of
+			// batchSize. Confirmed by running the exact same dataset
+			// through ProcessStationBatch with batchSize=50 vs.
+			// batchSize=1000: 1132 vs. 1133 Circuit nodes for the same
+			// physical data. Fixed by scoping those three steps to one
+			// station's own Equipment/Containers at a time (see
+			// ProcessStationBatch's doc comment) — Pass A + Pass B now
+			// reproduces the whole-model baseline's Circuit sizes exactly,
+			// batchSize-independent.
 			if len(gotCircuits) != wantCircuits {
 				t.Errorf("Pass A + Pass B Circuit count = %d, want %d (whole-model baseline)", len(gotCircuits), wantCircuits)
 			}
@@ -145,8 +139,26 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 				t.Errorf("Pass A + Pass B Circuit sizes = %v, want %v (whole-model baseline)", gotSizes, wantSizes)
 			}
 
+			// ElectricalGroups: each owner (Pass A station, or Pass B's
+			// sentinel owner) persists its OWN independently-computed
+			// local grouping — never merged with any other owner's at
+			// import time (see model_electrical_group's (node_id,
+			// owner_id) composite key and this package's doc comments on
+			// pass_a_pipeline.go/pass_b.go). A raw ConnectivityNode shared
+			// by two owners (a real inter-station switch coupling,
+			// confirmed real in ReliCapGrid_Espheim's Riverlands/
+			// Needlehole pair) therefore legitimately carries more than
+			// one group ID. reconcileOwnedGroups reproduces exactly the
+			// query-time reconciliation a caller like
+			// usecase.ElectricallyConnected performs (expand across a
+			// boundary Node's every group until a fixpoint) to recover a
+			// single flat partition — which must equal the whole-model
+			// baseline's partition for EVERY dataset, including
+			// ReliCapGrid_Espheim (no more per-dataset exemption needed,
+			// unlike the earlier single-group-per-node design).
+			gotGroups := reconcileOwnedGroups(ownedGroups)
 			if !samePartition(gotGroups, wantGroups) {
-				t.Errorf("Pass A's own per-batch ElectricalGroups partition (no cross-batch merge) differs from whole-model ElectricalGroups partition")
+				t.Errorf("Pass A/B's reconciled ElectricalGroups partition differs from whole-model ElectricalGroups partition")
 			}
 		})
 	}
@@ -185,6 +197,55 @@ func samePartition(a, b ElectricalGroups) bool {
 		}
 	}
 	return true
+}
+
+// reconcileOwnedGroups flattens an owner-keyed ElectricalGroups map (see
+// BatchResult.Groups/PassBResult.Groups) into a single node-id -> group-id
+// partition, reconciling any boundary Node (one belonging to more than
+// one owner's group — see model_electrical_group's (node_id, owner_id)
+// composite key) by union-find over group IDs: whenever a Node carries
+// more than one group ID, those group IDs are unioned into one. This is
+// exactly the reconciliation a query-time caller like
+// usecase.Service.ElectricallyConnected performs (expand across a
+// boundary Node's every group until a fixpoint) — used here purely to
+// recover a single comparable partition for testing against the
+// whole-model baseline, not as production code.
+func reconcileOwnedGroups(owned map[string]ElectricalGroups) ElectricalGroups {
+	nodeGroups := map[string][]string{}
+	for _, groups := range owned {
+		for node, gid := range groups {
+			nodeGroups[node] = append(nodeGroups[node], gid)
+		}
+	}
+
+	parent := map[string]string{}
+	find := func(x string) string {
+		if _, ok := parent[x]; !ok {
+			parent[x] = x
+		}
+		for parent[x] != x {
+			parent[x] = parent[parent[x]] // path halving
+			x = parent[x]
+		}
+		return x
+	}
+	union := func(a, b string) {
+		ra, rb := find(a), find(b)
+		if ra != rb {
+			parent[ra] = rb
+		}
+	}
+	for _, gids := range nodeGroups {
+		for i := 1; i < len(gids); i++ {
+			union(gids[0], gids[i])
+		}
+	}
+
+	result := ElectricalGroups{}
+	for node, gids := range nodeGroups {
+		result[node] = find(gids[0])
+	}
+	return result
 }
 
 // mergeNodesAndEdges dedupes Nodes by ID (Pass A and Pass B may both

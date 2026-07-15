@@ -5,6 +5,7 @@ import (
 	"sort"
 	"testing"
 
+	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
 	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
 	"gitlab.com/openk-nsc/jag/internal/sqlite"
 )
@@ -238,6 +239,137 @@ func TestBuildCircuitsAgainstRealDatasetsPandapowerCIM(t *testing.T) {
 	}
 }
 
+// TestBuildCircuitsWithSwitchOverrides is a regression/behavior test for
+// "Schaltkreis"-queries (Circuit/BuildCircuits) under different
+// SwitchStateOverrides against a real, fully-imported dataset
+// (examples/cgmes/MiniGrid_NodeBreaker_Switchgear: 90 switch-like Equipment,
+// 2 open / 88 closed per the SSH profile). It checks three variants:
+//
+//  1. Default (no overrides, import-default switch states): must match the
+//     baseline pinned in TestBuildCircuitsAgainstRealDatasets (7 Circuits,
+//     sizes [58 14 11 7 4 4 4]).
+//  2. One deviating switch state: closing either of the two default-open
+//     Breakers (788bb5ff-...-ea1b7268ba03 or a5a962a6-...-e29131bcba36 —
+//     both sit between the same pair of Circuits in the default topology)
+//     merges the 58-Node and one 4-Node Circuit into one 62-Node Circuit,
+//     dropping the count from 7 to 6.
+//  3. A different switch: opening a normally-closed Breaker
+//     (052682ba-...-0fa4e2e01011) splits one of the 4-Node Circuits into
+//     two 2-Node Circuits, raising the count from 7 to 8.
+//
+// These concrete switch IDs and resulting counts/sizes were determined by
+// running BuildElectricalGroups/BuildCircuits against the real dataset (not
+// guessed) — see the session notes for the discovery run.
+func TestBuildCircuitsWithSwitchOverrides(t *testing.T) {
+	const (
+		openBreaker1  = "788bb5ff-f36e-406b-b6a6-ea1b7268ba03" // default open
+		openBreaker2  = "a5a962a6-2f47-4ef1-960f-e29131bcba36" // default open
+		closedBreaker = "052682ba-a4e5-41d5-9728-0fa4e2e01011" // default closed
+	)
+
+	dir := filepath.Join("..", "..", "..", "examples", "cgmes", "MiniGrid_NodeBreaker_Switchgear")
+	files, err := filepath.Glob(filepath.Join(dir, "*.xml"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", dir, err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("no .xml files found in %s", dir)
+	}
+	sort.Strings(files)
+
+	store, version, nodes, edges := buildPipelineForFiles(t, files, false)
+	defer store.Close()
+
+	t.Run("default switch states", func(t *testing.T) {
+		circuits, _, _, err := BuildCircuits(store, version, nodes, edges, nil)
+		if err != nil {
+			t.Fatalf("BuildCircuits: %v", err)
+		}
+		wantCircuits := 7
+		wantSizes := []int{58, 14, 11, 7, 4, 4, 4}
+		if len(circuits) != wantCircuits {
+			t.Fatalf("Circuit count = %d, want %d", len(circuits), wantCircuits)
+		}
+		if gotSizes := circuitSizesDesc(circuits); !equalInts(gotSizes, wantSizes) {
+			t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizes)
+		}
+	})
+
+	t.Run("deviating switch state (closing a default-open breaker merges two circuits)", func(t *testing.T) {
+		overrides := SwitchStateOverrides{openBreaker1: false}
+		circuits, nodeCircuit, _, err := BuildCircuits(store, version, nodes, edges, overrides)
+		if err != nil {
+			t.Fatalf("BuildCircuits: %v", err)
+		}
+		wantCircuits := 6
+		wantSizes := []int{62, 14, 11, 7, 4, 4}
+		if len(circuits) != wantCircuits {
+			t.Fatalf("Circuit count = %d, want %d", len(circuits), wantCircuits)
+		}
+		if gotSizes := circuitSizesDesc(circuits); !equalInts(gotSizes, wantSizes) {
+			t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizes)
+		}
+
+		// Both default-open breakers sat between the same pair of Circuits;
+		// closing just one of them must already fully merge that pair, so
+		// closing the other one too changes nothing further.
+		overridesBoth := SwitchStateOverrides{openBreaker1: false, openBreaker2: false}
+		circuitsBoth, _, _, err := BuildCircuits(store, version, nodes, edges, overridesBoth)
+		if err != nil {
+			t.Fatalf("BuildCircuits (both closed): %v", err)
+		}
+		if gotSizes := circuitSizesDesc(circuitsBoth); !equalInts(gotSizes, wantSizes) {
+			t.Fatalf("Circuit sizes (both closed) = %v, want %v", gotSizes, wantSizes)
+		}
+
+		// Sanity: with the override applied, the two former boundary Nodes
+		// of openBreaker1 must now report the same Circuit.
+		var t1, t2 string
+		for _, e := range edges {
+			if e.EquipmentID == openBreaker1 {
+				t1, t2 = e.Terminal1NodeID, e.Terminal2NodeID
+			}
+		}
+		if t1 == "" || t2 == "" {
+			t.Fatalf("could not find edge for switch %s", openBreaker1)
+		}
+		if nodeCircuit[t1] != nodeCircuit[t2] {
+			t.Fatalf("expected both terminal Nodes of %s to share a Circuit after closing it, got %s vs %s", openBreaker1, nodeCircuit[t1], nodeCircuit[t2])
+		}
+	})
+
+	t.Run("different switch (opening a default-closed breaker splits a circuit)", func(t *testing.T) {
+		overrides := SwitchStateOverrides{closedBreaker: true}
+		circuits, nodeCircuit, _, err := BuildCircuits(store, version, nodes, edges, overrides)
+		if err != nil {
+			t.Fatalf("BuildCircuits: %v", err)
+		}
+		wantCircuits := 8
+		wantSizes := []int{58, 14, 11, 7, 4, 4, 2, 2}
+		if len(circuits) != wantCircuits {
+			t.Fatalf("Circuit count = %d, want %d", len(circuits), wantCircuits)
+		}
+		if gotSizes := circuitSizesDesc(circuits); !equalInts(gotSizes, wantSizes) {
+			t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizes)
+		}
+
+		// Sanity: the two terminal Nodes of the now-open switch must be
+		// split into two different Circuits.
+		var t1, t2 string
+		for _, e := range edges {
+			if e.EquipmentID == closedBreaker {
+				t1, t2 = e.Terminal1NodeID, e.Terminal2NodeID
+			}
+		}
+		if t1 == "" || t2 == "" {
+			t.Fatalf("could not find edge for switch %s", closedBreaker)
+		}
+		if nodeCircuit[t1] == nodeCircuit[t2] {
+			t.Fatalf("expected both terminal Nodes of %s to be split into different Circuits after opening it, got same Circuit %s", closedBreaker, nodeCircuit[t1])
+		}
+	})
+}
+
 // buildCircuitsForDataset runs the same pipeline phase2check/circuitcount
 // use (Phase 1 -> ResolveTerminals -> BuildContainers -> MergeJunctionNodes
 // -> MergeBusbarSectionNodes -> BuildNodesAndEdges -> BuildCircuits) against
@@ -267,11 +399,32 @@ func buildCircuitsForDataset(t *testing.T, dir string) (int, []int) {
 func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int) {
 	t.Helper()
 
+	store, version, nodes, edges := buildPipelineForFiles(t, files, isNSC)
+	defer store.Close()
+
+	circuits, _, _, err := BuildCircuits(store, version, nodes, edges, nil)
+	if err != nil {
+		t.Fatalf("BuildCircuits: %v", err)
+	}
+
+	return len(circuits), circuitSizesDesc(circuits)
+}
+
+// buildPipelineForFiles runs Phase 1 -> ResolveTerminals -> BuildContainers
+// -> MergeJunctionNodes -> MergeBusbarSectionNodes -> BuildNodesAndEdges for
+// the given files (same pipeline as buildCircuitsForFiles) and returns the
+// resulting store/version/Nodes/Edges directly, so a caller can invoke
+// BuildCircuits (or BuildElectricalGroups) itself, e.g. multiple times with
+// different SwitchStateOverrides, without re-running the import/model-build
+// steps for each variant. The caller is responsible for closing the
+// returned store.
+func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.StagingStore, uint64, []coremodel.Node, []coremodel.Edge) {
+	t.Helper()
+
 	store, err := sqlite.Open(":memory:")
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	defer store.Close()
 
 	var result phase1.Result
 	if isNSC {
@@ -320,18 +473,17 @@ func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int
 	mergedResolved := MergeBusbarSectionNodes(junctionMerged, containers, nodeOnlyIDs)
 	nodes, edges := BuildNodesAndEdges(mergedResolved, nodeOnlyIDs)
 
-	circuits, _, _, err := BuildCircuits(store, result.Version, nodes, edges, nil)
-	if err != nil {
-		t.Fatalf("BuildCircuits: %v", err)
-	}
+	return store, result.Version, nodes, edges
+}
 
+// circuitSizesDesc returns each Circuit's Node count, sorted descending.
+func circuitSizesDesc(circuits map[string]*Circuit) []int {
 	sizes := make([]int, 0, len(circuits))
 	for _, c := range circuits {
 		sizes = append(sizes, len(c.Nodes))
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sizes)))
-
-	return len(circuits), sizes
+	return sizes
 }
 
 func equalInts(a, b []int) bool {

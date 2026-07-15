@@ -36,6 +36,15 @@ import (
 	"gitlab.com/openk-nsc/jag/internal/core/staging"
 )
 
+// PassBOwnerID is the fixed sentinel owner ID Pass B uses when persisting
+// its own ElectricalGroups (see model_electrical_group's (node_id,
+// owner_id) composite key, internal/sqlite/model.go). It is guaranteed
+// never to collide with a real Substation/Building root Container ID (see
+// stationOwnerOf in pass_a_pipeline.go), so Pass B's rows always coexist
+// independently alongside Pass A's per-station rows without any run-order
+// requirement or special "if absent" semantics.
+const PassBOwnerID = "__pass_b__"
+
 // PassBResult is everything RunPassB produces — small (bounded by
 // ACLineSegment/Junction count), meant to be persisted once, not batched
 // further.
@@ -46,7 +55,10 @@ type PassBResult struct {
 	Edges      []coremodel.Edge
 	Attributes []coremodel.Attribute // acline container names
 	LineRefs   []coremodel.Attribute // raw cim:Line reference kept as untrusted Sachdaten, see container.go's identical original logic
-	Groups     ElectricalGroups       // see RunPassB's doc comment: trivial, always-singleton groups for Pass B's own Nodes
+	// Groups is keyed by owner ID — always exactly one entry, keyed by
+	// PassBOwnerID (see RunPassB's doc comment: trivial, always-singleton
+	// groups for Pass B's own Nodes).
+	Groups     map[string]ElectricalGroups
 	Anomalies  []Anomaly              // Terminal-resolution anomalies for ACLineSegment/EquivalentInjection/Junction — previously silently dropped, see 2026-07-15 fix
 	Violations []InvariantViolation   // checkContainerPaths against Pass B's own acline containers (a top-level container type, its own path-template rule needs no cross-batch state)
 }
@@ -68,14 +80,14 @@ type PassBResult struct {
 // were missing from Pass A's own groups before this fix. Since none of
 // Pass B's equipment is ever switch-like, BuildElectricalGroups run on
 // just Pass B's Nodes/Edges naturally produces one singleton group per
-// node (no incorrect unioning) — for any Node ID a Pass A batch ALSO
-// produced a (non-trivial) group for, the caller should prefer Pass A's
-// entry over this trivial one when merging (Pass A's reflects the real
-// switching equipment at that shared boundary node) — the caller MUST run
-// Pass B strictly after Pass A and persist Pass B's groups via
-// ModelStore.UpsertElectricalGroupsIfAbsent (INSERT OR IGNORE), never the
-// plain overwriting UpsertElectricalGroups (see that method's doc
-// comment).
+// node (no incorrect unioning). Pass B persists its Groups under its own
+// fixed PassBOwnerID (see model_electrical_group's (node_id, owner_id)
+// composite key) — this coexists independently alongside any Pass A
+// station's own rows for the same Node ID (e.g. an ACLineSegment endpoint
+// that also happens to be a station's own switching Node), with no run
+// order requirement between Pass A and Pass B and no special "if absent"
+// persistence logic needed (UpsertElectricalGroups replaces only the
+// calling owner's own rows).
 //
 // sink receives Sachdaten/Geometry batches for Pass B's own equipment
 // (ACLineSegment/EquivalentInjection/Junction) — previously entirely
@@ -104,7 +116,7 @@ func RunPassB(store staging.Store, version uint64, chunkSize int, sink Sink, fla
 	if err != nil {
 		return nil, fmt.Errorf("common: BuildElectricalGroups on Pass B's own %d Nodes/%d Edges: %w", len(res.Nodes), len(res.Edges), err)
 	}
-	res.Groups = groups
+	res.Groups = map[string]ElectricalGroups{PassBOwnerID: groups}
 	res.Violations = checkContainerPaths(&BuildContainersResult{Containers: res.Containers})
 	return res, nil
 }

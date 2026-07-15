@@ -124,7 +124,10 @@ func main() {
 	if err != nil {
 		fatalf("electrical topology: %v", err)
 	}
-	if err := model.UpsertElectricalGroups(groups); err != nil {
+	// This demo builds one whole-model grouping in a single pass (not
+	// Pass A/B's per-station design), so a single fixed owner id is
+	// enough here.
+	if err := model.UpsertElectricalGroups(map[string]map[string]string{"usecasedemo": groups}); err != nil {
 		fatalf("persisting electrical groups: %v", err)
 	}
 

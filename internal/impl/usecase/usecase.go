@@ -135,17 +135,76 @@ func (s *Service) ReachablePhysical(rootNodeIDs []string) ([]string, error) {
 
 // ElectricallyConnected implements UC2b/UC4 ("aktuell elektrisch versorgt"
 // / "wer ist mit wem verbunden"): two Nodes are electrically connected iff
-// they share the same electrical group ID — a plain map lookup against the
-// pre-materialized model_electrical_group table, no traversal at query
-// time (see Konzept.md's electrical_group_id design intent).
+// their electrical groups overlap, directly or transitively through a
+// shared boundary Node. A boundary Node (one owned by more than one
+// station, see electrical.Store's doc comment) belongs to more than one
+// group at once and acts as a union point between them — so this expands
+// from nodeA's own group(s) across any such boundary Nodes until a
+// fixpoint, then checks whether nodeB's group(s) are in that reachable
+// set. Bounded to just the actually-connected region (not the whole
+// model), and iterative rather than recursive per project convention.
 func (s *Service) ElectricallyConnected(nodeA, nodeB string) (bool, error) {
 	groups, err := s.Electrical.GetElectricalGroup([]string{nodeA, nodeB})
 	if err != nil {
 		return false, fmt.Errorf("usecase: electrical connectivity of %s/%s: %w", nodeA, nodeB, err)
 	}
-	groupA, okA := groups[nodeA]
-	groupB, okB := groups[nodeB]
-	return okA && okB && groupA == groupB, nil
+	groupsA, okA := groups[nodeA]
+	groupsB, okB := groups[nodeB]
+	if !okA || !okB {
+		return false, nil
+	}
+
+	reachable, err := s.expandElectricalGroups(groupsA)
+	if err != nil {
+		return false, fmt.Errorf("usecase: expanding electrical groups from %s: %w", nodeA, err)
+	}
+	for _, g := range groupsB {
+		if reachable[g] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// expandElectricalGroups returns the fixpoint set of every electrical
+// group ID transitively reachable from seed via boundary Nodes (Nodes
+// belonging to more than one group). Each round only re-queries the
+// members of newly-discovered groups and those members' own group
+// memberships, so cost stays bounded to the connected region actually
+// touched rather than the whole model.
+func (s *Service) expandElectricalGroups(seed []string) (map[string]bool, error) {
+	visited := map[string]bool{}
+	frontier := make([]string, 0, len(seed))
+	for _, g := range seed {
+		if !visited[g] {
+			visited[g] = true
+			frontier = append(frontier, g)
+		}
+	}
+	for len(frontier) > 0 {
+		members, err := s.Electrical.GetGroupMembers(frontier)
+		if err != nil {
+			return nil, fmt.Errorf("loading members of groups %v: %w", frontier, err)
+		}
+		if len(members) == 0 {
+			break
+		}
+		nodeGroups, err := s.Electrical.GetElectricalGroup(members)
+		if err != nil {
+			return nil, fmt.Errorf("loading groups of nodes %v: %w", members, err)
+		}
+		var next []string
+		for _, gs := range nodeGroups {
+			for _, g := range gs {
+				if !visited[g] {
+					visited[g] = true
+					next = append(next, g)
+				}
+			}
+		}
+		frontier = next
+	}
+	return visited, nil
 }
 
 // GeometryInRegion implements UC3 ("welche Stationen/Leitungen liegen in

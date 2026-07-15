@@ -54,6 +54,6 @@ func (g GeometryAdapter) Upsert(geometries []coremodel.Geometry) error {
 type ElectricalAdapter struct{ *ModelStore }
 
 // Upsert implements electrical.Store.
-func (e ElectricalAdapter) Upsert(groups map[string]string) error {
-	return e.ModelStore.UpsertElectricalGroups(groups)
+func (e ElectricalAdapter) Upsert(owned map[string]map[string]string) error {
+	return e.ModelStore.UpsertElectricalGroups(owned)
 }

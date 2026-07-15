@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"sort"
 	"testing"
 
 	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
@@ -217,7 +218,12 @@ func TestModelStore_AttributeRoundTrip(t *testing.T) {
 }
 
 // TestModelStore_ElectricalGroupRoundTrip verifies UpsertElectricalGroups,
-// GetElectricalGroup and GetGroupMembers.
+// GetElectricalGroup and GetGroupMembers, including the multi-owner case
+// (a boundary Node shared by more than one owner keeps one group ID per
+// owner, see model_electrical_group's (node_id, owner_id) composite key)
+// and the "each owner replaces only its own rows from scratch" semantics
+// (a re-import with a changed local grouping must not leave stale rows
+// behind, and must not touch any other owner's rows).
 func TestModelStore_ElectricalGroupRoundTrip(t *testing.T) {
 	s, err := Open(":memory:")
 	if err != nil {
@@ -226,31 +232,76 @@ func TestModelStore_ElectricalGroupRoundTrip(t *testing.T) {
 	defer s.Close()
 	m := s.Model()
 
-	groups := map[string]string{
-		"nodeA": "group1",
-		"nodeB": "group1",
-		"nodeC": "group2",
+	// Two independent owners ("stationA"/"stationB") each with their own
+	// local grouping; nodeShared is a boundary Node touched by both.
+	owned := map[string]map[string]string{
+		"stationA": {
+			"nodeA":     "group1",
+			"nodeB":     "group1",
+			"nodeShared": "group1",
+		},
+		"stationB": {
+			"nodeC":     "group2",
+			"nodeShared": "group2",
+		},
 	}
-	if err := m.UpsertElectricalGroups(groups); err != nil {
+	if err := m.UpsertElectricalGroups(owned); err != nil {
 		t.Fatalf("UpsertElectricalGroups: %v", err)
 	}
 
-	got, err := m.GetElectricalGroup([]string{"nodeA", "nodeC"})
+	got, err := m.GetElectricalGroup([]string{"nodeA", "nodeC", "nodeShared"})
 	if err != nil {
 		t.Fatalf("GetElectricalGroup: %v", err)
 	}
-	if got["nodeA"] != "group1" || got["nodeC"] != "group2" {
-		t.Fatalf("unexpected group assignment: %+v", got)
+	if len(got["nodeA"]) != 1 || got["nodeA"][0] != "group1" {
+		t.Fatalf("unexpected group assignment for nodeA: %+v", got["nodeA"])
+	}
+	if len(got["nodeC"]) != 1 || got["nodeC"][0] != "group2" {
+		t.Fatalf("unexpected group assignment for nodeC: %+v", got["nodeC"])
+	}
+	sharedGroups := append([]string{}, got["nodeShared"]...)
+	sort.Strings(sharedGroups)
+	if len(sharedGroups) != 2 || sharedGroups[0] != "group1" || sharedGroups[1] != "group2" {
+		t.Fatalf("expected nodeShared to have both owners' groups, got %+v", sharedGroups)
 	}
 
 	members, err := m.GetGroupMembers([]string{"group1"})
 	if err != nil {
 		t.Fatalf("GetGroupMembers: %v", err)
 	}
-	if len(members) != 2 {
-		t.Fatalf("expected 2 members of group1, got %d: %+v", len(members), members)
+	if len(members) != 3 {
+		t.Fatalf("expected 3 members of group1 (nodeA, nodeB, nodeShared), got %d: %+v", len(members), members)
+	}
+
+	// Re-import stationA with a changed local grouping (e.g. a switch's
+	// default state flipped, splitting nodeB out of nodeShared's group) —
+	// this must replace stationA's OWN prior rows wholesale, without
+	// touching stationB's rows for nodeShared.
+	if err := m.UpsertElectricalGroups(map[string]map[string]string{
+		"stationA": {
+			"nodeA": "group1",
+			"nodeB": "group3",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertElectricalGroups (re-import): %v", err)
+	}
+	got, err = m.GetElectricalGroup([]string{"nodeA", "nodeB", "nodeShared"})
+	if err != nil {
+		t.Fatalf("GetElectricalGroup (after re-import): %v", err)
+	}
+	if len(got["nodeA"]) != 1 || got["nodeA"][0] != "group1" {
+		t.Fatalf("unexpected group assignment for nodeA after re-import: %+v", got["nodeA"])
+	}
+	if len(got["nodeB"]) != 1 || got["nodeB"][0] != "group3" {
+		t.Fatalf("unexpected group assignment for nodeB after re-import: %+v", got["nodeB"])
+	}
+	// stationA no longer claims nodeShared at all — only stationB's
+	// "group2" entry should remain.
+	if len(got["nodeShared"]) != 1 || got["nodeShared"][0] != "group2" {
+		t.Fatalf("expected only stationB's group2 to remain for nodeShared, got %+v", got["nodeShared"])
 	}
 }
+
 
 // TestModelStore_EquipmentRoundTrip verifies UpsertEquipment/GetByIDs.
 func TestModelStore_EquipmentRoundTrip(t *testing.T) {
