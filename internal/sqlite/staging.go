@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registers as "sqlite"
 
@@ -55,8 +56,24 @@ INSERT OR IGNORE INTO staging_version_counter (id, last_version) VALUES (1, 0);
 const insertChunkSize = 200
 
 // StagingStore implements staging.Store on top of a SQLite database.
+//
+// writeMu is the single shared write-serialization mutex for this whole
+// physical database — handed out by pointer to every sibling store that
+// shares this *sql.DB (ModelStore via Model(), FlagStore via Flags()), so
+// all of them serialize against each other, not just against themselves.
+// SQLite only ever allows one writer at a time regardless of WAL mode/
+// busy_timeout, so any two concurrent write transactions against the same
+// file race for that single lock; a Go-level mutex avoids relying on
+// retry/timeout luck. See model.go's ModelStore doc comment for the
+// original 2026-07-14 fix (UpsertAttributes/UpsertGeometry); flags.go's
+// FlagStore.MarkFlags reused a *separate*, unguarded db.Begin() until a
+// 2026-07-16 lasttest-200 run (multiple Pass A station workers calling
+// MarkFlags concurrently) reproduced the exact same "database is locked"
+// (SQLITE_BUSY) failure, which is why FlagStore now shares this same
+// mutex too instead of having (or lacking) its own.
 type StagingStore struct {
-	db *sql.DB
+	db      *sql.DB
+	writeMu sync.Mutex
 }
 
 // Open opens (creating if necessary) a SQLite database at path and ensures

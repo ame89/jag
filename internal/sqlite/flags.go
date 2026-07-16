@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 )
 
 // FlagStore implements common.FlagStore (see internal/impl/common/flags.go
@@ -10,15 +11,28 @@ import (
 // (see model.go's schema). Shares its *sql.DB/writeMu with ModelStore —
 // obtained via StagingStore.Flags(), same pattern as StagingStore.Model()/
 // StagingStore.Catalog().
+//
+// writeMu (2026-07-16 fix): MarkFlags/ClearFlags are writes against the
+// same physical SQLite file as ModelStore's Upsert* calls, and Pass A's
+// per-batch station workers call MarkFlags concurrently with each other
+// (and with ModelStore writes) exactly the same way
+// BuildSachdatenAndGeometryParallel's workers call UpsertAttributes/
+// UpsertGeometry concurrently — see ModelStore's writeMu doc comment for
+// the original 2026-07-14 fix for that case. FlagStore initially still had
+// its own unguarded db.Begin(), which a lasttest-200 run reproduced as the
+// identical "database is locked" (SQLITE_BUSY) failure. Fix: share the one
+// *sync.Mutex StagingStore hands out to every store backed by the same
+// *sql.DB, so all writers across ModelStore and FlagStore serialize
+// against each other, not just against their own type.
 type FlagStore struct {
-	db *sql.DB
+	db      *sql.DB
+	writeMu *sync.Mutex
 }
-
 
 // Flags returns a FlagStore sharing this StagingStore's database
 // connection.
 func (s *StagingStore) Flags() *FlagStore {
-	return &FlagStore{db: s.db}
+	return &FlagStore{db: s.db, writeMu: &s.writeMu}
 }
 
 // MarkFlags records that each of ids has reached the given kind's
@@ -35,6 +49,8 @@ func (f *FlagStore) MarkFlags(version uint64, kind string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	f.writeMu.Lock()
+	defer f.writeMu.Unlock()
 	return withTx(f.db, func(tx *sql.Tx) error {
 		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO import_flag (version, kind, id) VALUES (?, ?, ?)`)
 		if err != nil {
@@ -128,6 +144,8 @@ func (f *FlagStore) PagedFlagIDs(version uint64, kind string, afterID string, li
 // are purely ephemeral import-time bookkeeping (see flags.go/model.go's
 // doc comments), never part of the permanent model.
 func (f *FlagStore) ClearFlags(version uint64) error {
+	f.writeMu.Lock()
+	defer f.writeMu.Unlock()
 	_, err := f.db.Exec(`DELETE FROM import_flag WHERE version = ?`, version)
 	if err != nil {
 		return fmt.Errorf("sqlite: clearing import flags: %w", err)

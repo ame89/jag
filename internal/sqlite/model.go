@@ -159,15 +159,22 @@ CREATE TABLE IF NOT EXISTS import_flag (
 // instead of spinning against the database lock. Reads (GetByIDs,
 // GetDescendants, ...) are NOT covered by writeMu — SQLite's WAL mode lets
 // readers proceed concurrently with a writer.
+//
+// UPDATE 2026-07-16: writeMu is now a *sync.Mutex pointer, shared with
+// every other store sharing this StagingStore's *sql.DB (see
+// StagingStore's own writeMu doc comment) — a value-type mutex here would
+// only have serialized ModelStore's own Upsert* calls against each other,
+// not against FlagStore.MarkFlags, which turned out to race against them
+// the same way.
 type ModelStore struct {
 	db      *sql.DB
-	writeMu sync.Mutex
+	writeMu *sync.Mutex
 }
 
 // Model returns a ModelStore sharing this StagingStore's database
 // connection (opened once in Open, which also creates the model schema).
 func (s *StagingStore) Model() *ModelStore {
-	return &ModelStore{db: s.db}
+	return &ModelStore{db: s.db, writeMu: &s.writeMu}
 }
 
 // --- Equipment ---------------------------------------------------------
