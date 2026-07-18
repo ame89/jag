@@ -123,6 +123,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File) {
 				bb.Sections = append(bb.Sections, importhjson.BusbarSectionEntry{
 					ID:         shortenID(rootID, sec.ID),
 					Attributes: buildAttributes(s, sec.ID, true),
+					Satellites: buildSatellites(s, sec.ID),
 				})
 			}
 			f.Busbars = append(f.Busbars, bb)
@@ -163,6 +164,7 @@ func buildEquipment(s *Snapshot, rootID, eqID string) importhjson.Equipment {
 		}
 	}
 	eq.Attributes = buildAttributes(s, eqID, true)
+	eq.Satellites = buildSatellites(s, eqID)
 	return eq
 }
 
@@ -179,6 +181,7 @@ func buildSegment(s *Snapshot, rootID, eqID string) importhjson.Segment {
 	// internal-only cim_class Sachdaten key as a regular attribute here too
 	// (consistent with buildEquipment/the busbar-section case above).
 	seg.Attributes = buildAttributes(s, eqID, true)
+	seg.Satellites = buildSatellites(s, eqID)
 	return seg
 }
 
@@ -212,6 +215,9 @@ func buildAttributes(s *Snapshot, ownerID string, skipClass bool) map[string]int
 		if skipClass && a.Key == common.AttributeKeyClass {
 			continue
 		}
+		if a.Key == common.AttributeKeySatellite {
+			continue // rendered separately, see buildSatellites
+		}
 		key := string(a.Key)
 		val := a.Value
 		if kwToMWKeys[key] {
@@ -235,6 +241,36 @@ func buildAttributes(s *Snapshot, ownerID string, skipClass bool) map[string]int
 		} else {
 			out[key] = vals
 		}
+	}
+	return out
+}
+
+// buildSatellites decodes ownerID's AttributeKeySatellite entries (see
+// that key's doc comment and sachdaten.go's satelliteValue) back into the
+// importhjson.Satellite list Equipment/Segment/BusbarSectionEntry expect.
+// Each entry is already a self-contained {"class", "attributes"} object —
+// decoded straight from JSON via ModelStore's json.Unmarshal into `any`,
+// so "attributes" comes back as map[string]interface{} and can be assigned
+// directly, no further reshaping needed (unlike buildAttributes, which has
+// to regroup a whole owner's flat rows).
+func buildSatellites(s *Snapshot, ownerID string) []importhjson.Satellite {
+	var out []importhjson.Satellite
+	for _, a := range s.AttributesByOwner[ownerID] {
+		if a.Key != common.AttributeKeySatellite {
+			continue
+		}
+		obj, ok := a.Value.(map[string]interface{})
+		if !ok {
+			continue // malformed/unexpected shape; skip rather than fail the whole export
+		}
+		sat := importhjson.Satellite{}
+		if class, ok := obj["class"].(string); ok {
+			sat.Class = class
+		}
+		if attrs, ok := obj["attributes"].(map[string]interface{}); ok {
+			sat.Attributes = attrs
+		}
+		out = append(out, sat)
 	}
 	return out
 }

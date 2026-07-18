@@ -71,12 +71,25 @@ type Busbar struct {
 	Sections []BusbarSectionEntry `json:"sections"`
 }
 
+// Satellite is one folded "Anhängsel"/satellite object (e.g. a Wallbox
+// folded into its owning PowerElectronicsConnection's Sachdaten, see
+// internal/impl/common/sachdaten.go's satellite walk and
+// AttributeKeySatellite's doc comment) — its own raw CIM class plus its
+// own literal attributes, kept together as one self-contained object
+// instead of being scattered across several parallel top-level Attributes
+// arrays that would only stay correlated by coincidence.
+type Satellite struct {
+	Class      string                 `json:"class"`
+	Attributes map[string]interface{} `json:"attributes"`
+}
+
 // BusbarSectionEntry is one busbar section (CIM BusbarSection-equivalent):
 // itself already a Node, referenced by its own (prefixed) ID from other
 // equipment's connects lists — no separate node name required.
 type BusbarSectionEntry struct {
 	ID         string                 `json:"id"`
 	Attributes map[string]interface{} `json:"attributes"`
+	Satellites []Satellite            `json:"satellites,omitempty"`
 }
 
 // Bay is one field (Abgangsfeld/Einspeisefeld) within a Substation/KVS
@@ -96,6 +109,7 @@ type Equipment struct {
 	Class      string                 `json:"class"`
 	Connects   []string               `json:"connects"`
 	Attributes map[string]interface{} `json:"attributes"`
+	Satellites []Satellite            `json:"satellites,omitempty"`
 }
 
 // Segment is one ACLineSegment within an ACLine ("Kabel") file. From/To
@@ -109,4 +123,5 @@ type Segment struct {
 	From       string                 `json:"from"`
 	To         string                 `json:"to"`
 	Attributes map[string]interface{} `json:"attributes"`
+	Satellites []Satellite            `json:"satellites,omitempty"`
 }

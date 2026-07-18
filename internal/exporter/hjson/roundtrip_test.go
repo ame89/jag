@@ -22,7 +22,6 @@ package hjson_test
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
@@ -102,14 +101,21 @@ func TestExportImportRoundTrip(t *testing.T) {
 		{OwnerID: "FU1", Key: "IdentifiedObject.name", Value: "FU1"},
 
 		{OwnerID: "PEC1", Key: common.AttributeKeyClass, Value: "PowerElectronicsConnection"},
-		// Multi-value key: PEC1's own name plus a folded Wallbox
-		// satellite's name — the exact shape of the 2026-07-18 bug found
-		// exporting the real NSC dataset (see build.go's buildAttributes
-		// doc comment).
 		{OwnerID: "PEC1", Key: "IdentifiedObject.name", Value: "PEC1"},
-		{OwnerID: "PEC1", Key: "IdentifiedObject.name", Value: "STEU-24"},
-		{OwnerID: "PEC1", Key: common.AttributeKeySatelliteClass, Value: "Wallbox"},
-		{OwnerID: "PEC1", Key: "PowerElectronicsUnit.maxP", Value: "8000"},
+		// A folded Wallbox satellite: its own class + own attributes
+		// bundled into one self-contained object value (see
+		// AttributeKeySatellite's doc comment) — the exact shape of the
+		// 2026-07-19 fix replacing the earlier ad-hoc
+		// satellite_cim_class/parallel-array mechanism (which was the
+		// exact shape of the 2026-07-18 bug found exporting the real NSC
+		// dataset, see build.go's buildAttributes doc comment).
+		{OwnerID: "PEC1", Key: common.AttributeKeySatellite, Value: map[string]interface{}{
+			"class": "Wallbox",
+			"attributes": map[string]interface{}{
+				"IdentifiedObject.name":     "STEU-24",
+				"PowerElectronicsUnit.maxP": "8000",
+			},
+		}},
 	}); err != nil {
 		t.Fatalf("UpsertAttributes: %v", err)
 	}
@@ -141,8 +147,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("reading exported %s: %v", houseFile, err)
 	}
 	content := string(raw)
-	if !contains(content, `"IdentifiedObject.name": ["PEC1", "STEU-24"]`) {
-		t.Errorf("exported %s does not contain the expected multi-value array; got:\n%s", houseFile, content)
+	if !contains(content, `satellites: [`) || !contains(content, `class: "Wallbox"`) ||
+		!contains(content, `"IdentifiedObject.name": "STEU-24"`) || !contains(content, `"PowerElectronicsUnit.maxP": "8000"`) {
+		t.Errorf("exported %s does not contain the expected satellite object; got:\n%s", houseFile, content)
 	}
 
 	// The written S1 file must contain the exported geometry block (added
@@ -190,28 +197,38 @@ func TestExportImportRoundTrip(t *testing.T) {
 	// "PEC-24" -> "H-20-PEC-24"), not something introduced by this test.
 	pec1ID, fu1ID := "H1-PEC1", "S1-FU1"
 
-	// Multi-value array round-trips as two separate values, in order
-	// (bugs 2/3).
-	names := grouped[pec1ID]["IdentifiedObject.name"]
-	if len(names) != 2 {
-		t.Fatalf("%s IdentifiedObject.name = %#v, want 2 values", pec1ID, names)
+	// PEC1's own name is a plain single value (no more cross-satellite
+	// merging, bugs 2/3's root cause).
+	if got := grouped[pec1ID]["IdentifiedObject.name"]; len(got) != 1 || got[0] != "PEC1" {
+		t.Errorf("%s IdentifiedObject.name = %#v, want [\"PEC1\"]", pec1ID, got)
 	}
-	sort.Strings(names)
-	want := []string{"PEC1", "STEU-24"}
-	sort.Strings(want)
-	if names[0] != want[0] || names[1] != want[1] {
-		t.Errorf("%s IdentifiedObject.name = %#v, want %#v", pec1ID, names, want)
+	if got := grouped[pec1ID]["PowerElectronicsUnit.maxP"]; len(got) != 0 {
+		t.Errorf("%s PowerElectronicsUnit.maxP unexpectedly present on the owner itself: %#v (should only live on the synthesized satellite record)", pec1ID, got)
 	}
 
-	// Single-value PowerElectronicsUnit attribute (folded Wallbox
-	// satellite data, bug 1) round-trips as an ordinary scalar.
-	if got := grouped[pec1ID]["PowerElectronicsUnit.maxP"]; len(got) != 1 || got[0] != "8000" {
-		t.Errorf("%s PowerElectronicsUnit.maxP = %#v, want [\"8000\"]", pec1ID, got)
+	// The folded Wallbox satellite round-trips as its own synthesized
+	// StagingRecord (satID = "<ownerID>-SAT<i>", see resolve.go's
+	// addSatellites), carrying its own class and own attributes
+	// untouched — this is what the real satellite walk
+	// (internal/impl/common/sachdaten.go) will rediscover and re-fold on
+	// Phase 2, achieving full export/import symmetry with no
+	// special-casing (bug 1 and its 2026-07-19 redesign).
+	satID := pec1ID + "-SAT0"
+	var satClass string
+	for _, rec := range recs {
+		if rec.ID == satID {
+			satClass = rec.Class
+			break
+		}
 	}
-
-	// The Wallbox's own CIM class survived as satellite_cim_class.
-	if got := grouped[pec1ID][string(common.AttributeKeySatelliteClass)]; len(got) != 1 || got[0] != "Wallbox" {
-		t.Errorf("%s %s = %#v, want [\"Wallbox\"]", pec1ID, common.AttributeKeySatelliteClass, got)
+	if satClass != "Wallbox" {
+		t.Errorf("%s class = %q, want \"Wallbox\"", satID, satClass)
+	}
+	if got := grouped[satID]["IdentifiedObject.name"]; len(got) != 1 || got[0] != "STEU-24" {
+		t.Errorf("%s IdentifiedObject.name = %#v, want [\"STEU-24\"]", satID, got)
+	}
+	if got := grouped[satID]["PowerElectronicsUnit.maxP"]; len(got) != 1 || got[0] != "8000" {
+		t.Errorf("%s PowerElectronicsUnit.maxP = %#v, want [\"8000\"]", satID, got)
 	}
 
 	// The Fuse's own class and connects (Edge) round-trip too, as a basic

@@ -23,20 +23,27 @@ const (
 	// attribute for the walk's own root Equipment (never for satellites).
 	AttributeKeyClass coremodel.AttributeKey = "cim_class"
 
-	// AttributeKeySatelliteClass holds the raw CIM class of a folded
-	// satellite object (e.g. "Wallbox", "PhotoVoltaicUnit",
-	// "RegulatingControl", "DiscreteControlLimit", "PowerTransformerEnd") —
-	// added 2026-07-19 after a user report that a Wallbox satellite folded
-	// into its owning PowerElectronicsConnection's Sachdaten (via the
+	// AttributeKeySatellite holds one folded satellite object's own class
+	// AND its own literal attributes bundled together as a single JSON
+	// object value: {"class": "Wallbox", "attributes": {"IdentifiedObject.name":
+	// "STEU-24", ...}}. Added 2026-07-19, replacing an earlier, simpler
+	// "satellite_cim_class"-only key (single scalar per satellite) after a
+	// user report that a Wallbox satellite folded into its owning
+	// PowerElectronicsConnection's Sachdaten (via the
 	// PowerElectronicsUnit.PowerElectronicsConnection exception in
-	// collectAttributesBatch) was otherwise only identifiable by its name
-	// (e.g. "STEU-24"), with no attribute revealing that it actually is a
-	// Wallbox. Unlike AttributeKeyClass (root-Equipment-only, one value),
-	// this key is emitted once per folded satellite and is therefore
-	// commonly multi-valued (e.g. a PowerElectronicsConnection with a
-	// RegulatingControl, a Wallbox, and several DiscreteControlLimit
-	// satellites gets 6 values here) — the HJSON exporter's
-	// buildAttributes already renders multi-value keys as arrays, so no
-	// further exporter/importer change is needed to make this visible.
-	AttributeKeySatelliteClass coremodel.AttributeKey = "satellite_cim_class"
+	// collectAttributesBatch) was only identifiable by its name, with no
+	// way to reliably tell which name belonged to which satellite class:
+	// a bare "satellite_cim_class" array and the shared "IdentifiedObject.
+	// name" array (also holding the root's own name) were only positionally
+	// correlated by coincidence of walk order, breaking silently the
+	// moment any satellite lacked a value for some shared key. Bundling
+	// each satellite's own data into one self-contained object value
+	// removes the need for any such cross-array correlation. Like the
+	// former key, this one is emitted once per folded satellite and is
+	// therefore commonly multi-valued (one row per satellite, same
+	// OwnerID+Key, see coremodel.Attribute's doc comment) — the HJSON
+	// exporter's buildAttributes decodes these into a dedicated
+	// Equipment/Segment/BusbarSectionEntry.Satellites list instead of
+	// exposing them as a plain Sachdaten attribute.
+	AttributeKeySatellite coremodel.AttributeKey = "satellite"
 )

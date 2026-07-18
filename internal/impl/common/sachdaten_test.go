@@ -36,6 +36,35 @@ func byOwnerKey(attrs []coremodel.Attribute) map[string]map[string][]interface{}
 	return out
 }
 
+// satellitesOf extracts ownerID's AttributeKeySatellite entries from a flat
+// Attribute slice, decoded into (class, attributes) pairs for test
+// assertions — mirrors internal/exporter/hjson's buildSatellites.
+func satellitesOf(attrs []coremodel.Attribute, ownerID string) []struct {
+	Class      string
+	Attributes map[string]interface{}
+} {
+	var out []struct {
+		Class      string
+		Attributes map[string]interface{}
+	}
+	for _, a := range attrs {
+		if a.OwnerID != ownerID || a.Key != AttributeKeySatellite {
+			continue
+		}
+		obj, ok := a.Value.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		class, _ := obj["class"].(string)
+		sattrs, _ := obj["attributes"].(map[string]interface{})
+		out = append(out, struct {
+			Class      string
+			Attributes map[string]interface{}
+		}{Class: class, Attributes: sattrs})
+	}
+	return out
+}
+
 // litRecord builds a non-reference (literal) StagingRecord.
 func litRecord(id, class, attr, value string) model.StagingRecord {
 	return model.StagingRecord{ID: id, Class: class, Attribute: attr, Value: value, IsReference: false}
@@ -106,39 +135,50 @@ func TestBuildAttributesFoldsPowerElectronicsUnitSatellite(t *testing.T) {
 		t.Fatalf("no attributes collected for PEC1; got %#v", sink.attrs)
 	}
 
-	if got := pec1["PowerElectronicsUnit.maxP"]; len(got) != 1 || got[0] != "8000" {
-		t.Errorf("PowerElectronicsUnit.maxP = %#v, want [\"8000\"] (Wallbox satellite must be folded in)", got)
+	// PEC1's own IdentifiedObject.name stays a single, root-only value now
+	// — WB1's own name/attributes must be bundled separately under
+	// AttributeKeySatellite, never merged into PEC1's flat attributes.
+	if names := pec1["IdentifiedObject.name"]; len(names) != 1 || names[0] != "PEC1" {
+		t.Errorf("PEC1 IdentifiedObject.name = %#v, want [\"PEC1\"] (Wallbox's own name must not merge into the root's flat attributes)", names)
+	}
+	if got := pec1["PowerElectronicsUnit.maxP"]; got != nil {
+		t.Errorf("PEC1 PowerElectronicsUnit.maxP = %#v, want absent (Wallbox's own value belongs under the satellite object, not PEC1's flat attributes)", got)
 	}
 
-	names := pec1["IdentifiedObject.name"]
-	if len(names) != 2 {
-		t.Fatalf("IdentifiedObject.name = %#v, want 2 values (PEC1's own + Wallbox's WB1)", names)
+	satellites := satellitesOf(sink.attrs, "PEC1")
+	if len(satellites) != 1 {
+		t.Fatalf("PEC1 satellites = %#v, want exactly 1 (the Wallbox)", satellites)
 	}
-	sortedNames := append([]interface{}(nil), names...)
-	sort.Slice(sortedNames, func(i, j int) bool { return sortedNames[i].(string) < sortedNames[j].(string) })
-	if sortedNames[0] != "PEC1" || sortedNames[1] != "WB1" {
-		t.Errorf("IdentifiedObject.name values = %#v, want [PEC1 WB1] (order-independent)", sortedNames)
+	wb := satellites[0]
+	if wb.Class != "Wallbox" {
+		t.Errorf("satellite class = %q, want \"Wallbox\"", wb.Class)
+	}
+	if got := wb.Attributes["IdentifiedObject.name"]; got != "WB1" {
+		t.Errorf("Wallbox satellite IdentifiedObject.name = %#v, want \"WB1\"", got)
+	}
+	if got := wb.Attributes["PowerElectronicsUnit.maxP"]; got != "8000" {
+		t.Errorf("Wallbox satellite PowerElectronicsUnit.maxP = %#v, want \"8000\"", got)
 	}
 
 	if _, ok := pec1["SomeOtherRef.marker"]; ok {
 		t.Errorf("unexpected SomeOtherRef.marker attribute present")
 	}
-	for _, v := range pec1["IdentifiedObject.name"] {
-		if v == "OTHER1" {
+	for _, sat := range satellites {
+		if sat.Attributes["IdentifiedObject.name"] == "OTHER1" {
 			t.Errorf("OTHER1's own IdentifiedObject.name leaked into PEC1's Sachdaten — hasEquipmentContainerAttr exclusion regressed for non-PowerElectronicsUnit satellites")
 		}
 	}
 }
 
 // TestBuildAttributesMultiValueKey verifies that several distinct satellite
-// objects contributing to the SAME Sachdaten key on one owner (e.g. several
+// objects contributing to the SAME Sachdaten key (e.g. several
 // DiscreteControlLimit satellites, each with their own
-// DiscreteControlLimit.value) all survive as separate Attribute rows —
-// per core/model.Attribute's doc comment ("Multi-value keys produce
-// multiple Attribute rows sharing the same OwnerID+Key"), not collapsed or
-// deduplicated at the BuildAttributes/collectAttributesBatch level (any
-// collapsing to a single value is the exporter's concern, tested
-// separately in internal/exporter/hjson).
+// DiscreteControlLimit.value) each get their own, independent
+// AttributeKeySatellite entry — one row per satellite object (see
+// core/model.Attribute's doc comment, "Multi-value keys produce multiple
+// Attribute rows sharing the same OwnerID+Key" — here the shared key is
+// AttributeKeySatellite itself), never collapsed together or merged into
+// a single flat DiscreteControlLimit.value array on the owner.
 func TestBuildAttributesMultiValueKey(t *testing.T) {
 	store, err := sqlite.Open(":memory:")
 	if err != nil {
@@ -165,13 +205,22 @@ func TestBuildAttributesMultiValueKey(t *testing.T) {
 		t.Fatalf("BuildAttributes: %v", err)
 	}
 
-	values := byOwnerKey(sink.attrs)["PEC1"]["DiscreteControlLimit.value"]
-	if len(values) != 2 {
-		t.Fatalf("DiscreteControlLimit.value = %#v, want 2 values (one per DiscreteControlLimit satellite)", values)
+	satellites := satellitesOf(sink.attrs, "PEC1")
+	if len(satellites) != 2 {
+		t.Fatalf("PEC1 satellites = %#v, want 2 (one per DiscreteControlLimit)", satellites)
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i].(string) < values[j].(string) })
-	if values[0] != "25" || values[1] != "75" {
-		t.Errorf("DiscreteControlLimit.value = %#v, want [25 75]", values)
+	var values []string
+	for _, sat := range satellites {
+		if sat.Class != "DiscreteControlLimit" {
+			t.Errorf("satellite class = %q, want \"DiscreteControlLimit\"", sat.Class)
+		}
+		if v, ok := sat.Attributes["DiscreteControlLimit.value"].(string); ok {
+			values = append(values, v)
+		}
+	}
+	sort.Strings(values)
+	if len(values) != 2 || values[0] != "25" || values[1] != "75" {
+		t.Errorf("DiscreteControlLimit.value values = %#v, want [25 75]", values)
 	}
 }
 
@@ -246,31 +295,51 @@ func TestProcessStationBatchHouseWithWallboxAndPhotoVoltaic(t *testing.T) {
 	grouped := byOwnerKey(sink.attrs)
 
 	pecWB := grouped["PEC-WB"]
-	if got := pecWB["PowerElectronicsUnit.maxP"]; len(got) != 1 || got[0] != "8000" {
-		t.Errorf("PEC-WB PowerElectronicsUnit.maxP = %#v, want [\"8000\"] (Wallbox's own value)", got)
+	if got := pecWB["IdentifiedObject.name"]; len(got) != 1 || got[0] != "PEC-WB" {
+		t.Errorf("PEC-WB IdentifiedObject.name = %#v, want [\"PEC-WB\"] (Wallbox's own name must not merge into the root's flat attributes)", got)
 	}
-	if got := pecWB["IdentifiedObject.name"]; len(got) != 2 {
-		t.Fatalf("PEC-WB IdentifiedObject.name = %#v, want 2 values (PEC-WB + WB1)", got)
+	wbSatellites := satellitesOf(sink.attrs, "PEC-WB")
+	if len(wbSatellites) != 1 {
+		t.Fatalf("PEC-WB satellites = %#v, want exactly 1 (the Wallbox)", wbSatellites)
+	}
+	if wbSatellites[0].Class != "Wallbox" {
+		t.Errorf("PEC-WB satellite class = %q, want \"Wallbox\"", wbSatellites[0].Class)
+	}
+	if got := wbSatellites[0].Attributes["PowerElectronicsUnit.maxP"]; got != "8000" {
+		t.Errorf("Wallbox satellite PowerElectronicsUnit.maxP = %#v, want \"8000\"", got)
+	}
+	if got := wbSatellites[0].Attributes["IdentifiedObject.name"]; got != "WB1" {
+		t.Errorf("Wallbox satellite IdentifiedObject.name = %#v, want \"WB1\"", got)
 	}
 
 	pecPV := grouped["PEC-PV"]
-	if got := pecPV["PowerElectronicsUnit.maxP"]; len(got) != 1 || got[0] != "6000" {
-		t.Errorf("PEC-PV PowerElectronicsUnit.maxP = %#v, want [\"6000\"] (PhotoVoltaicUnit's own value)", got)
+	if got := pecPV["IdentifiedObject.name"]; len(got) != 1 || got[0] != "PEC-PV" {
+		t.Errorf("PEC-PV IdentifiedObject.name = %#v, want [\"PEC-PV\"] (PhotoVoltaicUnit's own name must not merge into the root's flat attributes)", got)
 	}
-	if got := pecPV["IdentifiedObject.name"]; len(got) != 2 {
-		t.Fatalf("PEC-PV IdentifiedObject.name = %#v, want 2 values (PEC-PV + PV1)", got)
+	pvSatellites := satellitesOf(sink.attrs, "PEC-PV")
+	if len(pvSatellites) != 1 {
+		t.Fatalf("PEC-PV satellites = %#v, want exactly 1 (the PhotoVoltaicUnit)", pvSatellites)
+	}
+	if pvSatellites[0].Class != "PhotoVoltaicUnit" {
+		t.Errorf("PEC-PV satellite class = %q, want \"PhotoVoltaicUnit\"", pvSatellites[0].Class)
+	}
+	if got := pvSatellites[0].Attributes["PowerElectronicsUnit.maxP"]; got != "6000" {
+		t.Errorf("PhotoVoltaicUnit satellite PowerElectronicsUnit.maxP = %#v, want \"6000\"", got)
+	}
+	if got := pvSatellites[0].Attributes["IdentifiedObject.name"]; got != "PV1" {
+		t.Errorf("PhotoVoltaicUnit satellite IdentifiedObject.name = %#v, want \"PV1\"", got)
 	}
 
 	// Cross-contamination regression check: WB1's data must never appear
 	// on PEC-PV, and PV1's data must never appear on PEC-WB, even though
 	// both satellites share the same House container.
-	for _, v := range pecPV["IdentifiedObject.name"] {
-		if v == "WB1" {
+	for _, sat := range pvSatellites {
+		if sat.Attributes["IdentifiedObject.name"] == "WB1" {
 			t.Errorf("Wallbox's WB1 leaked into PEC-PV's Sachdaten (cross-contamination via shared House container)")
 		}
 	}
-	for _, v := range pecWB["IdentifiedObject.name"] {
-		if v == "PV1" {
+	for _, sat := range wbSatellites {
+		if sat.Attributes["IdentifiedObject.name"] == "PV1" {
 			t.Errorf("PhotoVoltaicUnit's PV1 leaked into PEC-WB's Sachdaten (cross-contamination via shared House container)")
 		}
 	}
@@ -392,15 +461,25 @@ func TestProcessStationBatchONSWithTransformerAndTwoFeeders(t *testing.T) {
 		t.Errorf("TR1 edge = %+v, want it to connect CN-OS and CN-US directly", trEdge)
 	}
 
-	// Both PowerTransformerEnds' ratedU must fold into TR1's own
-	// Sachdaten as a 2-value multi-value key.
-	ratedU := byOwnerKey(sink.attrs)["TR1"]["PowerTransformerEnd.ratedU"]
-	if len(ratedU) != 2 {
-		t.Fatalf("TR1 PowerTransformerEnd.ratedU = %#v, want 2 values (one per winding side)", ratedU)
+	// Both PowerTransformerEnds must fold into TR1's own Sachdaten as
+	// separate satellite objects — one per winding side, each carrying
+	// its own ratedU.
+	satellites := satellitesOf(sink.attrs, "TR1")
+	if len(satellites) != 2 {
+		t.Fatalf("TR1 satellites = %#v, want 2 (one per winding side)", satellites)
 	}
-	sort.Slice(ratedU, func(i, j int) bool { return ratedU[i].(string) < ratedU[j].(string) })
-	if ratedU[0] != "20000" || ratedU[1] != "400" {
-		t.Errorf("TR1 PowerTransformerEnd.ratedU = %#v, want [20000 400] (order-independent, numeric sort not required)", ratedU)
+	var ratedU []string
+	for _, sat := range satellites {
+		if sat.Class != "PowerTransformerEnd" {
+			t.Errorf("TR1 satellite class = %q, want \"PowerTransformerEnd\"", sat.Class)
+		}
+		if v, ok := sat.Attributes["PowerTransformerEnd.ratedU"].(string); ok {
+			ratedU = append(ratedU, v)
+		}
+	}
+	sort.Strings(ratedU)
+	if len(ratedU) != 2 || ratedU[0] != "20000" || ratedU[1] != "400" {
+		t.Errorf("TR1 PowerTransformerEnd.ratedU values = %#v, want [20000 400] (order-independent, numeric sort not required)", ratedU)
 	}
 }
 

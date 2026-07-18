@@ -298,14 +298,20 @@ func collectAttributesBatch(store staging.Store, version uint64, equipmentIDs []
 					// Equipment's own raw CIM class is recorded under this
 					// key, never a satellite's.
 					out = append(out, coremodel.Attribute{OwnerID: w.ownerID, Key: AttributeKeyClass, Value: class})
+					w.attrs = append(w.attrs, out...)
 				} else {
-					// See AttributeKeySatelliteClass's doc comment: record
-					// every folded satellite's own raw CIM class too, so a
-					// folded object (e.g. a Wallbox) is identifiable even
-					// though its data is merged into the root's Sachdaten.
-					out = append(out, coremodel.Attribute{OwnerID: w.ownerID, Key: AttributeKeySatelliteClass, Value: class})
+					// See AttributeKeySatellite's doc comment: bundle this
+					// one satellite's own class + all its own literal
+					// attributes into a single self-contained object value,
+					// instead of scattering them across several
+					// independent flat Attribute rows/arrays that would
+					// only stay correlated by coincidence of walk order.
+					w.attrs = append(w.attrs, coremodel.Attribute{
+						OwnerID: w.ownerID,
+						Key:     AttributeKeySatellite,
+						Value:   satelliteValue(class, out),
+					})
 				}
-				w.attrs = append(w.attrs, out...)
 				if DisableSatelliteWalk {
 					continue // experiment: never expand past the root object at all
 				}
@@ -395,4 +401,29 @@ func attributesAndNeighbors(ownerID, objID string, records, incoming []model.Sta
 	}
 	sort.Strings(neighbors)
 	return out, neighbors
+}
+
+// satelliteValue bundles one folded satellite's own class and its own
+// literal attributes (attrs, as built by attributesAndNeighbors for that
+// one satellite object) into the single self-contained JSON-object shape
+// AttributeKeySatellite's doc comment describes: {"class": class,
+// "attributes": {...}}. A key legitimately repeated within one satellite's
+// own attrs (rare, but possible — a satellite is itself just another
+// walked object) is rendered as a JSON array under that key, mirroring the
+// root-Equipment multi-value rendering the HJSON exporter already does.
+func satelliteValue(class string, attrs []coremodel.Attribute) map[string]interface{} {
+	grouped := map[string]interface{}{}
+	for _, a := range attrs {
+		key := string(a.Key)
+		if existing, ok := grouped[key]; ok {
+			if arr, ok := existing.([]interface{}); ok {
+				grouped[key] = append(arr, a.Value)
+			} else {
+				grouped[key] = []interface{}{existing, a.Value}
+			}
+			continue
+		}
+		grouped[key] = a.Value
+	}
+	return map[string]interface{}{"class": class, "attributes": grouped}
 }

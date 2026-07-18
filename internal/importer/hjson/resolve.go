@@ -208,6 +208,34 @@ func (e *r) addAttributes(id, class string, attrs map[string]interface{}) {
 	}
 }
 
+// satelliteRefAttribute is a synthetic, JAG-only reference key (never a
+// real CIM attribute) used purely to tie a re-imported satellite object
+// back to its owner. It is deliberately NOT one of sachdaten.go's
+// topologyAttributes, so internal/impl/common's satellite walk discovers
+// it exactly like it would a real, dialect-specific CIM back-reference
+// (e.g. PowerElectronicsUnit.PowerElectronicsConnection) — no special
+// casing needed there for HJSON-authored satellites vs. real CIM ones.
+const satelliteRefAttribute = "Satellite.Of"
+
+// addSatellites emits one synthetic StagingRecord object per Satellite
+// entry (see internal/importer/hjson.Satellite and
+// internal/impl/common.AttributeKeySatellite's doc comment): its own
+// literal attributes (addAttributes) plus one satelliteRefAttribute
+// reference back to ownerID. This makes a re-imported satellite
+// indistinguishable, from the satellite walk's point of view, from a real
+// folded CIM satellite object — the walk discovers it via the reference
+// (backward from ownerID) and folds it back into ownerID's Sachdaten under
+// AttributeKeySatellite exactly as it would on first import from a real
+// CIM/CGMES/NSC file, giving full export<->import symmetry with no
+// dedicated satellite-merging logic anywhere.
+func (e *r) addSatellites(ownerID string, satellites []Satellite) {
+	for i, sat := range satellites {
+		satID := fmt.Sprintf("%s-SAT%d", ownerID, i)
+		e.add(satID, sat.Class, satelliteRefAttribute, ownerID, true, 0)
+		e.addAttributes(satID, sat.Class, sat.Attributes)
+	}
+}
+
 // addTerminals emits the Terminal/ConnectivityNode records for one
 // Zweipol/single-terminal Equipment's connects list. A single connects
 // entry is a single-terminal source/sink (Terminal 2 = GND is implied
@@ -293,6 +321,7 @@ func (e *r) emitStation(f *File) {
 			secID := e.resolve(sec.ID)
 			e.add(secID, "BusbarSection", "Equipment.EquipmentContainer", vlID, true, 0)
 			e.addAttributes(secID, "BusbarSection", sec.Attributes)
+			e.addSatellites(secID, sec.Satellites)
 			// BusbarSection is its own Node (nodeRoleClasses, see
 			// terminals.go): one self-referencing Terminal.
 			termID := secID + "-T1"
@@ -326,6 +355,7 @@ func (e *r) emitEquipment(eq Equipment, containerID string) {
 	eqID := e.resolve(eq.ID)
 	e.add(eqID, eq.Class, "Equipment.EquipmentContainer", containerID, true, 0)
 	e.addAttributes(eqID, eq.Class, eq.Attributes)
+	e.addSatellites(eqID, eq.Satellites)
 	e.addTerminals(eqID, eq.Connects)
 }
 
@@ -340,6 +370,7 @@ func (e *r) emitACLine(f *File) {
 	for _, seg := range f.Segments {
 		segID := e.resolve(seg.ID)
 		e.addAttributes(segID, "ACLineSegment", seg.Attributes)
+		e.addSatellites(segID, seg.Satellites)
 		e.addTerminals(segID, []string{seg.From, seg.To})
 	}
 }

@@ -105,6 +105,7 @@ func writeBusbar(b *strings.Builder, bb importhjson.Busbar, depth int) {
 			indent(b, depth+3)
 			fmt.Fprintf(b, "id: %s\n", quote(sec.ID))
 			writeAttributesBlock(b, sec.Attributes, depth+3)
+			writeSatellitesBlock(b, sec.Satellites, depth+3)
 			indent(b, depth+2)
 			b.WriteString("}\n")
 		}
@@ -151,6 +152,7 @@ func writeEquipment(b *strings.Builder, eq importhjson.Equipment, depth int) {
 		b.WriteString("]\n")
 	}
 	writeAttributesBlock(b, eq.Attributes, depth+1)
+	writeSatellitesBlock(b, eq.Satellites, depth+1)
 	indent(b, depth)
 	b.WriteString("}\n")
 }
@@ -165,6 +167,7 @@ func writeSegment(b *strings.Builder, seg importhjson.Segment, depth int) {
 	indent(b, depth+1)
 	fmt.Fprintf(b, "to: %s\n", quote(seg.To))
 	writeAttributesBlock(b, seg.Attributes, depth+1)
+	writeSatellitesBlock(b, seg.Satellites, depth+1)
 	indent(b, depth)
 	b.WriteString("}\n")
 }
@@ -186,6 +189,31 @@ func writeAttributesBlock(b *strings.Builder, attrs map[string]interface{}, dept
 	}
 	indent(b, depth)
 	b.WriteString("}\n")
+}
+
+// writeSatellitesBlock renders a folded satellite object list (see
+// internal/importer/hjson.Satellite and internal/impl/common's
+// AttributeKeySatellite doc comment) as its own "satellites: [...]" array,
+// one {class, attributes} object per satellite — kept structurally
+// separate from writeAttributesBlock's flat map so a satellite's own data
+// never gets mixed into its owner's plain attributes.
+func writeSatellitesBlock(b *strings.Builder, satellites []importhjson.Satellite, depth int) {
+	if len(satellites) == 0 {
+		return
+	}
+	indent(b, depth)
+	b.WriteString("satellites: [\n")
+	for _, sat := range satellites {
+		indent(b, depth+1)
+		b.WriteString("{\n")
+		indent(b, depth+2)
+		fmt.Fprintf(b, "class: %s\n", quote(sat.Class))
+		writeAttributesBlock(b, sat.Attributes, depth+2)
+		indent(b, depth+1)
+		b.WriteString("}\n")
+	}
+	indent(b, depth)
+	b.WriteString("]\n")
 }
 
 // quote renders s as a double-quoted HJSON string (always quoted — see
