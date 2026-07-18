@@ -98,6 +98,15 @@ func main() {
 		}
 		stationWorkers = n
 	}
+	passBWorkers := 0
+	if v := os.Getenv("JAG_PASS_B_WORKERS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_PASS_B_WORKERS: %v\n", err)
+			os.Exit(1)
+		}
+		passBWorkers = n
+	}
 
 	overallStart := time.Now()
 	store, err := sqlite.Open(dbPath)
@@ -168,7 +177,7 @@ func main() {
 	fmt.Printf("pass A: %d containers, %d equipment, %d nodes, %d edges (%s)\n", containerCount, equipmentCount, nodeCount, edgeCount, time.Since(passAStart))
 
 	passBStart := time.Now()
-	passB, err := common.RunPassB(store, result.Version, chunkSize, sink, flags)
+	passB, err := common.RunPassB(store, result.Version, chunkSize, passBWorkers, sink, flags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pass B: %v\n", err)
 		os.Exit(1)

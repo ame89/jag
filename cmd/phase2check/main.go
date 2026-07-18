@@ -263,6 +263,21 @@ func main() {
 		stationWorkers = n
 	}
 
+	// JAG_PASS_B_WORKERS controls the number of Pass B pull-pool worker
+	// goroutines (common.DefaultPassBWorkers=4 if unset/0) — each worker
+	// discovers and processes one independent ACLineSegment chain
+	// (cable route) at a time, mirroring stationWorkers' shape but keyed
+	// by cable route instead of station (see discoverACLineChainsStreaming).
+	passBWorkers := 0
+	if v := os.Getenv("JAG_PASS_B_WORKERS"); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_PASS_B_WORKERS: %v\n", convErr)
+			os.Exit(1)
+		}
+		passBWorkers = n
+	}
+
 	overallStart := time.Now()
 	store, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -344,7 +359,7 @@ func main() {
 	}
 
 	passBStart := time.Now()
-	passB, err := common.RunPassB(store, result.Version, chunkSize, sink, flags)
+	passB, err := common.RunPassB(store, result.Version, chunkSize, passBWorkers, sink, flags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pass B: %v\n", err)
 		os.Exit(1)

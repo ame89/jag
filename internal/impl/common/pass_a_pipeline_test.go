@@ -89,7 +89,7 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 				t.Fatalf("RunPassA produced no Nodes/Edges at all — batch never ran?")
 			}
 
-			passB, err := RunPassB(store, result.Version, 1000, nopSink{}, nil)
+			passB, err := RunPassB(store, result.Version, 1000, 0, nopSink{}, nil)
 			if err != nil {
 				t.Fatalf("RunPassB: %v", err)
 			}

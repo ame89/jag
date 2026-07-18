@@ -102,10 +102,15 @@ type PassBResult struct {
 // container by design, see resolveBoundaryEquivalents, so marking it
 // "installed" would only produce false-positive "without container"
 // noise).
-func RunPassB(store staging.Store, version uint64, chunkSize int, sink Sink, flags FlagStore) (*PassBResult, error) {
+// workers configures the ACLineSegment chain-discovery worker pool (see
+// discoverACLineChainsStreaming) — <=0 defaults to DefaultPassBWorkers.
+// Kept as an explicit parameter (not a package-level default silently
+// applied deep inside resolveACLineSegments) so callers can tune/sweep it
+// exactly like RunPassA's workers parameter.
+func RunPassB(store staging.Store, version uint64, chunkSize, workers int, sink Sink, flags FlagStore) (*PassBResult, error) {
 	res := &PassBResult{}
 
-	aclineNodeToContainer, err := resolveACLineSegments(store, version, chunkSize, sink, res, flags)
+	aclineNodeToContainer, err := resolveACLineSegments(store, version, chunkSize, workers, sink, res, flags)
 	if err != nil {
 		return nil, err
 	}
@@ -121,19 +126,21 @@ func RunPassB(store staging.Store, version uint64, chunkSize int, sink Sink, fla
 	return res, nil
 }
 
-// resolveACLineSegments mirrors BuildContainers' original ACLineSegment
-// handling (container.go) exactly — scanning "Line" and "ACLineSegment"
-// (both small, bounded classes) and delegating to the unchanged
-// buildACLineChains — plus additionally builds the ACLineSegment's own
-// Nodes/Edges (BuildNodesAndEdges scoped to just aclIDs) since, unlike
-// BuildContainers (container-membership only), Pass B is also responsible
-// for the node-edge model rows this class contributes.
+// resolveACLineSegments scans "Line" and "ACLineSegment" (see the Line
+// handling below, still whole-class but a small class — Junction-sized,
+// not the concern) and delegates chain discovery/Node-Edge construction to
+// discoverACLineChainsStreaming (acline_streaming.go) — the streaming,
+// per-component, worker-pool-parallel replacement for the old whole-class
+// buildACLineChains + a SEPARATE, redundant second whole-class
+// ResolveTerminalsForIDs call this function used to make just to build
+// Nodes/Edges (now folded into the single per-component resolve
+// discoverACLineChainsStreaming already does).
 //
-// Returns buildACLineChains' own nodeToContainer map (ConnectivityNode ID
-// -> acline container ID) so the caller (RunPassB) can pass it on to
-// resolveStandaloneJunctions, which needs it to assign a Junction's own
-// container membership (see buildACLineChains' doc comment).
-func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, sink Sink, res *PassBResult, flags FlagStore) (map[string]string, error) {
+// Returns discoverACLineChainsStreaming's own nodeToContainer map
+// (ConnectivityNode ID -> acline container ID) so the caller (RunPassB)
+// can pass it on to resolveStandaloneJunctions, which needs it to assign a
+// Junction's own container membership.
+func resolveACLineSegments(store staging.Store, version uint64, chunkSize, workers int, sink Sink, res *PassBResult, flags FlagStore) (map[string]string, error) {
 	lineIDs, lineIdx, err := scanClass(store, version, chunkSize, "Line")
 	if err != nil {
 		return nil, err
@@ -169,35 +176,34 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 		}
 	}
 
-	aclineContainers, aclineOf, aclineNames, _, aclineNodeToContainer, err := buildACLineChains(store, version, aclIDs)
+	aclChains, err := discoverACLineChainsStreaming(store, version, aclIDs, workers)
 	if err != nil {
 		return nil, err
 	}
-	res.Containers = append(res.Containers, aclineContainers...)
-	res.Attributes = append(res.Attributes, aclineNames...)
-	for segID, containerID := range aclineOf {
+	res.Containers = append(res.Containers, aclChains.Containers...)
+	res.Attributes = append(res.Attributes, aclChains.Names...)
+	for segID, containerID := range aclChains.EquipmentOf {
 		res.Equipment = append(res.Equipment, coremodel.Equipment{ID: segID, ContainerID: containerID})
 	}
-
-	// ACLineSegment's own Node/Edge rows — not a nodeRoleClass (a segment
-	// is an ordinary 2-terminal Zweipol), so nodeOnlyIDs is nil.
-	aclResolved, aclAnomalies, err := ResolveTerminalsForIDs(store, version, aclIDs, nil)
-	if err != nil {
-		return nil, fmt.Errorf("common: resolving Terminals for %d ACLineSegment (Pass B node/edge build): %w", len(aclIDs), err)
-	}
-	res.Anomalies = append(res.Anomalies, aclAnomalies...)
-	aclNodes, aclEdges := BuildNodesAndEdges(aclResolved, nil)
-	res.Nodes = append(res.Nodes, aclNodes...)
-	res.Edges = append(res.Edges, aclEdges...)
+	res.Anomalies = append(res.Anomalies, containerAnomaliesToAnomalies(aclChains.Anomalies)...)
+	res.Nodes = append(res.Nodes, aclChains.Nodes...)
+	res.Edges = append(res.Edges, aclChains.Edges...)
+	aclineContainers := aclChains.Containers
+	aclNodes := aclChains.Nodes
 
 	// Flag marking (see flags.go) — every ACLineSegment resolved here
 	// always gets an acline container (even a solo, unconnected segment
 	// gets its own singleton chain), so installed == contained for this
 	// class; mirrors ProcessStationBatch's identical reasoning.
+	// resolvedIDs is derived from aclChains.Edges rather than a separate
+	// merged resolved-terminals map (which no longer exists as one whole-
+	// class structure) — BuildNodesAndEdges only emits an Edge for an
+	// equipment ID it successfully resolved, so this is exactly
+	// equivalent.
 	if flags != nil {
-		resolvedIDs := make([]string, 0, len(aclResolved))
-		for id := range aclResolved {
-			resolvedIDs = append(resolvedIDs, id)
+		resolvedIDs := make([]string, 0, len(aclChains.Edges))
+		for _, e := range aclChains.Edges {
+			resolvedIDs = append(resolvedIDs, e.EquipmentID)
 		}
 		if err := flags.MarkFlags(version, FlagInstalledEquipment, resolvedIDs); err != nil {
 			return nil, fmt.Errorf("common: marking installed-equipment flags for ACLineSegment: %w", err)
@@ -221,11 +227,11 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 	// Pass B (2026-07-15 fix, found while planning the cmd/phase2check
 	// rewiring). BuildAttributes/BuildGeometry are already internally
 	// batched (sachdatenBatchSize/geometryBatchSize, see sachdaten.go/
-	// geometry.go), so passing the whole aclIDs slice here does not
-	// reintroduce a whole-model-sized structure beyond what
-	// buildACLineChains above already needed (see the documented
-	// ACLineSegment exception in Konzept.md's "Offene Punkte").
-	if err := BuildAttributes(store, version, chunkSize, aclResolved, aclIDs, sink); err != nil {
+	// geometry.go); the `resolved` parameter is unused whenever
+	// equipmentIDs is non-empty (see BuildAttributes' doc comment), so nil
+	// is passed here now that there's no single merged whole-class
+	// resolved-terminals map anymore.
+	if err := BuildAttributes(store, version, chunkSize, nil, aclIDs, sink); err != nil {
 		return nil, fmt.Errorf("common: building attributes for %d ACLineSegment: %w", len(aclIDs), err)
 	}
 	aclEquipmentIDSet := make(map[string]bool, len(aclIDs))
@@ -255,10 +261,26 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize int, s
 	if err := resolveBoundaryEquivalents(store, version, chunkSize, sink, res); err != nil {
 		return nil, err
 	}
-	return aclineNodeToContainer, nil
+	return aclChains.NodeToContainer, nil
 }
 
-// resolveBoundaryEquivalents unconditionally builds Node/Edge rows for
+// containerAnomaliesToAnomalies converts the ContainerAnomaly slice used by
+// discoverACLineChainsStreaming (which wraps both container-resolution AND
+// per-segment Terminal-resolution problems under one lightweight type) back
+// into the Anomaly type resolveACLineSegments's caller (BuildPassBResult)
+// expects, so both anomaly sources feed the same res.Anomalies slice.
+func containerAnomaliesToAnomalies(in []ContainerAnomaly) []Anomaly {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Anomaly, len(in))
+	for i, a := range in {
+		out[i] = Anomaly{EquipmentID: a.ObjectID, Message: a.Message}
+	}
+	return out
+}
+
+
 // every EquivalentInjection in the model — a small, bounded class scan
 // (like Junction), never dependent on which container (if any) it
 // attaches to. Some EquivalentInjection instances DO attach to a real

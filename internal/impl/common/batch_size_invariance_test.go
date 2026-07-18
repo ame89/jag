@@ -108,7 +108,7 @@ func TestPassABatchSizeInvariance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("batchSize=%d: RunPassA: %v", bs, err)
 		}
-		passB, err := RunPassB(store, result.Version, 1000, nopSink{}, nil)
+		passB, err := RunPassB(store, result.Version, 1000, 0, nopSink{}, nil)
 		if err != nil {
 			t.Fatalf("batchSize=%d: RunPassB: %v", bs, err)
 		}
@@ -181,4 +181,107 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestPassBWorkerCountInvariance is a permanent regression guard for
+// discoverACLineChainsStreaming (acline_streaming.go), the streaming/
+// parallel replacement for the old whole-class union-find
+// buildACLineChains (see Konzept.md's "Offene Punkte" — the RAM-growth
+// exception this replaces was explicitly reversed and rebuilt in this
+// session). Runs Pass A + Pass B against the same imported model with
+// different Pass B worker counts (1, 4, 8 — including counts above and
+// below DefaultPassBWorkers=4) and asserts the resulting ACLine container
+// set, Node/Edge counts, and Circuit partition are identical regardless of
+// how many goroutines raced to discover components — i.e., the shared-
+// mutex claim scheme (claimNextSeed / per-component neighbor claiming)
+// must never let scheduling affect the result.
+func TestPassBWorkerCountInvariance(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "examples", "cgmes", "ReliCapGrid_Espheim")
+	files, err := filepath.Glob(filepath.Join(dir, "*.xml"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", dir, err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("no .xml files found in %s", dir)
+	}
+	sort.Strings(files)
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer store.Close()
+
+	result, err := phase1.RunCGMESFiles(store, files)
+	if err != nil {
+		t.Fatalf("RunCGMESFiles: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("RunCGMESFiles reported %d collected errors: %+v", len(result.Errors), result.Errors)
+	}
+
+	var gotNodes []coremodel.Node
+	var gotEdges []coremodel.Edge
+	err = RunPassA(store, result.Version, 1000, 50, 4, nopSink{}, nil, false, func(b *BatchResult) error {
+		gotNodes = append(gotNodes, b.Nodes...)
+		gotEdges = append(gotEdges, b.Edges...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunPassA: %v", err)
+	}
+
+	type snapshot struct {
+		workers    int
+		containers []string
+		nodeCount  int
+		edgeCount  int
+		sizes      []int
+	}
+	var snapshots []snapshot
+
+	for _, w := range []int{1, 4, 8} {
+		passB, err := RunPassB(store, result.Version, 1000, w, nopSink{}, nil)
+		if err != nil {
+			t.Fatalf("workers=%d: RunPassB: %v", w, err)
+		}
+		var containerIDs []string
+		for _, c := range passB.Containers {
+			containerIDs = append(containerIDs, c.ID)
+		}
+		sort.Strings(containerIDs)
+
+		mergedNodes, mergedEdges := mergeNodesAndEdges(gotNodes, gotEdges, passB.Nodes, passB.Edges)
+		circuits, _, _, err := BuildCircuits(store, result.Version, mergedNodes, mergedEdges, nil)
+		if err != nil {
+			t.Fatalf("workers=%d: BuildCircuits: %v", w, err)
+		}
+		sizes := make([]int, 0, len(circuits))
+		for _, c := range circuits {
+			sizes = append(sizes, len(c.Nodes))
+		}
+		sort.Sort(sort.Reverse(sort.IntSlice(sizes)))
+
+		snapshots = append(snapshots, snapshot{
+			workers:    w,
+			containers: containerIDs,
+			nodeCount:  len(passB.Nodes),
+			edgeCount:  len(passB.Edges),
+			sizes:      sizes,
+		})
+	}
+
+	base := snapshots[0]
+	for _, snap := range snapshots[1:] {
+		if !equalStrings(snap.containers, base.containers) {
+			t.Errorf("workers=%d: ACLine containers = %v, want %v (workers=%d)", snap.workers, snap.containers, base.containers, base.workers)
+		}
+		if snap.nodeCount != base.nodeCount || snap.edgeCount != base.edgeCount {
+			t.Errorf("workers=%d: Pass B produced %d nodes/%d edges, want %d nodes/%d edges (workers=%d)",
+				snap.workers, snap.nodeCount, snap.edgeCount, base.nodeCount, base.edgeCount, base.workers)
+		}
+		if !equalInts(snap.sizes, base.sizes) {
+			t.Errorf("workers=%d: Circuit sizes = %v, want %v (workers=%d)", snap.workers, snap.sizes, base.sizes, base.workers)
+		}
+	}
 }
