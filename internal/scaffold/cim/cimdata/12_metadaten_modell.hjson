@@ -1,0 +1,165 @@
+// Gruppe 12: Metadaten/Modell. Alle ❌ Metadaten (Modell-Header/Namensgebung,
+// kein Betriebsmittel): FullModel, InstanceSet, BaseVoltage, BasePower,
+// BoundaryPoint, Name, NameType, NameTypeAuthority.
+{
+  classes: {
+    FullModel: {
+      description: "Modell-Header eines CGMES-Profils (EQ/TP/SSH/SV/...) mit Versions-/Abhängigkeitsangaben — reines Dateimetadatum, existiert im NSC-Dialekt nicht (siehe Konzept.md)."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: Model.scenarioTime
+          type: string
+          required: false
+          description: "Zeitpunkt, für den das Modell gültig ist (ISO 8601)."
+        }
+        {
+          key: Model.created
+          type: string
+          required: false
+          description: "Erstellungszeitpunkt des Modells (ISO 8601)."
+        }
+        {
+          key: Model.version
+          type: string
+          required: false
+          description: "Versionsbezeichner des Modells."
+        }
+        {
+          key: Model.profile
+          type: "string[]"
+          required: true
+          description: "URI(s) des/der CGMES-Profils/Profile (z.B. EQ, TP, SSH, SV)."
+        }
+        {
+          key: Model.DependentOn
+          type: "Referenz -> FullModel[]"
+          required: false
+          description: "Andere Modell-Header, von denen dieses Profil abhängt (z.B. SSH hängt von EQ ab)."
+        }
+      ]
+    }
+    InstanceSet: {
+      description: "Gruppierung mehrerer FullModel-Header zu einem zusammengehörigen Instanzsatz (z.B. ein vollständiger CGMES-Modellexport) — reines Metadatenobjekt."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung des Instanzsatzes."
+        }
+      ]
+    }
+    BaseVoltage: {
+      description: "Katalogeintrag: Nennspannungsebene (z.B. 20 kV, 0.4 kV), von vielen ConductingEquipment/VoltageLevel referenziert (Katalog)."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung der Spannungsebene."
+        }
+        {
+          key: BaseVoltage.nominalVoltage
+          type: "float (kV)"
+          required: true
+          description: "Nennspannung in kV."
+        }
+      ]
+    }
+    BasePower: {
+      description: "Katalogeintrag: Bezugsleistung für p.u.-Normierung (selten im Niederspannungskontext genutzt) — Katalog, kein eigenes Betriebsmittel."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: BasePower.basePower
+          type: "float (MVA)"
+          required: true
+          description: "Bezugsleistung in MVA."
+        }
+      ]
+    }
+    BoundaryPoint: {
+      description: "CGMES Boundary-Profil: Markierung eines Übergabepunkts an der Modellgrenze (z.B. zwischen zwei Teilmodellen) — Metadatenobjekt für den Modellrand, kein eigenes Betriebsmittel."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung des Grenzpunkts."
+        }
+        {
+          key: BoundaryPoint.ConnectivityNode
+          type: "Referenz -> ConnectivityNode"
+          required: false
+          description: "Zugehöriger Grenzknoten."
+        }
+      ]
+    }
+    Name: {
+      description: "Ein zusätzlicher (Alt-)Name eines IdentifiedObject neben dessen Hauptnamen — reines Metadatenobjekt, kein eigenes Betriebsmittel."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: Name.name
+          type: string
+          required: true
+          description: "Der zusätzliche Name/Bezeichner."
+        }
+        {
+          key: Name.IdentifiedObject
+          type: "Referenz -> IdentifiedObject"
+          required: true
+          description: "Das benannte Objekt."
+        }
+        {
+          key: Name.NameType
+          type: "Referenz -> NameType"
+          required: false
+          description: "Art/Herkunft dieses Namens."
+        }
+      ]
+    }
+    NameType: {
+      description: "Katalogeintrag: Art eines zusätzlichen Namens (z.B. \"Betriebsnummer\", \"Altsystem-ID\") — Katalog, kein eigenes Betriebsmittel."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Namensart."
+        }
+        {
+          key: NameType.NameTypeAuthority
+          type: "Referenz -> NameTypeAuthority"
+          required: false
+          description: "Vergebende Stelle dieser Namensart."
+        }
+      ]
+    }
+    NameTypeAuthority: {
+      description: "Katalogeintrag: die vergebende Stelle/Organisation eines NameType (z.B. ein bestimmter Netzbetreiber) — Katalog, kein eigenes Betriebsmittel."
+      group: "Metadaten/Modell"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der vergebenden Stelle."
+        }
+      ]
+    }
+  }
+}

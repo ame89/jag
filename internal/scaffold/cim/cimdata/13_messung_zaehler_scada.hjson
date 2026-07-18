@@ -1,0 +1,121 @@
+// Gruppe 13: Messung/Zähler/SCADA. ✅ Zweipol/Anhängsel: Meter (Single-
+// Terminal-Anhängsel eines Anschlusspunkts). ❌ Metadaten:
+// Analog, AnalogValue, RemoteSource, RemoteUnit, CommunicationLink.
+{
+  classes: {
+    Meter: {
+      description: "Zähler (z.B. an einem UsagePoint) — wird als Single-Terminal-Anhängsel modelliert, kein eigenständiger Netzknoten."
+      group: "Messung/Zähler/SCADA"
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name/Zählernummer."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Building"
+          required: false
+          description: "Zugehöriger Container (falls vorhanden)."
+        }
+        {
+          key: Meter.UsagePoint
+          type: "Referenz -> UsagePoint"
+          required: false
+          description: "Zugehöriger Zählpunkt (MeLo)."
+        }
+      ]
+    }
+    Analog: {
+      description: "Definition eines analogen Messkanals (z.B. Wirkleistung, Spannung) an einem Terminal/PowerSystemResource — SCADA-Metadatum, kein eigenes Betriebsmittel."
+      group: "Messung/Zähler/SCADA"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung des Messkanals."
+        }
+        {
+          key: Measurement.PowerSystemResource
+          type: "Referenz -> PowerSystemResource"
+          required: true
+          description: "Gemessenes Betriebsmittel/Terminal."
+        }
+        {
+          key: Analog.positiveFlowIn
+          type: bool
+          required: false
+          description: "Ob ein positiver Wert einem Fluss in Richtung des Betriebsmittels entspricht."
+        }
+      ]
+    }
+    AnalogValue: {
+      description: "Ein konkreter Messwert zu einem Analog-Kanal — im CGMES/SCADA-Kontext ein Zeitpunktwert, keine JAG-Live-Telemetrie (siehe Konzept.md)."
+      group: "Messung/Zähler/SCADA"
+      terminals: 0
+      attributes: [
+        {
+          key: AnalogValue.Analog
+          type: "Referenz -> Analog"
+          required: true
+          description: "Zugehöriger Messkanal."
+        }
+        {
+          key: AnalogValue.value
+          type: float
+          required: true
+          description: "Gemessener/berechneter Wert."
+        }
+      ]
+    }
+    RemoteSource: {
+      description: "SCADA-Fernmessquelle, die einen Analog-Messkanal über einen RemoteUnit/CommunicationLink liefert — reines Kommunikationsmetadatum."
+      group: "Messung/Zähler/SCADA"
+      terminals: 0
+      attributes: [
+        {
+          key: RemoteSource.Measurement
+          type: "Referenz -> Analog"
+          required: true
+          description: "Zugehöriger Messkanal."
+        }
+        {
+          key: RemoteSource.RemoteUnit
+          type: "Referenz -> RemoteUnit"
+          required: false
+          description: "Fernwirkeinheit, die diese Quelle liefert."
+        }
+      ]
+    }
+    RemoteUnit: {
+      description: "SCADA-Fernwirkeinheit (RTU), die mehrere RemoteSource-Messkanäle bündelt — reines Kommunikationsmetadatum."
+      group: "Messung/Zähler/SCADA"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung der Fernwirkeinheit."
+        }
+      ]
+    }
+    CommunicationLink: {
+      description: "SCADA-Kommunikationsverbindung zwischen RemoteUnit(s) — reines Kommunikationsmetadatum, keine elektrische Kante."
+      group: "Messung/Zähler/SCADA"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung der Verbindung."
+        }
+      ]
+    }
+  }
+}

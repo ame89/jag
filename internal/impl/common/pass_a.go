@@ -98,10 +98,28 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 	}
 	ownIdx := BuildObjectIndex(flattenRecords(ownRecs))
 
+	// Resolve each Substation's PowerSystemResource.PSRType reference (if
+	// any) to classify ONS vs. KVS — see classifyStationType's doc comment
+	// (containertype.go) and Konzept.md's 2026-07-18 "Offener Punkt". Only
+	// the small, batch-local set of actually-referenced PSRType objects is
+	// fetched (not a whole-class scan), keeping this batch-scoped like the
+	// rest of ResolveBatchContainers.
+	var psrTypeIDs []string
+	for _, id := range subIDs {
+		if psr := ownIdx.Ref(id, "PowerSystemResource.PSRType"); psr != "" {
+			psrTypeIDs = append(psrTypeIDs, psr)
+		}
+	}
+	psrRecs, err := getByIDsIndexed(store, version, psrTypeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("common: fetching %d PSRType records: %w", len(psrTypeIDs), err)
+	}
+	psrIdx := BuildObjectIndex(flattenRecords(psrRecs))
+
 	subSet := map[string]bool{}
 	for _, id := range subIDs {
 		subSet[id] = true
-		res.Containers = append(res.Containers, coremodel.Container{ID: id, Type: ContainerTypeSubstation})
+		res.Containers = append(res.Containers, coremodel.Container{ID: id, Type: classifyStationType(ownIdx, psrIdx, id)})
 		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: ownIdx.NameOf(id)})
 	}
 	houseSet := map[string]bool{}

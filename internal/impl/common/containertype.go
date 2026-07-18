@@ -1,6 +1,10 @@
 package common
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import (
+	"strings"
+
+	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+)
 
 // Container type enum — moved here from core/model per the "generic core"
 // simplification: core/model.ContainerType is just a plain string type with
@@ -33,3 +37,47 @@ const (
 	ContainerTypeDistributionBox coremodel.ContainerType = "distribution-box"
 	ContainerTypeHouse           coremodel.ContainerType = "house"
 )
+
+// psrTypeDistributionBoxNames are the normalized (lowercased, whitespace-
+// stripped) PowerSystemResource.PSRType names observed in NSC example data
+// (Eine_ONS_mit_2_KVS_3_Muffen_und_9_Häuser_ohne_Trafo_MD.xml,
+// example_as_cim.xml) denoting a KVS (distribution box) rather than an
+// ordinary substation/ONS ("TransformerStation"/"Transformer Station").
+// See Konzept.md's "Offener Punkt" (2026-07-18) for the full decision
+// writeup: this is deliberately data-driven, not dialect-flagged — PSRType
+// is currently only ever populated by the NSC dialect (CGMES example data
+// has zero PSRType usage), so CGMES Substations simply never match here
+// and fall through to the ContainerTypeSubstation default, without needing
+// a separate isNSC parameter threaded through BuildContainers/
+// ResolveBatchContainers. Extending this to CGMES is explicitly deferred
+// until real CGMES example data with PSRType exists (do not generalize
+// speculatively).
+var psrTypeDistributionBoxNames = map[string]bool{
+	"distributionbox": true,
+}
+
+// normalizePSRTypeName lowercases name and strips all whitespace, so
+// "DistributionBox" and "Distribution Box" (both observed in the two NSC
+// example files) compare equal.
+func normalizePSRTypeName(name string) string {
+	return strings.Join(strings.Fields(strings.ToLower(name)), "")
+}
+
+// classifyStationType returns ContainerTypeDistributionBox if subID's
+// PowerSystemResource.PSRType reference (looked up in ownIdx, the
+// Substation's own attribute index) resolves — via psrIdx, an index over
+// the referenced PSRType objects' own attributes — to a known
+// "distribution box" PSRType name; otherwise it returns the default
+// ContainerTypeSubstation. Shared by both BuildContainers (whole-model) and
+// ResolveBatchContainers (per-batch) so their outputs stay identical (see
+// pass_a_test.go's TestResolveBatchContainersMatchesBuildContainers).
+func classifyStationType(ownIdx, psrIdx *ObjectIndex, subID string) coremodel.ContainerType {
+	psrTypeID := ownIdx.Ref(subID, "PowerSystemResource.PSRType")
+	if psrTypeID == "" {
+		return ContainerTypeSubstation
+	}
+	if psrTypeDistributionBoxNames[normalizePSRTypeName(psrIdx.NameOf(psrTypeID))] {
+		return ContainerTypeDistributionBox
+	}
+	return ContainerTypeSubstation
+}

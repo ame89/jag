@@ -1,0 +1,177 @@
+// Gruppe 10: Geometrie/Diagramm. Alle ❌ Metadaten/Geometrie (kein Zweipol):
+// Location, PositionPoint, DiagramObject, DiagramObjectPoint,
+// DiagramObjectStyle, TextDiagramObject, Diagram, CoordinateSystem.
+{
+  classes: {
+    Location: {
+      description: "Ortsangabe eines Elements (Composition, keine Vererbung — siehe Konzept.md \"Geometrie ist Komposition\") — referenziert eine Folge von PositionPoint."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: Location.CoordinateSystem
+          type: "Referenz -> CoordinateSystem"
+          required: false
+          description: "Verwendetes Koordinatensystem (z.B. WGS 84)."
+        }
+        {
+          key: Location.mainAddress
+          type: string
+          required: false
+          description: "Adresse, falls vorhanden."
+        }
+      ]
+    }
+    PositionPoint: {
+      description: "Ein einzelner Koordinatenpunkt (2D, keine Höhe/Tiefe — siehe Konzept.md) innerhalb einer Location; bei Leitungen/Kabeln mehrere Punkte als Streckenzug."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: PositionPoint.Location
+          type: "Referenz -> Location"
+          required: true
+          description: "Zugehörige Ortsangabe."
+        }
+        {
+          key: PositionPoint.sequenceNumber
+          type: int
+          required: false
+          description: "Reihenfolge innerhalb des Streckenzugs (bei mehreren Punkten)."
+        }
+        {
+          key: PositionPoint.xPosition
+          type: "float (Länge/Longitude, WGS 84)"
+          required: true
+          description: "X-Koordinate (Längengrad)."
+        }
+        {
+          key: PositionPoint.yPosition
+          type: "float (Breite/Latitude, WGS 84)"
+          required: true
+          description: "Y-Koordinate (Breitengrad)."
+        }
+      ]
+    }
+    DiagramObject: {
+      description: "Schematische (nicht geografische) Darstellung eines Elements in einem Diagram — reines Visualisierungsmetadatum, nicht Teil des JAG-Kernmodells."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: DiagramObject.Diagram
+          type: "Referenz -> Diagram"
+          required: true
+          description: "Zugehöriges Diagramm."
+        }
+        {
+          key: DiagramObject.IdentifiedObject
+          type: "Referenz -> IdentifiedObject"
+          required: true
+          description: "Dargestelltes Element."
+        }
+        {
+          key: DiagramObject.DiagramObjectStyle
+          type: "Referenz -> DiagramObjectStyle"
+          required: false
+          description: "Darstellungsstil (Symbol/Linienart)."
+        }
+      ]
+    }
+    DiagramObjectPoint: {
+      description: "Ein Punkt der schematischen Darstellung eines DiagramObject (Diagrammkoordinaten, keine Geokoordinaten)."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: DiagramObjectPoint.DiagramObject
+          type: "Referenz -> DiagramObject"
+          required: true
+          description: "Zugehöriges Diagrammobjekt."
+        }
+        {
+          key: DiagramObjectPoint.sequenceNumber
+          type: int
+          required: false
+          description: "Reihenfolge innerhalb des Streckenzugs."
+        }
+        {
+          key: DiagramObjectPoint.xPosition
+          type: float
+          required: true
+          description: "X-Koordinate im Diagrammraster."
+        }
+        {
+          key: DiagramObjectPoint.yPosition
+          type: float
+          required: true
+          description: "Y-Koordinate im Diagrammraster."
+        }
+      ]
+    }
+    DiagramObjectStyle: {
+      description: "Katalogeintrag: wiederverwendbarer Darstellungsstil für DiagramObject (z.B. Symboltyp) — Katalog, kein eigenes Betriebsmittel."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung des Stils."
+        }
+      ]
+    }
+    TextDiagramObject: {
+      description: "Freitext-Beschriftung innerhalb eines Diagram (z.B. Feldbezeichnung) — reines Visualisierungsmetadatum."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: TextDiagramObject.Diagram
+          type: "Referenz -> Diagram"
+          required: true
+          description: "Zugehöriges Diagramm."
+        }
+        {
+          key: TextDiagramObject.text
+          type: string
+          required: true
+          description: "Beschriftungstext."
+        }
+      ]
+    }
+    Diagram: {
+      description: "Ein schematisches Übersichtsdiagramm (Schaltplan), das mehrere DiagramObject/TextDiagramObject gruppiert."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Name des Diagramms."
+        }
+      ]
+    }
+    CoordinateSystem: {
+      description: "Katalogeintrag: verwendetes Koordinatenreferenzsystem (z.B. WGS 84 = EPSG:4326) — Katalog, von vielen Location-Objekten geteilt."
+      group: "Geometrie/Diagramm"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung des Koordinatensystems."
+        }
+        {
+          key: CoordinateSystem.crsUrn
+          type: string
+          required: true
+          description: "URN/EPSG-Code des Koordinatensystems (z.B. \"urn:ogc:def:crs:EPSG::4326\")."
+        }
+      ]
+    }
+  }
+}

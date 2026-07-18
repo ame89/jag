@@ -1,0 +1,58 @@
+// Gruppe 11: Zustandsvariablen (SV-Profil, CGMES State Variables). Alle ❌
+// Metadaten: SvPowerFlow, SvVoltage. Enthalten statische
+// Lastflussberechnungs-Ergebnisse zu einem Zeitpunkt, KEINE Live-Messwerte
+// (siehe Konzept.md: "kein live-Zustand/keine Telemetrie").
+{
+  classes: {
+    SvPowerFlow: {
+      description: "SV-Profil-Ergebnis: berechneter Leistungsfluss an einem Terminal nach einer Lastflussberechnung (statisches Berechnungsergebnis, kein Live-Messwert)."
+      group: Zustandsvariablen
+      terminals: 0
+      attributes: [
+        {
+          key: SvPowerFlow.Terminal
+          type: "Referenz -> Terminal"
+          required: true
+          description: "Terminal, an dem der Leistungsfluss berechnet wurde."
+        }
+        {
+          key: SvPowerFlow.p
+          type: "float (MW)"
+          required: true
+          description: "Berechnete Wirkleistung in MW."
+        }
+        {
+          key: SvPowerFlow.q
+          type: "float (Mvar)"
+          required: true
+          description: "Berechnete Blindleistung in Mvar."
+        }
+      ]
+    }
+    SvVoltage: {
+      description: "SV-Profil-Ergebnis: berechnete Spannung an einem TopologicalNode nach einer Lastflussberechnung (statisches Berechnungsergebnis, kein Live-Messwert)."
+      group: Zustandsvariablen
+      terminals: 0
+      attributes: [
+        {
+          key: SvVoltage.TopologicalNode
+          type: "Referenz -> TopologicalNode"
+          required: true
+          description: "Knoten, an dem die Spannung berechnet wurde."
+        }
+        {
+          key: SvVoltage.v
+          type: "float (kV)"
+          required: true
+          description: "Berechneter Spannungsbetrag in kV."
+        }
+        {
+          key: SvVoltage.angle
+          type: "float (Grad)"
+          required: false
+          description: "Berechneter Spannungswinkel in Grad."
+        }
+      ]
+    }
+  }
+}

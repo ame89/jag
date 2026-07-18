@@ -1,0 +1,576 @@
+// Gruppe 3: Transformatoren. ✅ Zweipol: PowerTransformer. ❌ Anhängsel (am
+// PowerTransformer-Zweipol verankert): PowerTransformerEnd, RatioTapChanger,
+// TapChangerControl, SvTapStep, PhaseTapChanger{Linear,Asymmetrical,
+// Symmetrical,Tabular}, {Ratio,Phase}TapChangerTable(Point) (Katalog).
+//
+// Erinnerung (Konzept.md, Transformer-Entscheidung): JAG modelliert den
+// Transformator selbst als EINEN gewöhnlichen Zweipol (OS-Knoten direkt mit
+// US-Knoten verbunden, KEIN Vierpol mit virtuellem Sternpunktknoten).
+// Seitenspezifische Werte (z.B. OS/US-Nennspannung) landen als zwei
+// getrennte Sachdaten-Gruppen auf demselben Betriebsmittel. Die folgenden
+// Anhängsel-Klassen (PowerTransformerEnd etc.) liefern genau diese
+// seitenspezifischen Werte — sie werden beim Import als Sachdaten des
+// PowerTransformer-Zweipols mitgeführt, nicht als eigene Knoten/Kanten.
+{
+  classes: {
+    PowerTransformer: {
+      description: "Transformator — bei JAG ein einzelner Zweipol (OS-Knoten <-> US-Knoten), kein Vierpol mit virtuellem Sternpunkt (siehe Konzept.md)."
+      group: Transformatoren
+      terminals: 2
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Feeder/Substation"
+          required: true
+          description: "Zugehöriges Feld/Station."
+        }
+        {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.OperationalLimitSet
+          type: "Referenz -> OperationalLimitSet"
+          required: false
+          description: "Zugehörige Betriebsgrenzwerte."
+        }
+        {
+          key: PowerTransformer.PowerTransformerEnd
+          type: "Referenz(en) -> PowerTransformerEnd"
+          required: true
+          description: "Verweis(e) auf die Wicklungsenden (typischerweise 2: OS und US)."
+        }
+        {
+          key: PowerTransformer.isPartOfGeneratorUnit
+          type: bool
+          required: false
+          description: "Kennzeichnet einen Blocktransformator (unmittelbar an einem Generator)."
+        }
+        {
+          key: PowerTransformer.operationalValuesConsidered
+          type: bool
+          required: false
+          description: "Ob die folgenden Kurzschluss-Vorlastwerte gültig/berücksichtigt sind."
+        }
+        {
+          key: PowerTransformer.beforeShCircuitHighestOperatingCurrent
+          type: float
+          required: false
+          description: "Höchster Betriebsstrom vor einem Kurzschluss, in A (Kurzschlussberechnung)."
+        }
+        {
+          key: PowerTransformer.beforeShCircuitHighestOperatingVoltage
+          type: float
+          required: false
+          description: "Höchste Betriebsspannung vor einem Kurzschluss, in kV."
+        }
+        {
+          key: PowerTransformer.beforeShortCircuitAnglePf
+          type: float
+          required: false
+          description: "Phasenwinkel/Leistungsfaktor vor einem Kurzschluss."
+        }
+        {
+          key: PowerTransformer.highSideMinOperatingU
+          type: float
+          required: false
+          description: "Minimale Betriebsspannung oberspannungsseitig, in kV."
+        }
+      ]
+    }
+    PowerTransformerEnd: {
+      description: "Ein Wicklungsende eines Transformators — genau eine Seite (OS oder US); Anhängsel des PowerTransformer-Zweipols, nicht selbst Knoten/Kante."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: false
+          description: "Eindeutige ID des Wicklungsendes."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: PowerTransformerEnd.PowerTransformer
+          type: "Referenz -> PowerTransformer"
+          required: true
+          description: "Zugehöriger Transformator."
+        }
+        {
+          key: TransformerEnd.endNumber
+          type: int
+          required: true
+          description: "Wicklungsnummer: 1 = Oberspannungsseite (OS), 2 = Unterspannungsseite (US) — analog JAG-Terminal 1/2."
+        }
+        {
+          key: TransformerEnd.Terminal
+          type: "Referenz -> Terminal"
+          required: false
+          description: "Zugehöriges CIM-Terminal (bei JAG i.d.R. nicht separat modelliert, siehe Idee.md)."
+        }
+        {
+          key: TransformerEnd.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene dieser Seite."
+        }
+        {
+          key: TransformerEnd.grounded
+          type: bool
+          required: false
+          description: "Ob der Sternpunkt dieser Seite geerdet ist."
+        }
+        {
+          key: TransformerEnd.rground
+          type: float
+          required: false
+          description: "Erdungswiderstand des Sternpunkts in Ω (nur relevant bei grounded=true)."
+        }
+        {
+          key: TransformerEnd.xground
+          type: float
+          required: false
+          description: "Erdungsreaktanz des Sternpunkts in Ω (nur relevant bei grounded=true)."
+        }
+        {
+          key: PowerTransformerEnd.ratedU
+          type: float
+          required: true
+          description: "Nennspannung dieser Seite in kV."
+        }
+        {
+          key: PowerTransformerEnd.ratedS
+          type: float
+          required: true
+          description: "Nennscheinleistung dieser Seite in MVA (bei kVA-Eingabe: Umrechnung /1000, siehe Konzept.md)."
+        }
+        {
+          key: PowerTransformerEnd.r
+          type: float
+          required: false
+          description: "Kurzschlusswiderstand (Mitsystem) in Ω."
+        }
+        {
+          key: PowerTransformerEnd.x
+          type: float
+          required: false
+          description: "Kurzschlussreaktanz (Mitsystem) in Ω."
+        }
+        {
+          key: PowerTransformerEnd.r0
+          type: float
+          required: false
+          description: "Kurzschlusswiderstand (Nullsystem) in Ω."
+        }
+        {
+          key: PowerTransformerEnd.x0
+          type: float
+          required: false
+          description: "Kurzschlussreaktanz (Nullsystem) in Ω."
+        }
+        {
+          key: PowerTransformerEnd.g
+          type: float
+          required: false
+          description: "Querleitwert (Mitsystem) in S."
+        }
+        {
+          key: PowerTransformerEnd.b
+          type: float
+          required: false
+          description: "Quersuszeptanz (Mitsystem) in S."
+        }
+        {
+          key: PowerTransformerEnd.g0
+          type: float
+          required: false
+          description: "Querleitwert (Nullsystem) in S."
+        }
+        {
+          key: PowerTransformerEnd.b0
+          type: float
+          required: false
+          description: "Quersuszeptanz (Nullsystem) in S."
+        }
+        {
+          key: PowerTransformerEnd.connectionKind
+          type: "enum (Y/D/Z/...)"
+          required: false
+          description: "Schaltgruppen-Wicklungsart (Stern/Dreieck/Zickzack)."
+        }
+        {
+          key: PowerTransformerEnd.phaseAngleClock
+          type: int
+          required: false
+          description: "Schaltgruppen-Uhrzeigerzahl (0-11)."
+        }
+      ]
+    }
+    RatioTapChanger: {
+      description: "Stufensteller für reine Übersetzungsverhältnis-Regelung (ohne Phasendrehung) — Anhängsel eines PowerTransformerEnd."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: TapChanger.TransformerEnd
+          type: "Referenz -> PowerTransformerEnd"
+          required: true
+          description: "Zugehöriges Wicklungsende."
+        }
+        {
+          key: TapChanger.lowStep
+          type: int
+          required: true
+          description: "Niedrigste Stufennummer."
+        }
+        {
+          key: TapChanger.highStep
+          type: int
+          required: true
+          description: "Höchste Stufennummer."
+        }
+        {
+          key: TapChanger.neutralStep
+          type: int
+          required: true
+          description: "Neutralstufe (Übersetzungsverhältnis 1:1 nominal)."
+        }
+        {
+          key: TapChanger.normalStep
+          type: int
+          required: false
+          description: "Normal eingestellte Stufe."
+        }
+        {
+          key: TapChanger.neutralU
+          type: float
+          required: false
+          description: "Spannung an der Neutralstufe in kV."
+        }
+        {
+          key: RatioTapChanger.stepVoltageIncrement
+          type: float
+          required: true
+          description: "Spannungsänderung pro Stufe in %."
+        }
+        {
+          key: RatioTapChanger.RatioTapChangerTable
+          type: "Referenz -> RatioTapChangerTable"
+          required: false
+          description: "Alternative zu stepVoltageIncrement: tabellarische Stufenwerte (Katalog)."
+        }
+      ]
+    }
+    TapChangerControl: {
+      description: "Regelvorschrift eines Stufenstellers (Sollwert, Totband) — Anhängsel, kein eigenes Betriebsmittel."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: RegulatingControl.targetValue
+          type: float
+          required: true
+          description: "Sollwert (z.B. Zielspannung)."
+        }
+        {
+          key: RegulatingControl.targetDeadband
+          type: float
+          required: false
+          description: "Totband um den Sollwert, in dem nicht nachgeregelt wird."
+        }
+        {
+          key: RegulatingControl.enabled
+          type: bool
+          required: false
+          description: "Ob die Regelung aktiv ist."
+        }
+      ]
+    }
+    SvTapStep: {
+      description: "SV-Profil-Zustandsvariable: berechnete/aktuelle Stufenstellung nach einer Lastflussberechnung (kein eigenständiges Betriebsmittel)."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: SvTapStep.TapChanger
+          type: "Referenz -> RatioTapChanger/PhaseTapChanger"
+          required: true
+          description: "Zugehöriger Stufensteller."
+        }
+        {
+          key: SvTapStep.position
+          type: int
+          required: true
+          description: "Berechnete/aktuelle Stufenposition."
+        }
+      ]
+    }
+    PhaseTapChangerLinear: {
+      description: "Stufensteller mit linearer Phasendrehung pro Stufe — Anhängsel eines PowerTransformerEnd."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: TapChanger.TransformerEnd
+          type: "Referenz -> PowerTransformerEnd"
+          required: true
+          description: "Zugehöriges Wicklungsende."
+        }
+        {
+          key: TapChanger.lowStep
+          type: int
+          required: true
+          description: "Niedrigste Stufennummer."
+        }
+        {
+          key: TapChanger.highStep
+          type: int
+          required: true
+          description: "Höchste Stufennummer."
+        }
+        {
+          key: TapChanger.neutralStep
+          type: int
+          required: true
+          description: "Neutralstufe."
+        }
+        {
+          key: PhaseTapChangerLinear.stepPhaseShiftIncrement
+          type: float
+          required: true
+          description: "Phasenverschiebung pro Stufe in Grad."
+        }
+        {
+          key: PhaseTapChangerLinear.xStepMin
+          type: float
+          required: false
+          description: "Reaktanz an der niedrigsten Stufe in Ω."
+        }
+        {
+          key: PhaseTapChangerLinear.xStepMax
+          type: float
+          required: false
+          description: "Reaktanz an der höchsten Stufe in Ω."
+        }
+      ]
+    }
+    PhaseTapChangerAsymmetrical: {
+      description: "Stufensteller mit asymmetrischer Spannungs-/Phasenregelung — Anhängsel eines PowerTransformerEnd."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: TapChanger.TransformerEnd
+          type: "Referenz -> PowerTransformerEnd"
+          required: true
+          description: "Zugehöriges Wicklungsende."
+        }
+        {
+          key: TapChanger.lowStep
+          type: int
+          required: true
+          description: "Niedrigste Stufennummer."
+        }
+        {
+          key: TapChanger.highStep
+          type: int
+          required: true
+          description: "Höchste Stufennummer."
+        }
+        {
+          key: PhaseTapChangerNonLinear.voltageStepIncrement
+          type: float
+          required: true
+          description: "Spannungsänderung pro Stufe in %."
+        }
+        {
+          key: PhaseTapChangerAsymmetrical.windingConnectionAngle
+          type: float
+          required: true
+          description: "Wicklungs-Anschlusswinkel in Grad."
+        }
+      ]
+    }
+    PhaseTapChangerSymmetrical: {
+      description: "Stufensteller mit symmetrischer Phasenregelung (reine Phasendrehung, keine Spannungsänderung am Nennpunkt) — Anhängsel eines PowerTransformerEnd."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: TapChanger.TransformerEnd
+          type: "Referenz -> PowerTransformerEnd"
+          required: true
+          description: "Zugehöriges Wicklungsende."
+        }
+        {
+          key: TapChanger.lowStep
+          type: int
+          required: true
+          description: "Niedrigste Stufennummer."
+        }
+        {
+          key: TapChanger.highStep
+          type: int
+          required: true
+          description: "Höchste Stufennummer."
+        }
+        {
+          key: PhaseTapChangerNonLinear.voltageStepIncrement
+          type: float
+          required: true
+          description: "Spannungsänderung pro Stufe in %."
+        }
+      ]
+    }
+    PhaseTapChangerTabular: {
+      description: "Stufensteller mit tabellarisch definierten Stufenwerten (statt Formel) — Anhängsel eines PowerTransformerEnd."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: TapChanger.TransformerEnd
+          type: "Referenz -> PowerTransformerEnd"
+          required: true
+          description: "Zugehöriges Wicklungsende."
+        }
+        {
+          key: TapChanger.lowStep
+          type: int
+          required: true
+          description: "Niedrigste Stufennummer."
+        }
+        {
+          key: TapChanger.highStep
+          type: int
+          required: true
+          description: "Höchste Stufennummer."
+        }
+        {
+          key: PhaseTapChangerTabular.PhaseTapChangerTable
+          type: "Referenz -> PhaseTapChangerTable"
+          required: true
+          description: "Verweis auf die Stufentabelle (Katalog)."
+        }
+      ]
+    }
+    RatioTapChangerTable: {
+      description: "Katalogeintrag: tabellarische Übersetzungsverhältnis-Stufenwerte, potenziell von mehreren RatioTapChangern gleichen Trafotyps geteilt (Katalog)."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Stufentabelle."
+        }
+      ]
+    }
+    RatioTapChangerTablePoint: {
+      description: "Eine Zeile einer RatioTapChangerTable (Katalog, nicht eigentümerspezifisch)."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: TapChangerTablePoint.TapChangerTable
+          type: "Referenz -> RatioTapChangerTable"
+          required: true
+          description: "Zugehörige Stufentabelle."
+        }
+        {
+          key: TapChangerTablePoint.step
+          type: int
+          required: true
+          description: "Stufennummer dieser Zeile."
+        }
+        {
+          key: TapChangerTablePoint.ratio
+          type: float
+          required: true
+          description: "Übersetzungsverhältnis an dieser Stufe."
+        }
+      ]
+    }
+    PhaseTapChangerTable: {
+      description: "Katalogeintrag: tabellarische Phasenregel-Stufenwerte, potenziell von mehreren PhaseTapChangern gleichen Trafotyps geteilt (Katalog)."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Stufentabelle."
+        }
+      ]
+    }
+    PhaseTapChangerTablePoint: {
+      description: "Eine Zeile einer PhaseTapChangerTable (Katalog, nicht eigentümerspezifisch)."
+      group: Transformatoren
+      terminals: 0
+      attributes: [
+        {
+          key: TapChangerTablePoint.TapChangerTable
+          type: "Referenz -> PhaseTapChangerTable"
+          required: true
+          description: "Zugehörige Stufentabelle."
+        }
+        {
+          key: TapChangerTablePoint.step
+          type: int
+          required: true
+          description: "Stufennummer dieser Zeile."
+        }
+        {
+          key: TapChangerTablePoint.ratio
+          type: float
+          required: true
+          description: "Übersetzungsverhältnis an dieser Stufe."
+        }
+        {
+          key: PhaseTapChangerTablePoint.angle
+          type: float
+          required: true
+          description: "Phasenverschiebung an dieser Stufe, in Grad."
+        }
+      ]
+    }
+  }
+}

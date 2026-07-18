@@ -125,11 +125,20 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 	if err != nil {
 		return nil, err
 	}
+	// PSRType is a tiny, model-size-independent class (a fixed enum of
+	// station kinds, not one entry per station) — scanning it whole here is
+	// fine even for BuildContainers' otherwise per-class-scan design; see
+	// classifyStationType's doc comment for why this is data-driven rather
+	// than dialect-flagged.
+	_, psrIdx, err := scanClass(store, version, chunkSize, "PSRType")
+	if err != nil {
+		return nil, err
+	}
 	subSet := map[string]bool{}
 	for _, id := range subIDs {
 		subSet[id] = true
 		res.Containers = append(res.Containers, coremodel.Container{
-			ID: id, Type: ContainerTypeSubstation,
+			ID: id, Type: classifyStationType(subIdx, psrIdx, id),
 		})
 		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: subIdx.NameOf(id)})
 	}

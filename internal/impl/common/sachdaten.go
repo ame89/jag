@@ -287,12 +287,24 @@ func collectAttributesBatch(store staging.Store, version uint64, equipmentIDs []
 					if structuralClasses[class] || irrelevantClasses[class] {
 						continue // never walked into as a satellite
 					}
-					if hasEquipmentContainerAttr(records) {
+					if hasEquipmentContainerAttr(records) && !isPowerElectronicsUnitSatellite(records) {
 						continue // belongs to its own Equipment, not a satellite of ownerID
 					}
 				}
 
 				out, neighbors := attributesAndNeighbors(w.ownerID, objID, records, referencing[objID])
+				if isRoot {
+					// See AttributeKeyClass's doc comment: only the root
+					// Equipment's own raw CIM class is recorded under this
+					// key, never a satellite's.
+					out = append(out, coremodel.Attribute{OwnerID: w.ownerID, Key: AttributeKeyClass, Value: class})
+				} else {
+					// See AttributeKeySatelliteClass's doc comment: record
+					// every folded satellite's own raw CIM class too, so a
+					// folded object (e.g. a Wallbox) is identifiable even
+					// though its data is merged into the root's Sachdaten.
+					out = append(out, coremodel.Attribute{OwnerID: w.ownerID, Key: AttributeKeySatelliteClass, Value: class})
+				}
 				w.attrs = append(w.attrs, out...)
 				if DisableSatelliteWalk {
 					continue // experiment: never expand past the root object at all
@@ -328,6 +340,32 @@ func collectAttributesBatch(store staging.Store, version uint64, equipmentIDs []
 func hasEquipmentContainerAttr(records []model.StagingRecord) bool {
 	for _, r := range records {
 		if r.Attribute == "Equipment.EquipmentContainer" {
+			return true
+		}
+	}
+	return false
+}
+
+// isPowerElectronicsUnitSatellite reports whether records belong to a
+// PowerElectronicsUnit satellite (PhotoVoltaicUnit, BatteryUnit, Wallbox,
+// Heatpump, AirConditioningUnit, ...) — recognized generically by carrying
+// a PowerElectronicsUnit.PowerElectronicsConnection reference, exactly like
+// container.go's own satellite detection (see its "Pass 1: propagate
+// PowerElectronicsUnit satellite containers" comment). Such satellites DO
+// carry their own Equipment.EquipmentContainer (like real Equipment) but
+// are deliberately never given their own node-edge model Equipment/
+// EquipmentToCont entry (container.go, no Terminals of their own) — their
+// data is meant to be folded into their owning PowerElectronicsConnection's
+// Sachdaten instead (see Idee.md's "Steuerbeziehungen"/PowerElectronicsUnit
+// decision). Without this exception, hasEquipmentContainerAttr would wrongly
+// treat them as "belongs to its own OTHER Equipment" and skip them entirely
+// during the satellite walk — a real bug found 2026-07-18 while exporting a
+// house with a Wallbox (STEU-24) whose PowerElectronicsUnit.minP/maxP/
+// technicalResourceIdentifier attributes silently never reached the owning
+// PowerElectronicsConnection's (PEC-24) exported Sachdaten.
+func isPowerElectronicsUnitSatellite(records []model.StagingRecord) bool {
+	for _, r := range records {
+		if r.Attribute == "PowerElectronicsUnit.PowerElectronicsConnection" {
 			return true
 		}
 	}

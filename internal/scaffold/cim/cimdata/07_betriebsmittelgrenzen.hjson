@@ -1,0 +1,126 @@
+// Gruppe 7: Betriebsmittelgrenzen. Alle ❌ Metadaten (Grenzwerte, kein
+// eigenes Betriebsmittel): OperationalLimitSet, CurrentLimit, VoltageLimit,
+// OperationalLimitType (Katalog), DiscreteControlLimit.
+{
+  classes: {
+    OperationalLimitSet: {
+      description: "Gruppierung mehrerer Grenzwerte (Current-/VoltageLimit) für ein Betriebsmittel oder Terminal — reines Metadatenobjekt."
+      group: Betriebsmittelgrenzen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: OperationalLimitSet.Equipment
+          type: "Referenz -> Equipment"
+          required: false
+          description: "Zugehöriges Betriebsmittel (alternativ zu Terminal)."
+        }
+        {
+          key: OperationalLimitSet.Terminal
+          type: "Referenz -> Terminal"
+          required: false
+          description: "Zugehöriges Terminal (alternativ zu Equipment)."
+        }
+      ]
+    }
+    CurrentLimit: {
+      description: "Ein Stromgrenzwert innerhalb eines OperationalLimitSet."
+      group: Betriebsmittelgrenzen
+      terminals: 0
+      attributes: [
+        {
+          key: OperationalLimit.OperationalLimitSet
+          type: "Referenz -> OperationalLimitSet"
+          required: true
+          description: "Zugehörige Grenzwertgruppe."
+        }
+        {
+          key: OperationalLimit.OperationalLimitType
+          type: "Referenz -> OperationalLimitType"
+          required: false
+          description: "Art des Grenzwerts (z.B. Dauerbetrieb/Kurzzeitbetrieb)."
+        }
+        {
+          key: CurrentLimit.value
+          type: "float (A)"
+          required: true
+          description: "Zulässiger Stromgrenzwert in A."
+        }
+      ]
+    }
+    VoltageLimit: {
+      description: "Ein Spannungsgrenzwert innerhalb eines OperationalLimitSet."
+      group: Betriebsmittelgrenzen
+      terminals: 0
+      attributes: [
+        {
+          key: OperationalLimit.OperationalLimitSet
+          type: "Referenz -> OperationalLimitSet"
+          required: true
+          description: "Zugehörige Grenzwertgruppe."
+        }
+        {
+          key: VoltageLimit.value
+          type: "float (kV)"
+          required: true
+          description: "Zulässiger Spannungsgrenzwert in kV."
+        }
+      ]
+    }
+    OperationalLimitType: {
+      description: "Katalogeintrag: eine wiederverwendbare Grenzwertart (z.B. \"PATL\"/\"TATL\"), von vielen OperationalLimit-Objekten geteilt (Katalog)."
+      group: Betriebsmittelgrenzen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Grenzwertart."
+        }
+        {
+          key: OperationalLimitType.acceptableDuration
+          type: "float (s)"
+          required: false
+          description: "Zulässige Dauer der Grenzwertüberschreitung in Sekunden."
+        }
+      ]
+    }
+    DiscreteControlLimit: {
+      description: "Eine diskrete Steuerstufe, die eine RegulatingControl mit discrete=true ergänzt (z.B. Steuerbox-Stufen bei steuVA/steuEA)."
+      group: Betriebsmittelgrenzen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: DiscreteControlLimit.RegulatingControl
+          type: "Referenz -> RegulatingControl"
+          required: true
+          description: "Zugehörige Regelvorschrift."
+        }
+        {
+          key: DiscreteControlLimit.sequenceNumber
+          type: int
+          required: true
+          description: "Stufennummer."
+        }
+        {
+          key: DiscreteControlLimit.value
+          type: float
+          required: true
+          description: "Wert dieser Steuerstufe."
+        }
+      ]
+    }
+  }
+}

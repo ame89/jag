@@ -1,0 +1,140 @@
+// Gruppe 14: Gruppierungen. Alle ❌ Gruppierung (kein Zweipol, kein
+// Anhängsel): TopologicalIsland, ConformLoadGroup, LoadArea, SubLoadArea,
+// ControlArea, ControlAreaGeneratingUnit, TieFlow.
+{
+  classes: {
+    TopologicalIsland: {
+      description: "SV-Profil: Gruppierung aller TopologicalNode, die nach der Lastflussberechnung elektrisch zusammenhängen (galvanisch verbundenes Inselnetz) — Berechnungsergebnis, kein eigenes Betriebsmittel."
+      group: Gruppierungen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung der Insel."
+        }
+        {
+          key: TopologicalIsland.AngleRefTopologicalNode
+          type: "Referenz -> TopologicalNode"
+          required: false
+          description: "Referenzknoten für den Winkelbezug (Slack)."
+        }
+        {
+          key: TopologicalIsland.TopologicalNodes
+          type: "Referenz -> TopologicalNode[]"
+          required: true
+          description: "Zur Insel gehörende Knoten."
+        }
+      ]
+    }
+    ConformLoadGroup: {
+      description: "Gruppierung mehrerer ConformLoad zu einer Lastgruppe (z.B. für Lastprognosen) — reines Gruppierungsobjekt, kein eigenes Betriebsmittel."
+      group: Gruppierungen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung der Lastgruppe."
+        }
+        {
+          key: ConformLoadGroup.SubLoadArea
+          type: "Referenz -> SubLoadArea"
+          required: false
+          description: "Übergeordnetes Lastgebiet."
+        }
+      ]
+    }
+    LoadArea: {
+      description: "Oberstes Lastgebiet (z.B. Versorgungsgebiet) — reine geografisch-statistische Gruppierung, keine JAG-Containerhierarchie."
+      group: Gruppierungen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung des Lastgebiets."
+        }
+      ]
+    }
+    SubLoadArea: {
+      description: "Untergeordnetes Lastgebiet innerhalb eines LoadArea — reine Gruppierung."
+      group: Gruppierungen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung des Teilgebiets."
+        }
+        {
+          key: SubLoadArea.LoadArea
+          type: "Referenz -> LoadArea"
+          required: true
+          description: "Übergeordnetes Lastgebiet."
+        }
+      ]
+    }
+    ControlArea: {
+      description: "Regelzone/Bilanzkreis, der mehrere GeneratingUnit über ControlAreaGeneratingUnit und Grenzübergänge über TieFlow bündelt — reines Gruppierungsobjekt, kein eigenes Betriebsmittel."
+      group: Gruppierungen
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Regelzone."
+        }
+        {
+          key: ControlArea.netInterchange
+          type: "float (MW)"
+          required: false
+          description: "Geplanter Netto-Leistungsaustausch in MW."
+        }
+      ]
+    }
+    ControlAreaGeneratingUnit: {
+      description: "Zuordnung einer GeneratingUnit zu einer ControlArea — reines Zuordnungsobjekt, kein eigenes Betriebsmittel."
+      group: Gruppierungen
+      terminals: 0
+      attributes: [
+        {
+          key: ControlAreaGeneratingUnit.ControlArea
+          type: "Referenz -> ControlArea"
+          required: true
+          description: "Zugehörige Regelzone."
+        }
+        {
+          key: ControlAreaGeneratingUnit.GeneratingUnit
+          type: "Referenz -> GeneratingUnit"
+          required: true
+          description: "Zugeordnete Erzeugungseinheit."
+        }
+      ]
+    }
+    TieFlow: {
+      description: "Grenzübergangs-Leistungsfluss eines Terminal an der Grenze einer ControlArea — reines Zuordnungs-/Berechnungsobjekt, kein eigenes Betriebsmittel."
+      group: Gruppierungen
+      terminals: 0
+      attributes: [
+        {
+          key: TieFlow.ControlArea
+          type: "Referenz -> ControlArea"
+          required: true
+          description: "Zugehörige Regelzone."
+        }
+        {
+          key: TieFlow.Terminal
+          type: "Referenz -> Terminal"
+          required: true
+          description: "Grenzterminal."
+        }
+      ]
+    }
+  }
+}

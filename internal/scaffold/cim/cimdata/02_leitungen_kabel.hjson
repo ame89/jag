@@ -1,0 +1,220 @@
+// Gruppe 2: Leitungen/Kabel. ✅ Zweipole: ACLineSegment, Line, Junction.
+// ❌ Metadaten (Katalog): PerLengthSequenceImpedance.
+{
+  classes: {
+    ACLineSegment: {
+      description: "Ein Kabel- oder Leitungsabschnitt (Zweipol) — mehrere ACLineSegments bilden zusammen, getrennt durch Durchgangsmuffen, ein JAG-ACLine (siehe Konzept.md, topologische ACLine-Grenze)."
+      group: "Leitungen/Kabel"
+      terminals: 2
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Line"
+          required: false
+          description: "Roher CIM-Line-Verweis — bei JAG NICHT für die Container-Zuordnung vertraut (siehe Konzept.md), nur als Sachdaten-Referenz mitgeführt."
+        }
+        {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.OperationalLimitSet
+          type: "Referenz -> OperationalLimitSet"
+          required: false
+          description: "Zugehörige Betriebsgrenzwerte."
+        }
+        {
+          key: Conductor.length
+          type: float
+          required: true
+          description: "Leitungslänge in km."
+        }
+        {
+          key: ACLineSegment.r
+          type: float
+          required: true
+          description: "Wirkwiderstand (Mitsystem) in Ω."
+        }
+        {
+          key: ACLineSegment.x
+          type: float
+          required: true
+          description: "Blindwiderstand/Reaktanz (Mitsystem) in Ω."
+        }
+        {
+          key: ACLineSegment.r0
+          type: float
+          required: false
+          description: "Wirkwiderstand (Nullsystem) in Ω."
+        }
+        {
+          key: ACLineSegment.x0
+          type: float
+          required: false
+          description: "Blindwiderstand (Nullsystem) in Ω."
+        }
+        {
+          key: ACLineSegment.gch
+          type: float
+          required: false
+          description: "Querleitwert (Mitsystem) in S."
+        }
+        {
+          key: ACLineSegment.bch
+          type: float
+          required: false
+          description: "Quersuszeptanz (Mitsystem) in S."
+        }
+        {
+          key: ACLineSegment.g0ch
+          type: float
+          required: false
+          description: "Querleitwert (Nullsystem) in S."
+        }
+        {
+          key: ACLineSegment.b0ch
+          type: float
+          required: false
+          description: "Quersuszeptanz (Nullsystem) in S."
+        }
+        {
+          key: ACLineSegment.shortCircuitEndTemperature
+          type: float
+          required: false
+          description: "Kurzschluss-Endtemperatur in °C (für die Kurzschlussstromberechnung)."
+        }
+        {
+          key: ACLineSegment.PerLengthImpedance
+          type: "Referenz -> PerLengthSequenceImpedance"
+          required: false
+          description: "NSC-Dialekt-Alternative zu direkten r/x/r0/x0-Werten: Verweis auf einen Kabeltyp-Katalogeintrag."
+        }
+        {
+          key: PowerSystemResource.Location
+          type: "Referenz -> Location"
+          required: false
+          description: "Geografischer Verlauf (Referenz auf Location/PositionPoint-Kette)."
+        }
+      ]
+    }
+    Line: {
+      description: "Reine CIM-Gruppierung mehrerer ACLineSegments zu einer benannten Leitung — bei JAG NICHT für die ACLine-Container-Bildung vertraut (rein topologisch abgeleitet, siehe Konzept.md)."
+      group: "Leitungen/Kabel"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+      ]
+    }
+    Junction: {
+      description: "Kabelmuffe (Verbindungsstelle zweier oder mehr Kabelenden). Eine Durchgangsmuffe (2 Anschlüsse) verlängert ein ACLine nur; eine Abzweigmuffe/T-Muffe (3+ Anschlüsse) ist ein echter topologischer Verzweigungspunkt und beendet/beginnt mehrere ACLines (siehe Konzept.md)."
+      group: "Leitungen/Kabel"
+      terminals: n
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Substation/ACLine"
+          required: false
+          description: "Container-Zuordnung, falls vorhanden (eine freistehende Muffe außerhalb einer Station hat oft keinen)."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: PowerSystemResource.Location
+          type: "Referenz -> Location"
+          required: false
+          description: "Geografische Position."
+        }
+      ]
+    }
+    PerLengthSequenceImpedance: {
+      description: "Katalogeintrag eines Kabel-/Leitungstyps (Impedanzbelag pro Länge), von vielen ACLineSegments gemeinsam referenziert (Katalog, kein eigenes Betriebsmittel)."
+      group: "Leitungen/Kabel"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung des Kabeltyps (z.B. \"NYY_4x70mm\")."
+        }
+        {
+          key: PerLengthSequenceImpedance.r
+          type: float
+          required: true
+          description: "Wirkwiderstandsbelag (Mitsystem) in Ω/km."
+        }
+        {
+          key: PerLengthSequenceImpedance.x
+          type: float
+          required: true
+          description: "Reaktanzbelag (Mitsystem) in Ω/km."
+        }
+        {
+          key: PerLengthSequenceImpedance.r0
+          type: float
+          required: false
+          description: "Wirkwiderstandsbelag (Nullsystem) in Ω/km."
+        }
+        {
+          key: PerLengthSequenceImpedance.x0
+          type: float
+          required: false
+          description: "Reaktanzbelag (Nullsystem) in Ω/km."
+        }
+      ]
+    }
+  }
+}

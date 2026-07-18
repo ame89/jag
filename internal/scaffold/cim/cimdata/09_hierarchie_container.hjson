@@ -1,0 +1,204 @@
+// Gruppe 9: Hierarchie/Container. Alle ❌ Gruppierung/Hierarchie (kein
+// Zweipol, kein Anhängsel): Substation, VoltageLevel, Bay, Feeder, Equipment
+// (Basisklasse), GeographicalRegion, SubGeographicalRegion, Building,
+// UsagePoint, UsagePointLocation.
+{
+  classes: {
+    Substation: {
+      description: "Station (Oberbegriff für Ortsnetzstation/ONS, Umschaltwerk, Mittelspannungsschaltanlage) — JAG-Containertyp \"substation\"; Wurzel der \"Station structure\"/\"Busbar structure\" Pfadvorlagen."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Menschlich lesbarer Name der Station."
+        }
+        {
+          key: Substation.Region
+          type: "Referenz -> SubGeographicalRegion"
+          required: false
+          description: "Zugehörige geografische (Unter-)Region."
+        }
+        {
+          key: station_kind
+          type: string
+          required: true
+          description: "JAG-Sachdaten-Schlüssel zur Unterscheidung der Stationsart: Substation/Umschaltwerk/Mittelspannungsschaltanlage/Ortsnetzstation (kein eigener Containertyp)."
+        }
+        {
+          key: region
+          type: string
+          required: false
+          description: "JAG-Sachdaten-Schlüssel Netzregion (freier Text, z.B. \"Nord\"/\"nord\" — case-insensitiv normalisiert, siehe Konzept.md)."
+        }
+      ]
+    }
+    VoltageLevel: {
+      description: "CIM-Spannungsebene innerhalb einer Substation. Im NSC-Dialekt entfällt diese Ebene (BusbarSection hängt direkt unter Substation) — bei CGMES bleibt sie als reines Gruppierungsobjekt erhalten, kein eigener JAG-Containertyp."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: VoltageLevel.Substation
+          type: "Referenz -> Substation"
+          required: true
+          description: "Übergeordnete Station."
+        }
+        {
+          key: VoltageLevel.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: true
+          description: "Nennspannungsebene."
+        }
+      ]
+    }
+    Bay: {
+      description: "Feld innerhalb einer Station (Abgangsfeld/Einspeisefeld) — JAG-Containertyp \"bay\"."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Menschlich lesbarer Name des Felds."
+        }
+        {
+          key: Bay.VoltageLevel
+          type: "Referenz -> VoltageLevel"
+          required: false
+          description: "Übergeordnete Spannungsebene (CGMES) — bei NSC ggf. direkt die Station, siehe Feeder."
+        }
+      ]
+    }
+    Feeder: {
+      description: "NSC-Pendant zu Bay (Feld) — wird von JAG auf denselben Containertyp \"bay\" abgebildet."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Menschlich lesbarer Name des Feeders."
+        }
+        {
+          key: Feeder.NormalEnergizingSubstation
+          type: "Referenz -> Substation"
+          required: true
+          description: "Versorgende/übergeordnete Station."
+        }
+      ]
+    }
+    Equipment: {
+      description: "CIM-Basisklasse für alle Betriebsmittel (abstrakt) — dient nur der Container-/Sachdaten-Referenzierung, wird nicht direkt instanziiert; siehe die konkreten Zweipol-Klassen in den anderen Gruppen."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Substation/VoltageLevel/Line/..."
+          required: true
+          description: "Zugehöriger Container (jedes konkrete Betriebsmittel referenziert genau einen Container)."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand (in Betrieb/außer Betrieb)."
+        }
+      ]
+    }
+    GeographicalRegion: {
+      description: "Oberste geografische Gruppierungsebene (z.B. Bundesland/Netzgebiet) — keine JAG-Containerhierarchie, nur lose Gruppierung analog zu Netzregion, siehe Konzept.md."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Region."
+        }
+      ]
+    }
+    SubGeographicalRegion: {
+      description: "Untergeordnete geografische Region innerhalb einer GeographicalRegion — von Substation.Region referenziert."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Unterregion."
+        }
+        {
+          key: SubGeographicalRegion.Region
+          type: "Referenz -> GeographicalRegion"
+          required: true
+          description: "Übergeordnete Region."
+        }
+      ]
+    }
+    Building: {
+      description: "NSC-spezifische Klasse für ein Gebäude (z.B. Wohnhaus mit Hausanschluss) — JAG-Containertyp \"house\"."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name/Adresse."
+        }
+      ]
+    }
+    UsagePoint: {
+      description: "NSC-spezifisch: Zählpunkt/Verbrauchsstelle (MeLo/Messlokation) — Metadaten-/Gruppierungsobjekt, kein eigenes Betriebsmittel."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Bezeichnung/Nummer des Zählpunkts (z.B. MeLo-ID)."
+        }
+        {
+          key: UsagePoint.UsagePointLocation
+          type: "Referenz -> UsagePointLocation"
+          required: false
+          description: "Zugehörige Ortsangabe."
+        }
+        {
+          key: UsagePoint.Equipments
+          type: "Referenz -> Equipment[]"
+          required: false
+          description: "Zugeordnete Betriebsmittel (z.B. Meter, PowerElectronicsConnection)."
+        }
+      ]
+    }
+    UsagePointLocation: {
+      description: "NSC-spezifisch: Ortsangabe eines UsagePoint (Adresse/Koordinate) — Metadatenobjekt, keine JAG-Geometrie im Sinne von Node/Edge."
+      group: "Hierarchie/Container"
+      terminals: 0
+      attributes: [
+        {
+          key: UsagePointLocation.mainAddress
+          type: string
+          required: false
+          description: "Adresse der Verbrauchsstelle."
+        }
+      ]
+    }
+  }
+}

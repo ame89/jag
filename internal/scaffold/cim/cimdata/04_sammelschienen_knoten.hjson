@@ -1,0 +1,222 @@
+// Gruppe 4: Sammelschienen/Knoten. Alle ❌ Gruppierung/Hierarchie (Knoten
+// statt Kante im JAG-Modell): BusbarSection, ConnectivityNode,
+// TopologicalNode, BusNameMarker, Terminal.
+{
+  classes: {
+    BusbarSection: {
+      description: "Sammelschienenabschnitt — bei JAG ein Knoten (Node-Rolle), keine Kante; kann mehrere Terminals haben (ein Abgang pro Feeder), siehe common.nodeRoleClasses."
+      group: "Sammelschienen/Knoten"
+      terminals: n
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/VoltageLevel/Substation"
+          required: true
+          description: "Zugehöriges Feld bzw. direkt die Station (NSC-Dialekt überspringt VoltageLevel)."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: BusbarSection.ipMax
+          type: float
+          required: false
+          description: "Max. zulässiger Stoßkurzschlussstrom in A."
+        }
+      ]
+    }
+    ConnectivityNode: {
+      description: "Physischer Verbindungspunkt zwischen Terminals (node-breaker-Modell) — bei JAG die technische Knoten-ID, keine eigene Sachdaten-Entität im engeren Sinn."
+      group: "Sammelschienen/Knoten"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name (in Testdaten oft nicht belegt)."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: ConnectivityNode.ConnectivityNodeContainer
+          type: "Referenz -> Bay/VoltageLevel/Substation"
+          required: true
+          description: "Übergeordneter Container."
+        }
+        {
+          key: ConnectivityNode.TopologicalNode
+          type: "Referenz -> TopologicalNode"
+          required: false
+          description: "Zuordnung zum elektrischen Knoten nach Nullohm-Reduktion."
+        }
+      ]
+    }
+    TopologicalNode: {
+      description: "Elektrischer Knoten NACH Nullohm-Reduktion (bus-branch-Modell) — entspricht in etwa JAGs elektrischer Topologie-Sicht, aber ein eigenständiges CIM/SV-Profil-Konzept."
+      group: "Sammelschienen/Knoten"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: TopologicalNode.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: TopologicalNode.ConnectivityNodeContainer
+          type: "Referenz -> Bay/VoltageLevel/Substation"
+          required: false
+          description: "Übergeordneter Container."
+        }
+        {
+          key: TopologicalNode.Terminal
+          type: "Referenz(en) -> Terminal"
+          required: false
+          description: "Rückreferenz(en) auf zugehörige Terminals."
+        }
+        {
+          key: TopologicalNode.SvVoltage
+          type: "Referenz -> SvVoltage"
+          required: false
+          description: "Zugehöriges Spannungs-Lastflussergebnis."
+        }
+      ]
+    }
+    BusNameMarker: {
+      description: "Markiert eine Gruppe von Terminals, die (unabhängig vom Schaltzustand) demselben Sammelschienennamen zugeordnet werden sollen — reine Namensgebungs-Hilfe, kein Betriebsmittel."
+      group: "Sammelschienen/Knoten"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Sammelschienenname."
+        }
+      ]
+    }
+    Terminal: {
+      description: "Anschlusspunkt eines Betriebsmittels an einen ConnectivityNode/TopologicalNode. Bei JAG bewusst NICHT als eigenes Objekt modelliert (siehe Idee.md) — stattdessen genau 2 Terminals pro Zweipol mit fester Bedeutung: sequenceNumber 1 = Richtung höhere Spannungsebene/Trafo, 2 = Richtung Erde/GND."
+      group: "Sammelschienen/Knoten"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Terminal.ConductingEquipment
+          type: "Referenz -> ConductingEquipment"
+          required: true
+          description: "Zugehöriges Betriebsmittel."
+        }
+        {
+          key: Terminal.ConnectivityNode
+          type: "Referenz -> ConnectivityNode"
+          required: false
+          description: "Physischer Knoten, an dem dieses Terminal hängt (node-breaker-Modell)."
+        }
+        {
+          key: Terminal.TopologicalNode
+          type: "Referenz -> TopologicalNode"
+          required: false
+          description: "Elektrischer Knoten nach Nullohm-Reduktion (bus-branch-Modell, alternativ oder zusätzlich zu ConnectivityNode)."
+        }
+        {
+          key: Terminal.SvPowerFlow
+          type: "Referenz -> SvPowerFlow"
+          required: false
+          description: "Zugehöriges Lastfluss-Ergebnis."
+        }
+        {
+          key: Terminal.phases
+          type: "enum (ABC/A/B/C/...)"
+          required: false
+          description: "Phasenbelegung (bei JAGs einphasiger Vereinfachung immer ABC)."
+        }
+        {
+          key: ACDCTerminal.sequenceNumber
+          type: int
+          required: true
+          description: "1 oder 2 — legt Terminal-Richtung fest (JAG-Grundregel: 1 = Richtung höhere Spannungsebene/Trafo, 2 = Richtung Erde/GND)."
+        }
+        {
+          key: ACDCTerminal.connected
+          type: bool
+          required: false
+          description: "Ob das Terminal aktuell elektrisch verbunden ist (unabhängig vom Schaltzustand des Betriebsmittels selbst)."
+        }
+        {
+          key: ACDCTerminal.BusNameMarker
+          type: "Referenz -> BusNameMarker"
+          required: false
+          description: "Zugehörige Sammelschienen-Namensmarkierung."
+        }
+        {
+          key: ACDCTerminal.OperationalLimitSet
+          type: "Referenz -> OperationalLimitSet"
+          required: false
+          description: "Zugehörige Betriebsgrenzwerte."
+        }
+      ]
+    }
+  }
+}

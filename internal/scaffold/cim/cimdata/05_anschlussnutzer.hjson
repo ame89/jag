@@ -1,0 +1,705 @@
+// Gruppe 5: Anschlussnutzer (Erzeuger + Verbraucher + Prosumer,
+// zusammengelegt — Idee.md: die PowerElectronicsUnit-Familie nutzt für
+// Erzeuger- und Verbraucher-Rolle nahezu identische Attribute, die Rolle
+// ergibt sich rein aus der Klasse). ✅ Zweipole: SynchronousMachine,
+// AsynchronousMachine, ThermalGeneratingUnit, HydroGeneratingUnit,
+// WindGeneratingUnit, SolarGeneratingUnit, GeneratingUnit, FossilFuel,
+// PhotoVoltaicUnit, BatteryUnit, ExternalNetworkInjection,
+// EquivalentInjection, ReactiveCapabilityCurve (Katalog), CurveData
+// (Katalog), EnergyConsumer, ConformLoad, Heatpump, AirConditioningUnit.
+// ❌ Anhängsel: LoadResponseCharacteristic.
+{
+  classes: {
+    EnergyConsumer: {
+      description: "Allgemeiner Verbraucher (Zweipol, meist Single-Terminal-Senke) — z.B. ein Haushaltsanschluss ohne Erzeugung."
+      group: Anschlussnutzer
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Feeder/Building"
+          required: true
+          description: "Zugehöriges Feld/Haus."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: EnergyConsumer.p
+          type: "float (MW)"
+          required: false
+          description: "Wirkleistungsbezug in MW (bei kW-Eingabe: Umrechnung /1000, siehe Konzept.md)."
+        }
+        {
+          key: EnergyConsumer.q
+          type: "float (Mvar)"
+          required: false
+          description: "Blindleistungsbezug in Mvar."
+        }
+        {
+          key: EnergyConsumer.LoadResponse
+          type: "Referenz -> LoadResponseCharacteristic"
+          required: false
+          description: "Spannungsabhängigkeitsmodell der Last."
+        }
+      ]
+    }
+    ConformLoad: {
+      description: "Verbraucher, der einer bekannten Lastkurve/-gruppe folgt (Prognose-/Schätzmodell) — strukturell wie EnergyConsumer."
+      group: Anschlussnutzer
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Feeder"
+          required: true
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: EnergyConsumer.p
+          type: "float (MW)"
+          required: false
+          description: "Wirkleistungsbezug in MW."
+        }
+        {
+          key: EnergyConsumer.q
+          type: "float (Mvar)"
+          required: false
+          description: "Blindleistungsbezug in Mvar."
+        }
+        {
+          key: ConformLoad.LoadGroup
+          type: "Referenz -> ConformLoadGroup"
+          required: false
+          description: "Zugehörige Lastgruppe (Prognosemodell)."
+        }
+      ]
+    }
+    Heatpump: {
+      description: "Wärmepumpe — steuerbarer Verbraucher (§14a EnWG, steuVA), strukturell Teil der PowerElectronicsUnit-Familie."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Building"
+          required: false
+          description: "Zugehöriges Haus (falls direkt referenziert)."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: PowerElectronicsUnit.PowerElectronicsConnection
+          type: "Referenz -> PowerElectronicsConnection"
+          required: true
+          description: "Zugehöriger Netzanschlusspunkt (Steuerbox-Anschluss)."
+        }
+        {
+          key: PowerElectronicsUnit.marketParticipantLocationIdentifier
+          type: string
+          required: false
+          description: "MaLo-artige Markt-Lokations-ID."
+        }
+        {
+          key: PowerElectronicsUnit.maxP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Wirkleistungsaufnahme in MW."
+        }
+        {
+          key: PowerElectronicsUnit.minP
+          type: "float (MW)"
+          required: false
+          description: "Minimale Wirkleistungsaufnahme in MW."
+        }
+        {
+          key: PowerElectronicsUnit.technicalResourceIdentifier
+          type: string
+          required: false
+          description: "Technische Anlagen-ID."
+        }
+      ]
+    }
+    AirConditioningUnit: {
+      description: "Klimaanlage — steuerbarer Verbraucher (§14a EnWG, steuVA), strukturell Teil der PowerElectronicsUnit-Familie."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Building"
+          required: false
+          description: "Zugehöriges Haus."
+        }
+        {
+          key: PowerElectronicsUnit.PowerElectronicsConnection
+          type: "Referenz -> PowerElectronicsConnection"
+          required: true
+          description: "Zugehöriger Netzanschlusspunkt."
+        }
+        {
+          key: PowerElectronicsUnit.maxP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Wirkleistungsaufnahme in MW."
+        }
+        {
+          key: PowerElectronicsUnit.minP
+          type: "float (MW)"
+          required: false
+          description: "Minimale Wirkleistungsaufnahme in MW."
+        }
+      ]
+    }
+    PhotoVoltaicUnit: {
+      description: "PV-Anlage (Erzeuger-Rolle) — strukturell Teil der PowerElectronicsUnit-Familie."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Building/Bay"
+          required: false
+          description: "Zugehöriges Haus/Feld."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: PowerElectronicsUnit.PowerElectronicsConnection
+          type: "Referenz -> PowerElectronicsConnection"
+          required: true
+          description: "Zugehöriger Netzanschlusspunkt (Steuerbox-Anschluss, steuEA)."
+        }
+        {
+          key: PowerElectronicsUnit.marketParticipantLocationIdentifier
+          type: string
+          required: false
+          description: "MaLo-artige Markt-Lokations-ID."
+        }
+        {
+          key: PowerElectronicsUnit.maxP
+          type: "float (MW)"
+          required: true
+          description: "Maximale Einspeiseleistung (Peak) in MW."
+        }
+        {
+          key: PowerElectronicsUnit.minP
+          type: "float (MW)"
+          required: false
+          description: "Minimale Einspeiseleistung in MW."
+        }
+        {
+          key: PowerElectronicsUnit.technicalResourceIdentifier
+          type: string
+          required: false
+          description: "Technische Anlagen-ID."
+        }
+      ]
+    }
+    BatteryUnit: {
+      description: "Batteriespeicher (Prosumer-Rolle: Einspeisung UND Bezug möglich) — strukturell Teil der PowerElectronicsUnit-Familie."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Building/Bay"
+          required: false
+          description: "Zugehöriges Haus/Feld."
+        }
+        {
+          key: PowerElectronicsUnit.PowerElectronicsConnection
+          type: "Referenz -> PowerElectronicsConnection"
+          required: true
+          description: "Zugehöriger Netzanschlusspunkt."
+        }
+        {
+          key: PowerElectronicsUnit.maxP
+          type: "float (MW)"
+          required: true
+          description: "Maximale Lade-/Entladeleistung in MW."
+        }
+        {
+          key: PowerElectronicsUnit.minP
+          type: "float (MW)"
+          required: false
+          description: "Minimale Leistung in MW."
+        }
+        {
+          key: BatteryUnit.ratedE
+          type: "float (MWh)"
+          required: false
+          description: "Nennkapazität in MWh."
+        }
+        {
+          key: BatteryUnit.storedE
+          type: "float (MWh)"
+          required: false
+          description: "Aktuell gespeicherte Energie in MWh (Momentaufnahme, keine Live-Telemetrie bei JAG)."
+        }
+      ]
+    }
+    SynchronousMachine: {
+      description: "Synchronmaschine (Generator oder Motor, Zweipol) — z.B. klassischer Kraftwerksgenerator."
+      group: Anschlussnutzer
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: true
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: RotatingMachine.GeneratingUnit
+          type: "Referenz -> GeneratingUnit"
+          required: false
+          description: "Zugehörige Erzeugungseinheit."
+        }
+        {
+          key: RotatingMachine.p
+          type: "float (MW)"
+          required: false
+          description: "Wirkleistung in MW."
+        }
+        {
+          key: RotatingMachine.q
+          type: "float (Mvar)"
+          required: false
+          description: "Blindleistung in Mvar."
+        }
+        {
+          key: RotatingMachine.ratedS
+          type: "float (MVA)"
+          required: false
+          description: "Nennscheinleistung in MVA."
+        }
+        {
+          key: SynchronousMachine.type
+          type: "enum (generator/motor/condenser)"
+          required: false
+          description: "Betriebsart."
+        }
+      ]
+    }
+    AsynchronousMachine: {
+      description: "Asynchronmaschine (Generator oder Motor, Zweipol) — z.B. Windkraft-Asynchrongenerator."
+      group: Anschlussnutzer
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: true
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: RotatingMachine.GeneratingUnit
+          type: "Referenz -> GeneratingUnit"
+          required: false
+          description: "Zugehörige Erzeugungseinheit."
+        }
+        {
+          key: RotatingMachine.p
+          type: "float (MW)"
+          required: false
+          description: "Wirkleistung in MW."
+        }
+        {
+          key: RotatingMachine.q
+          type: "float (Mvar)"
+          required: false
+          description: "Blindleistung in Mvar."
+        }
+        {
+          key: RotatingMachine.ratedS
+          type: "float (MVA)"
+          required: false
+          description: "Nennscheinleistung in MVA."
+        }
+      ]
+    }
+    GeneratingUnit: {
+      description: "Erzeugungseinheit — Metadaten-/Gruppierungsobjekt über eine oder mehrere rotierende Maschinen (kein eigener Zweipol; die Zuordnung erfolgt als ✅ in Idee.md, da faktisch Bestandteil des Erzeuger-Zweipols)."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: GeneratingUnit.maxOperatingP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Betriebsleistung in MW."
+        }
+        {
+          key: GeneratingUnit.minOperatingP
+          type: "float (MW)"
+          required: false
+          description: "Minimale Betriebsleistung in MW."
+        }
+        {
+          key: GeneratingUnit.ratedNetMaxP
+          type: "float (MW)"
+          required: false
+          description: "Nenn-Nettohöchstleistung in MW."
+        }
+        {
+          key: GeneratingUnit.genControlSource
+          type: "enum"
+          required: false
+          description: "Art der Leistungsregelung (z.B. unregulated/offAGC/onAGC)."
+        }
+      ]
+    }
+    ThermalGeneratingUnit: {
+      description: "Wärmekraftwerks-Erzeugungseinheit (Gas/Kohle/...) — Spezialisierung von GeneratingUnit."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: GeneratingUnit.maxOperatingP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Betriebsleistung in MW."
+        }
+      ]
+    }
+    HydroGeneratingUnit: {
+      description: "Wasserkraftwerks-Erzeugungseinheit — Spezialisierung von GeneratingUnit."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: GeneratingUnit.maxOperatingP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Betriebsleistung in MW."
+        }
+        {
+          key: HydroGeneratingUnit.hydroUnitWaterCost
+          type: float
+          required: false
+          description: "Wasserpreis (Einsatzoptimierung)."
+        }
+      ]
+    }
+    WindGeneratingUnit: {
+      description: "Windkraft-Erzeugungseinheit — Spezialisierung von GeneratingUnit."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: GeneratingUnit.maxOperatingP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Betriebsleistung in MW."
+        }
+        {
+          key: WindGeneratingUnit.windGenUnitType
+          type: "enum (offshore/onshore)"
+          required: false
+          description: "Aufstellungsart."
+        }
+      ]
+    }
+    SolarGeneratingUnit: {
+      description: "Solar-Erzeugungseinheit (großflächige PV-Anlage) — Spezialisierung von GeneratingUnit."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: GeneratingUnit.maxOperatingP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Betriebsleistung in MW."
+        }
+      ]
+    }
+    FossilFuel: {
+      description: "Brennstoffangabe einer ThermalGeneratingUnit — reines Anhängsel."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: FossilFuel.ThermalGeneratingUnit
+          type: "Referenz -> ThermalGeneratingUnit"
+          required: true
+          description: "Zugehörige Erzeugungseinheit."
+        }
+        {
+          key: FossilFuel.fossilFuelType
+          type: "enum (coal/gas/oil/...)"
+          required: false
+          description: "Brennstoffart."
+        }
+      ]
+    }
+    ExternalNetworkInjection: {
+      description: "Modellrand-Einspeisung: repräsentiert ein nicht im Detail modelliertes vorgelagertes Netz (z.B. Übertragungsnetz-Anschlusspunkt)."
+      group: Anschlussnutzer
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: true
+          description: "Zugehöriges Feld (i.d.R. das Einspeisefeld/Incoming-Feeder)."
+        }
+        {
+          key: ExternalNetworkInjection.p
+          type: "float (MW)"
+          required: false
+          description: "Aktuelle/angenommene Wirkleistungseinspeisung in MW."
+        }
+        {
+          key: ExternalNetworkInjection.q
+          type: "float (Mvar)"
+          required: false
+          description: "Aktuelle/angenommene Blindleistungseinspeisung in Mvar."
+        }
+        {
+          key: ExternalNetworkInjection.maxP
+          type: "float (MW)"
+          required: false
+          description: "Maximal mögliche Einspeiseleistung in MW."
+        }
+        {
+          key: ExternalNetworkInjection.minP
+          type: "float (MW)"
+          required: false
+          description: "Minimal mögliche Einspeiseleistung in MW."
+        }
+      ]
+    }
+    EquivalentInjection: {
+      description: "Vereinfachte Ersatzeinspeisung/-last am Modellrand (Bus-Branch-Vereinfachung). Bekannte Ausnahme: wird bei JAG bewusst NICHT auf Vollständigkeit geprüft (nicht geflaggt), siehe Konzept.md."
+      group: Anschlussnutzer
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: false
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: EquivalentInjection.p
+          type: "float (MW)"
+          required: false
+          description: "Wirkleistung in MW."
+        }
+        {
+          key: EquivalentInjection.q
+          type: "float (Mvar)"
+          required: false
+          description: "Blindleistung in Mvar."
+        }
+        {
+          key: EquivalentInjection.regulationCapability
+          type: bool
+          required: false
+          description: "Ob eine Spannungsregelung möglich ist."
+        }
+      ]
+    }
+    ReactiveCapabilityCurve: {
+      description: "Katalogeintrag: Blindleistungs-Fähigkeitskurve eines Generators (P/Q-Diagramm), potenziell von mehreren Maschinen gleichen Typs geteilt (Katalog)."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Kurve."
+        }
+      ]
+    }
+    CurveData: {
+      description: "Ein Stützpunkt einer Curve (z.B. ReactiveCapabilityCurve) — Katalog, nicht eigentümerspezifisch."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: CurveData.Curve
+          type: "Referenz -> ReactiveCapabilityCurve"
+          required: true
+          description: "Zugehörige Kurve."
+        }
+        {
+          key: CurveData.xvalue
+          type: float
+          required: true
+          description: "X-Achsenwert des Stützpunkts (z.B. Wirkleistung)."
+        }
+        {
+          key: CurveData.y1value
+          type: float
+          required: true
+          description: "Y-Achsenwert des Stützpunkts (z.B. min. Blindleistung)."
+        }
+        {
+          key: CurveData.y2value
+          type: float
+          required: false
+          description: "Zweiter Y-Achsenwert (z.B. max. Blindleistung)."
+        }
+      ]
+    }
+    LoadResponseCharacteristic: {
+      description: "Spannungsabhängigkeitsmodell einer Last (ZIP-Modell) — Anhängsel eines EnergyConsumer/ConformLoad, kein eigenes Betriebsmittel."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: LoadResponseCharacteristic.exponentModel
+          type: bool
+          required: false
+          description: "Ob ein Exponentialmodell (statt ZIP-Koeffizienten) verwendet wird."
+        }
+        {
+          key: LoadResponseCharacteristic.pConstantPower
+          type: float
+          required: false
+          description: "Anteil konstanter Wirkleistung (0..1)."
+        }
+        {
+          key: LoadResponseCharacteristic.pConstantCurrent
+          type: float
+          required: false
+          description: "Anteil konstanten Stroms (0..1)."
+        }
+        {
+          key: LoadResponseCharacteristic.pConstantImpedance
+          type: float
+          required: false
+          description: "Anteil konstanter Impedanz (0..1)."
+        }
+      ]
+    }
+  }
+}

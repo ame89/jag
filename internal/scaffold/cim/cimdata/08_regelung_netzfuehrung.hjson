@@ -1,0 +1,156 @@
+// Gruppe 8: Regelung/Netzführung. ✅ Zweipol: PowerElectronicsConnection.
+// ❌ Anhängsel: RegulatingControl. ❌ Metadaten: EnergySchedulingType,
+// TimeSchedule, PSRType.
+{
+  classes: {
+    PowerElectronicsConnection: {
+      description: "Netzanschlusspunkt einer Steuerbox/eines EMS (Single-Terminal-Zweipol) — z.B. steuVA/steuEA-Anschluss; die eigentliche(n) PowerElectronicsUnit(s) (PV/Batterie/Wärmepumpe/Klimaanlage) hängen als Anhängsel daran, siehe Gruppe 5."
+      group: "Regelung/Netzführung"
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Building"
+          required: true
+          description: "Zugehöriges Feld/Haus (bei fehlendem direktem Verweis: Fallback über die zugehörige ConnectivityNode, siehe Konzept.md)."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: PowerElectronicsConnection.controllableResourceIdentifier
+          type: string
+          required: false
+          description: "ID der steuerbaren Ressource (Steuerbox-Kennung)."
+        }
+        {
+          key: PowerElectronicsConnection.p
+          type: "float (MW)"
+          required: false
+          description: "Wirkleistung (positiv = Einspeisung) in MW."
+        }
+        {
+          key: PowerElectronicsConnection.q
+          type: "float (Mvar)"
+          required: false
+          description: "Blindleistung in Mvar."
+        }
+        {
+          key: RegulatingCondEq.RegulatingControl
+          type: "Referenz -> RegulatingControl"
+          required: false
+          description: "Zugehörige Steuerbox-/EMS-Regelvorschrift."
+        }
+        {
+          key: RegulatingCondEq.controlEnabled
+          type: bool
+          required: false
+          description: "Ob die Fernsteuerung aktuell aktiviert ist."
+        }
+      ]
+    }
+    RegulatingControl: {
+      description: "Regelvorschrift einer Steuerbox/eines EMS (steuVA/steuEA) — Anhängsel einer PowerElectronicsConnection, kein eigenes Betriebsmittel."
+      group: "Regelung/Netzführung"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: RegulatingControl.discrete
+          type: bool
+          required: false
+          description: "Ob die Regelung in diskreten Stufen erfolgt (siehe DiscreteControlLimit) statt stetig."
+        }
+        {
+          key: RegulatingControl.enabled
+          type: bool
+          required: false
+          description: "Ob die Regelung aktiv ist."
+        }
+        {
+          key: RegulatingControl.minAllowedTargetValue
+          type: float
+          required: false
+          description: "Minimal zulässiger Sollwert."
+        }
+        {
+          key: RegulatingControl.maxAllowedTargetValue
+          type: float
+          required: false
+          description: "Maximal zulässiger Sollwert."
+        }
+      ]
+    }
+    EnergySchedulingType: {
+      description: "Katalogeintrag: wiederverwendbare Energie-/Einsatzplanungs-Kategorie (z.B. für GeneratingUnit/TieFlow) — Katalog, kein eigenes Betriebsmittel."
+      group: "Regelung/Netzführung"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Kategorie."
+        }
+      ]
+    }
+    TimeSchedule: {
+      description: "Zeitplan (z.B. Mess-/Übertragungszeitplan eines Meter, oder Steuerbox-Zeitplan) — Metadaten, kein eigenes Betriebsmittel."
+      group: "Regelung/Netzführung"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: TimeSchedule.disabled
+          type: bool
+          required: false
+          description: "Ob der Zeitplan aktuell deaktiviert ist."
+        }
+        {
+          key: TimeSchedule.recurrencePeriod
+          type: "float (s)"
+          required: false
+          description: "Wiederholungsintervall in Sekunden."
+        }
+      ]
+    }
+    PSRType: {
+      description: "Katalogeintrag: Klassifikations-/Kategoriezuordnung eines PowerSystemResource (z.B. steuVA/steuEA-Klassifikation von Anschlussnutzern) — Katalog, kein eigenes Betriebsmittel."
+      group: "Regelung/Netzführung"
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: true
+          description: "Bezeichnung der Kategorie."
+        }
+      ]
+    }
+  }
+}

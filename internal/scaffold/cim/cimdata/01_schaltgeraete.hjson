@@ -1,0 +1,319 @@
+// Gruppe 1: Schaltgeräte (Idee.md, "Fachliche Gruppierung der beobachteten
+// CIM-Elementtypen"). ✅ Zweipole: Breaker, Disconnector, Fuse, Switch.
+// ❌ Metadaten (Zustandsvariable, SV-Profil): SvSwitch, SvStatus.
+{
+  classes: {
+    Switch: {
+      description: "Allgemeiner Schalter/Trenner (Basisklasse für Breaker/Disconnector-artige Zweipole; im NSC-Dialekt auch direkt als konkrete Klasse verwendet, z.B. für Trenner)."
+      group: Schaltgeräte
+      terminals: 2
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts (CIM mRID / rdf:ID)."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name/Bezeichnung."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Feeder/Substation"
+          required: true
+          description: "Zugehöriges Feld/Station (Container-Zuordnung)."
+        }
+        {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag (mehrere reale Geräte als ein Modellobjekt zusammengefasst)."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand (in Betrieb ja/nein)."
+        }
+        {
+          key: Equipment.inService
+          type: bool
+          required: false
+          description: "Tatsächlicher aktueller Betriebszustand (zusätzlich zu normallyInService)."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Zugehörige Spannungsebene/Nennspannung."
+        }
+        {
+          key: Switch.normalOpen
+          type: bool
+          required: true
+          description: "Normalschaltzustand: offen (true) oder geschlossen (false) — Basis für die elektrische Topologie (Nullohm-Reduktion)."
+        }
+        {
+          key: Switch.open
+          type: bool
+          required: false
+          description: "Tatsächlicher (nicht nur normaler) Schaltzustand."
+        }
+        {
+          key: Switch.retained
+          type: bool
+          required: false
+          description: "Ob der Schaltzustand bei der Topologie-Reduktion erhalten bleibt (\"retained\"), statt wegoptimiert zu werden."
+        }
+        {
+          key: Switch.locked
+          type: bool
+          required: false
+          description: "Schalter mechanisch verriegelt (kann nicht betätigt werden)."
+        }
+        {
+          key: Switch.ratedCurrent
+          type: float
+          required: false
+          description: "Nennstrom in A."
+        }
+      ]
+    }
+    Breaker: {
+      description: "Lasttrennschalter/Leistungsschalter — ein unter Last schaltbarer Zweipol-Schalter, erbt strukturell von Switch."
+      group: Schaltgeräte
+      terminals: 2
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Feeder/Substation"
+          required: true
+          description: "Zugehöriges Feld/Station."
+        }
+        {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.inService
+          type: bool
+          required: false
+          description: "Ist-Betriebszustand."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: Switch.normalOpen
+          type: bool
+          required: true
+          description: "Normalschaltzustand (offen/geschlossen)."
+        }
+        {
+          key: Switch.open
+          type: bool
+          required: false
+          description: "Tatsächlicher Schaltzustand."
+        }
+        {
+          key: Switch.retained
+          type: bool
+          required: false
+          description: "Topologie-Reduktions-Flag."
+        }
+        {
+          key: Switch.locked
+          type: bool
+          required: false
+          description: "Mechanisch verriegelt."
+        }
+        {
+          key: Switch.ratedCurrent
+          type: float
+          required: false
+          description: "Nennstrom in A."
+        }
+      ]
+    }
+    Disconnector: {
+      description: "Trennschalter — ein NICHT unter Last schaltbarer Zweipol-Schalter (nur im spannungsfreien Zustand zu betätigen), erbt strukturell von Switch."
+      group: Schaltgeräte
+      terminals: 2
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Feeder/Substation"
+          required: true
+          description: "Zugehöriges Feld/Station."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: Switch.normalOpen
+          type: bool
+          required: true
+          description: "Normalschaltzustand (offen/geschlossen)."
+        }
+        {
+          key: Switch.retained
+          type: bool
+          required: false
+          description: "Topologie-Reduktions-Flag."
+        }
+        {
+          key: Switch.ratedCurrent
+          type: float
+          required: false
+          description: "Nennstrom in A."
+        }
+      ]
+    }
+    Fuse: {
+      description: "Sicherung — löst bei Überstrom selbsttätig aus; wird elektrisch wie ein Nullohm-Zweipol behandelt, solange sie nicht ausgelöst hat."
+      group: Schaltgeräte
+      terminals: 2
+      attributes: [
+        {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay/Feeder/Substation"
+          required: true
+          description: "Zugehöriges Feld/Station."
+        }
+        {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: Switch.normalOpen
+          type: bool
+          required: true
+          description: "Normalschaltzustand (ausgelöst/nicht ausgelöst)."
+        }
+        {
+          key: Switch.retained
+          type: bool
+          required: false
+          description: "Topologie-Reduktions-Flag."
+        }
+        {
+          key: Switch.ratedCurrent
+          type: float
+          required: true
+          description: "Nennstrom/Auslösewert in A."
+        }
+        {
+          key: Fuse.nominalCurrent
+          type: float
+          required: false
+          description: "NSC-Dialekt-Variante von Switch.ratedCurrent — Nennstrom in A (kommt teils parallel zu Switch.ratedCurrent vor)."
+        }
+      ]
+    }
+    SvSwitch: {
+      description: "SV-Profil-Zustandsvariable: berechneter Schaltzustand eines Switch-Objekts nach einer Lastflussberechnung (kein eigenständiges Betriebsmittel)."
+      group: Schaltgeräte
+      terminals: 0
+      attributes: [
+        {
+          key: SvSwitch.Switch
+          type: "Referenz -> Switch"
+          required: true
+          description: "Zugehöriges Schaltgerät."
+        }
+        {
+          key: SvSwitch.open
+          type: bool
+          required: true
+          description: "Berechneter Schaltzustand aus der Lastflussberechnung."
+        }
+      ]
+    }
+    SvStatus: {
+      description: "SV-Profil-Zustandsvariable: berechneter In-Betrieb-Status eines beliebigen ConductingEquipment (kein eigenständiges Betriebsmittel)."
+      group: Schaltgeräte
+      terminals: 0
+      attributes: [
+        {
+          key: SvStatus.ConductingEquipment
+          type: "Referenz -> ConductingEquipment"
+          required: true
+          description: "Zugehöriges Betriebsmittel."
+        }
+        {
+          key: SvStatus.inService
+          type: bool
+          required: true
+          description: "Berechneter In-Betrieb-Status."
+        }
+      ]
+    }
+  }
+}

@@ -119,6 +119,23 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 	if err != nil {
 		return nil, fmt.Errorf("common: resolving batch containers: %w", err)
 	}
+	// bc.Attributes (the batch's Substation/Building root containers' own
+	// name Sachdaten, e.g. AttributeKeyName) was computed by
+	// ResolveBatchContainers but never flushed anywhere — a real,
+	// pre-existing bug (found 2026-07-19, HJSON exporter round-trip
+	// review): a station/house's own name was silently dropped, even
+	// though the Sachdaten mechanism and the HJSON exporter/importer both
+	// already fully support container-level attributes (Snapshot.
+	// AttributesByOwner is keyed generically by OwnerID, not restricted to
+	// Equipment; importer/hjson.File.Attributes already round-trips
+	// through the very same channel). Flushing it here, exactly like the
+	// Sachdaten/Geometry batches below, closes that gap with no further
+	// exporter/importer changes needed.
+	if len(bc.Attributes) > 0 {
+		if err := sink.WriteAttributes(bc.Attributes); err != nil {
+			return nil, fmt.Errorf("common: writing batch container attributes: %w", err)
+		}
+	}
 
 	equipmentIDs := make([]string, 0, len(bc.EquipmentToCont))
 	for id := range bc.EquipmentToCont {

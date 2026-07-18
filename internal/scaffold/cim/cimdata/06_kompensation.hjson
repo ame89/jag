@@ -1,0 +1,205 @@
+// Gruppe 6: Kompensation. ✅ Zweipole: LinearShuntCompensator,
+// NonlinearShuntCompensator, StaticVarCompensator, SeriesCompensator.
+// ❌ Anhängsel: NonlinearShuntCompensatorPoint, SvShuntCompensatorSections.
+{
+  classes: {
+    LinearShuntCompensator: {
+      description: "Kompensationsspule/-kondensator mit linearer (stufenproportionaler) B/G-Kennlinie (Zweipol)."
+      group: Kompensation
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: true
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: ShuntCompensator.sections
+          type: int
+          required: false
+          description: "Aktuelle Anzahl zugeschalteter Stufen."
+        }
+        {
+          key: ShuntCompensator.normalSections
+          type: int
+          required: false
+          description: "Normal zugeschaltete Anzahl Stufen."
+        }
+        {
+          key: ShuntCompensator.maximumSections
+          type: int
+          required: false
+          description: "Maximal zuschaltbare Anzahl Stufen."
+        }
+        {
+          key: LinearShuntCompensator.bPerSection
+          type: float
+          required: true
+          description: "Suszeptanz pro Stufe in S."
+        }
+        {
+          key: LinearShuntCompensator.gPerSection
+          type: float
+          required: false
+          description: "Leitwert pro Stufe in S."
+        }
+      ]
+    }
+    NonlinearShuntCompensator: {
+      description: "Kompensationsspule/-kondensator mit nichtlinearer (tabellarischer) B/G-Kennlinie (Zweipol)."
+      group: Kompensation
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: true
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: ShuntCompensator.sections
+          type: int
+          required: false
+          description: "Aktuelle Anzahl zugeschalteter Stufen."
+        }
+        {
+          key: ShuntCompensator.maximumSections
+          type: int
+          required: false
+          description: "Maximal zuschaltbare Anzahl Stufen."
+        }
+      ]
+    }
+    StaticVarCompensator: {
+      description: "Statischer Blindleistungskompensator (SVC, leistungselektronisch geregelt, Zweipol)."
+      group: Kompensation
+      terminals: 1
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: true
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: StaticVarCompensator.capacitiveRating
+          type: float
+          required: false
+          description: "Kapazitive Nennblindleistung in Mvar."
+        }
+        {
+          key: StaticVarCompensator.inductiveRating
+          type: float
+          required: false
+          description: "Induktive Nennblindleistung in Mvar."
+        }
+        {
+          key: StaticVarCompensator.voltageSetPoint
+          type: float
+          required: false
+          description: "Spannungs-Sollwert in kV."
+        }
+      ]
+    }
+    SeriesCompensator: {
+      description: "Serienkompensation (Längs-Impedanz zur Kompensation der Leitungsreaktanz, Zweipol)."
+      group: Kompensation
+      terminals: 2
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Bay"
+          required: true
+          description: "Zugehöriges Feld."
+        }
+        {
+          key: SeriesCompensator.r
+          type: float
+          required: true
+          description: "Wirkwiderstand in Ω."
+        }
+        {
+          key: SeriesCompensator.x
+          type: float
+          required: true
+          description: "Reaktanz in Ω."
+        }
+      ]
+    }
+    NonlinearShuntCompensatorPoint: {
+      description: "Eine Stufe der tabellarischen B/G-Kennlinie eines NonlinearShuntCompensator — Anhängsel, kein eigenes Betriebsmittel."
+      group: Kompensation
+      terminals: 0
+      attributes: [
+        {
+          key: NonlinearShuntCompensatorPoint.NonlinearShuntCompensator
+          type: "Referenz -> NonlinearShuntCompensator"
+          required: true
+          description: "Zugehöriger Kompensator."
+        }
+        {
+          key: NonlinearShuntCompensatorPoint.sectionNumber
+          type: int
+          required: true
+          description: "Stufennummer."
+        }
+        {
+          key: NonlinearShuntCompensatorPoint.b
+          type: float
+          required: true
+          description: "Suszeptanz an dieser Stufe in S."
+        }
+        {
+          key: NonlinearShuntCompensatorPoint.g
+          type: float
+          required: false
+          description: "Leitwert an dieser Stufe in S."
+        }
+      ]
+    }
+    SvShuntCompensatorSections: {
+      description: "SV-Profil-Zustandsvariable: berechnete/aktuelle Stufenanzahl eines ShuntCompensator nach einer Lastflussberechnung (kein eigenständiges Betriebsmittel)."
+      group: Kompensation
+      terminals: 0
+      attributes: [
+        {
+          key: SvShuntCompensatorSections.ShuntCompensator
+          type: "Referenz -> LinearShuntCompensator/NonlinearShuntCompensator"
+          required: true
+          description: "Zugehöriger Kompensator."
+        }
+        {
+          key: SvShuntCompensatorSections.sections
+          type: float
+          required: true
+          description: "Berechnete/aktuelle Stufenanzahl."
+        }
+      ]
+    }
+  }
+}
