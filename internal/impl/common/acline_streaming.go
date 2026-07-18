@@ -59,6 +59,19 @@ import (
 // underlying hardware/DB-connection-pool tradeoffs apply to both passes.
 const DefaultPassBWorkers = DefaultPassAWorkers
 
+// DefaultPassBBatchSize is the default number of already-discovered
+// ACLineSegment components (physical cable routes) built and handed to a
+// caller's onBatch callback at a time when discoverACLineChainsStreaming
+// is used in batched mode (onBatch != nil) — see RunPassB/
+// resolveACLineSegments. Deliberately kept identical to DefaultStationBatchSize
+// (Pass A's own per-station-batch size): a real load test (lasttest-500,
+// 2026-07-18/19) found Pass B's peak RAM scaled with its TOTAL group/
+// container count regardless of JAG_STATION_BATCH_SIZE, since Pass B never
+// batched its ACLineSegment-chain build+write step at all — this constant
+// is the fix for that finding, giving Pass B the same batch-and-discard
+// RAM bound Pass A already had.
+const DefaultPassBBatchSize = DefaultStationBatchSize
+
 // ACLineChainsResult is everything discoverACLineChainsStreaming produces
 // — the streaming counterpart of the old buildACLineChains' six return
 // values, bundled into a struct since it now also carries the component-
@@ -100,9 +113,32 @@ type aclComponentResult struct {
 // discoverACLineChainsStreaming is the streaming, parallel replacement for
 // buildACLineChains (container.go). workers <= 0 defaults to
 // DefaultPassBWorkers.
-func discoverACLineChainsStreaming(store staging.Store, version uint64, aclIDs []string, workers int) (*ACLineChainsResult, error) {
+//
+// onBatch == nil preserves the original, whole-class-in-memory behavior
+// (every discovered component built, globally sorted by Container.ID, and
+// returned in one combined result) — used by resolveACLineSegments's own
+// nil-callback path (RunPassB's default), and by tests/oracles that need
+// the full Pass B output for correctness comparison rather than the
+// production low-RAM behavior.
+//
+// onBatch != nil switches to batched mode (batchSize <= 0 defaults to
+// DefaultPassBBatchSize): already-discovered components (component
+// MEMBERSHIP discovery, Phase 1 below, is unaffected either way — it's
+// already bounded by one component's size, not batched) are built
+// batchSize at a time, each batch handed to onBatch and then discarded —
+// mirroring Pass A's onBatchResult pattern (pass_a_pipeline.go) so peak
+// RAM is bounded by one batch's own Container/Node/Edge/Attribute
+// footprint, not by the total ACLineSegment/chain count. The returned
+// *ACLineChainsResult in this mode carries only the lightweight, whole-
+// run bookkeeping maps (NodeToContainer, needed afterward by
+// resolveStandaloneJunctions) — Containers/Names/Nodes/Edges/Anomalies are
+// left empty since they were already streamed out via onBatch.
+func discoverACLineChainsStreaming(store staging.Store, version uint64, aclIDs []string, workers, batchSize int, onBatch func(*ACLineChainsResult) error) (*ACLineChainsResult, error) {
 	if workers <= 0 {
 		workers = DefaultPassBWorkers
+	}
+	if batchSize <= 0 {
+		batchSize = DefaultPassBBatchSize
 	}
 	if len(aclIDs) == 0 {
 		return &ACLineChainsResult{EquipmentOf: map[string]string{}, NodeToContainer: map[string]string{}}, nil
@@ -117,7 +153,12 @@ func discoverACLineChainsStreaming(store staging.Store, version uint64, aclIDs [
 	// ACLineSegment IDs into connected components. claimed only needs to
 	// be touched by this single goroutine, so no locking is required
 	// here — see the package doc comment for why this can't safely be
-	// parallelized across independent seeds.
+	// parallelized across independent seeds. Deliberately NOT batched —
+	// each component is individually bounded (one physical cable route),
+	// and the resulting rawComponents slice itself only holds cheap
+	// membership/resolved-Terminal data, not full Container/Node/Edge
+	// rows, so keeping it all in RAM here is not the RAM problem this
+	// batching fixes (see the acline_streaming.go package doc comment).
 	claimed := make(map[string]bool, len(aclIDs))
 	var rawComponents []rawACLineComponent
 	for _, seed := range aclIDs {
@@ -132,18 +173,66 @@ func discoverACLineChainsStreaming(store staging.Store, version uint64, aclIDs [
 		rawComponents = append(rawComponents, raw)
 	}
 
-	// Phase 2 (parallel, pure CPU/no DB access): build the final
-	// Container/Node/Edge/name rows for each already-determined
-	// component. Component membership is immutable by this point, so
-	// distributing rawComponents across a worker pool cannot affect the
-	// result regardless of scheduling.
-	results := make([]aclComponentResult, len(rawComponents))
+	if onBatch == nil {
+		// Original whole-class behavior: build every component in one
+		// parallel pass, sort globally by Container.ID, merge into one
+		// combined result.
+		results, err := buildACLineComponentResultsParallel(rawComponents, workers)
+		if err != nil {
+			return nil, err
+		}
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].container.ID < results[j].container.ID
+		})
+		out := mergeACLineComponentResults(results)
+		return out, nil
+	}
+
+	// Batched mode: build+emit rawComponents batchSize at a time. Only
+	// NodeToContainer (needed afterward by resolveStandaloneJunctions) is
+	// accumulated across the whole run — it's a lightweight ConnectivityNode
+	// ID -> container ID map, not a heavy per-object row set, so keeping
+	// it around for the whole run doesn't reintroduce the RAM problem this
+	// batching fixes.
+	combined := &ACLineChainsResult{EquipmentOf: map[string]string{}, NodeToContainer: map[string]string{}}
+	for start := 0; start < len(rawComponents); start += batchSize {
+		end := start + batchSize
+		if end > len(rawComponents) {
+			end = len(rawComponents)
+		}
+		results, err := buildACLineComponentResultsParallel(rawComponents[start:end], workers)
+		if err != nil {
+			return nil, err
+		}
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].container.ID < results[j].container.ID
+		})
+		batchOut := mergeACLineComponentResults(results)
+		for node, contID := range batchOut.NodeToContainer {
+			if existing, has := combined.NodeToContainer[node]; !has || contID < existing {
+				combined.NodeToContainer[node] = contID
+			}
+		}
+		if err := onBatch(batchOut); err != nil {
+			return nil, err
+		}
+	}
+	return combined, nil
+}
+
+// buildACLineComponentResultsParallel runs the CPU-only, DB-free build
+// step (buildACLineComponentResult) across raws using a worker pool of the
+// given size — factored out of discoverACLineChainsStreaming so both its
+// whole-class (onBatch == nil) and batched (onBatch != nil) code paths
+// share the exact same parallel-build logic.
+func buildACLineComponentResultsParallel(raws []rawACLineComponent, workers int) ([]aclComponentResult, error) {
+	results := make([]aclComponentResult, len(raws))
 	var nextIdx int
 	var idxMu sync.Mutex
 	claimNextIdx := func() (int, bool) {
 		idxMu.Lock()
 		defer idxMu.Unlock()
-		if nextIdx >= len(rawComponents) {
+		if nextIdx >= len(raws) {
 			return 0, false
 		}
 		i := nextIdx
@@ -151,7 +240,6 @@ func discoverACLineChainsStreaming(store staging.Store, version uint64, aclIDs [
 		return i, true
 	}
 
-	workErrCh := make(chan error, workers)
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
@@ -162,23 +250,19 @@ func discoverACLineChainsStreaming(store staging.Store, version uint64, aclIDs [
 				if !ok {
 					return
 				}
-				results[i] = buildACLineComponentResult(rawComponents[i])
+				results[i] = buildACLineComponentResult(raws[i])
 			}
 		}()
 	}
 	wg.Wait()
-	close(workErrCh)
-	if err := <-workErrCh; err != nil {
-		return nil, err
-	}
+	return results, nil
+}
 
-	// Deterministic merge order: sort by Container.ID (itself derived
-	// from each component's own sorted member IDs) — mirrors the old
-	// buildACLineChains' sort.Strings(roots) guarantee.
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].container.ID < results[j].container.ID
-	})
-
+// mergeACLineComponentResults flattens an already-built, already-sorted
+// slice of aclComponentResult into one ACLineChainsResult — shared by both
+// discoverACLineChainsStreaming code paths (whole-class merge and one
+// batch's own merge).
+func mergeACLineComponentResults(results []aclComponentResult) *ACLineChainsResult {
 	out := &ACLineChainsResult{
 		EquipmentOf:     map[string]string{},
 		NodeToContainer: map[string]string{},
@@ -202,7 +286,7 @@ func discoverACLineChainsStreaming(store staging.Store, version uint64, aclIDs [
 			}
 		}
 	}
-	return out, nil
+	return out
 }
 
 // discoverRawACLineComponent expands one connected ACLineSegment component

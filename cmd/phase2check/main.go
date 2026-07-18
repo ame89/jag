@@ -234,16 +234,16 @@ func main() {
 		chunkSize = n
 	}
 
-	// JAG_BATCH_SIZE controls Pass A's per-batch Substation/Building root
-	// count (common.DefaultBatchSize=50 if unset/0) — see
+	// JAG_STATION_BATCH_SIZE controls Pass A's per-batch Substation/Building root
+	// count (common.DefaultStationBatchSize=50 if unset/0) — see
 	// pass_a_pipeline.go's doc comment: this, not chunkSize, is now the
 	// real RAM-bounding knob (a batch's own Node/Edge/Attribute/Geometry
 	// footprint scales with batchSize, not with total model size).
 	batchSize := 0
-	if v := os.Getenv("JAG_BATCH_SIZE"); v != "" {
+	if v := os.Getenv("JAG_STATION_BATCH_SIZE"); v != "" {
 		n, convErr := strconv.Atoi(v)
 		if convErr != nil {
-			fmt.Fprintf(os.Stderr, "invalid JAG_BATCH_SIZE: %v\n", convErr)
+			fmt.Fprintf(os.Stderr, "invalid JAG_STATION_BATCH_SIZE: %v\n", convErr)
 			os.Exit(1)
 		}
 		batchSize = n
@@ -276,6 +276,21 @@ func main() {
 			os.Exit(1)
 		}
 		passBWorkers = n
+	}
+
+	// JAG_PASS_B_BATCH_SIZE controls Pass B's per-batch ACLineSegment-chain
+	// count (common.DefaultPassBBatchSize=1000 if unset/0) — see
+	// pass_b.go's doc comment: analogous to JAG_STATION_BATCH_SIZE, but for
+	// Pass B's own ACLineSegment build+write step, which previously wasn't
+	// batched at all (a real load-test finding, see README.md's table).
+	passBBatchSize := 0
+	if v := os.Getenv("JAG_PASS_B_BATCH_SIZE"); v != "" {
+		n, convErr := strconv.Atoi(v)
+		if convErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_PASS_B_BATCH_SIZE: %v\n", convErr)
+			os.Exit(1)
+		}
+		passBBatchSize = n
 	}
 
 	overallStart := time.Now()
@@ -359,11 +374,54 @@ func main() {
 	}
 
 	passBStart := time.Now()
-	passB, err := common.RunPassB(store, result.Version, chunkSize, passBWorkers, sink, flags)
+	var aclineContainers, aclineEquipment, aclineNodes, aclineEdges, aclineGroupNodes, aclineBatches int
+	// onACLineBatch persists-and-discards each Pass B ACLineSegment batch
+	// immediately (batchSize=passBBatchSize, see RunPassB's doc comment) —
+	// the low-RAM counterpart to Pass A's onBatchResult above, added to fix
+	// the 2026-07-18/19 load-test finding that Pass B's peak RAM scaled
+	// with its total group/container count regardless of
+	// JAG_STATION_BATCH_SIZE (Pass B never read that variable at all).
+	passB, err := common.RunPassB(store, result.Version, chunkSize, passBBatchSize, passBWorkers, sink, flags, func(b *common.PassBACLineBatchResult) error {
+		if err := chunkUpsert(b.Containers, modelStore.UpsertContainers); err != nil {
+			return fmt.Errorf("persisting pass B acline batch containers: %w", err)
+		}
+		if err := chunkUpsert(b.Equipment, modelStore.UpsertEquipment); err != nil {
+			return fmt.Errorf("persisting pass B acline batch equipment: %w", err)
+		}
+		if err := chunkUpsert(b.Nodes, modelStore.UpsertNodes); err != nil {
+			return fmt.Errorf("persisting pass B acline batch nodes: %w", err)
+		}
+		if err := chunkUpsert(b.Edges, modelStore.UpsertEdges); err != nil {
+			return fmt.Errorf("persisting pass B acline batch edges: %w", err)
+		}
+		if err := chunkUpsert(b.Attributes, modelStore.UpsertAttributes); err != nil {
+			return fmt.Errorf("persisting pass B acline batch name attributes: %w", err)
+		}
+		// This batch's own groups persist under their own batch-distinct
+		// owner ID (b.OwnerID, see PassBACLineBatchResult's doc comment)
+		// — coexists independently alongside every other batch's/Pass A
+		// station's rows for the same Node ID, since UpsertElectricalGroups
+		// only ever replaces the given owner's own rows and query-time
+		// code unions across ALL owners with no owner-id filtering.
+		if err := modelStore.UpsertElectricalGroups(map[string]map[string]string{b.OwnerID: b.Groups}); err != nil {
+			return fmt.Errorf("persisting pass B acline batch electrical groups: %w", err)
+		}
+		report.addACLineBatch(b)
+		aclineBatches++
+		aclineContainers += len(b.Containers)
+		aclineEquipment += len(b.Equipment)
+		aclineNodes += len(b.Nodes)
+		aclineEdges += len(b.Edges)
+		aclineGroupNodes += len(b.Groups)
+		return nil
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pass B: %v\n", err)
 		os.Exit(1)
 	}
+	// The remaining passB (Junction/boundary EquivalentInjection data,
+	// still small/class-size-bounded, not batched — see RunPassB's doc
+	// comment) is persisted once, exactly as before.
 	if err := chunkUpsert(passB.Containers, modelStore.UpsertContainers); err != nil {
 		fmt.Fprintf(os.Stderr, "persisting pass B containers: %v\n", err)
 		os.Exit(1)
@@ -388,12 +446,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "persisting pass B cim:Line references: %v\n", err)
 		os.Exit(1)
 	}
-	// Pass B's groups persist under their own fixed sentinel owner ID
-	// (common.PassBOwnerID, see RunPassB's doc comment) — this coexists
-	// independently alongside any Pass A station's rows for the same Node
-	// ID, with no run-order requirement and no special "if absent" logic
-	// needed (UpsertElectricalGroups always replaces only the given
-	// owner's own rows).
+	// Pass B's own (Junction/boundary) groups persist under its fixed
+	// sentinel owner ID (common.PassBOwnerID, see RunPassB's doc comment)
+	// — this coexists independently alongside any Pass A station's rows
+	// and every ACLine batch's own owner rows for the same Node ID, with
+	// no run-order requirement and no special "if absent" logic needed
+	// (UpsertElectricalGroups always replaces only the given owner's own
+	// rows).
 	passBOwned := make(map[string]map[string]string, len(passB.Groups))
 	for owner, groups := range passB.Groups {
 		passBOwned[owner] = groups
@@ -403,12 +462,14 @@ func main() {
 		os.Exit(1)
 	}
 	report.addPassB(passB)
-	passBGroupNodeCount := 0
+	passBGroupNodeCount := aclineGroupNodes
 	for _, groups := range passB.Groups {
 		passBGroupNodeCount += len(groups)
 	}
-	fmt.Printf("\npass B: %d containers, %d equipment, %d nodes, %d edges, %d groups (%s)\n",
-		len(passB.Containers), len(passB.Equipment), len(passB.Nodes), len(passB.Edges), passBGroupNodeCount, time.Since(passBStart))
+	fmt.Printf("\npass B (aclineBatchSize=%d, aclineBatches=%d, workers=%d): %d containers, %d equipment, %d nodes, %d edges, %d groups (%s)\n",
+		passBBatchSizeOrDefault(passBBatchSize), aclineBatches, passBWorkers,
+		aclineContainers+len(passB.Containers), aclineEquipment+len(passB.Equipment), aclineNodes+len(passB.Nodes), aclineEdges+len(passB.Edges),
+		passBGroupNodeCount, time.Since(passBStart))
 	fmt.Printf("pass B anomalies: %d\n", len(passB.Anomalies))
 	for i, a := range passB.Anomalies {
 		if i >= 30 {
@@ -507,12 +568,22 @@ func main() {
 	fmt.Printf("\ntotal wall-clock (open+phase1+passA+passB+phase3): %s\n", time.Since(overallStart))
 }
 
-// batchSizeOrDefault mirrors common.RunPassA's own "0 -> DefaultBatchSize"
+// batchSizeOrDefault mirrors common.RunPassA's own "0 -> DefaultStationBatchSize"
 // substitution, purely for the report line above (RunPassA itself already
 // applies the same default internally).
 func batchSizeOrDefault(batchSize int) int {
 	if batchSize <= 0 {
-		return common.DefaultBatchSize
+		return common.DefaultStationBatchSize
+	}
+	return batchSize
+}
+
+// passBBatchSizeOrDefault mirrors batchSizeOrDefault, but for Pass B's own
+// separate ACLineSegment-chain batch-size knob (see RunPassB's doc
+// comment) — purely for the report line above.
+func passBBatchSizeOrDefault(batchSize int) int {
+	if batchSize <= 0 {
+		return common.DefaultPassBBatchSize
 	}
 	return batchSize
 }
@@ -581,6 +652,27 @@ func (r *passReport) addPassB(b *common.PassBResult) {
 		for _, g := range groups {
 			r.distinctGroups[g] = true
 		}
+	}
+	r.violations = append(r.violations, b.Violations...)
+	r.anomalies = append(r.anomalies, b.Anomalies...)
+}
+
+// addACLineBatch is invoked from RunPassB's onACLineBatch callback (one
+// per ACLineSegment batch, see PassBACLineBatchResult) — mirrors addBatch
+// exactly, since a Pass B ACLine batch is structurally the same "small,
+// transient, persist-then-discard" shape as a Pass A station batch.
+func (r *passReport) addACLineBatch(b *common.PassBACLineBatchResult) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.containers += len(b.Containers)
+	r.equipment += len(b.Equipment)
+	r.nodes += len(b.Nodes)
+	r.edges += len(b.Edges)
+	for _, c := range b.Containers {
+		r.byType[string(c.Type)]++
+	}
+	for _, g := range b.Groups {
+		r.distinctGroups[g] = true
 	}
 	r.violations = append(r.violations, b.Violations...)
 	r.anomalies = append(r.anomalies, b.Anomalies...)

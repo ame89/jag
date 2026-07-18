@@ -63,6 +63,43 @@ type PassBResult struct {
 	Violations []InvariantViolation   // checkContainerPaths against Pass B's own acline containers (a top-level container type, its own path-template rule needs no cross-batch state)
 }
 
+// PassBACLineBatchResult is one batch's worth of ACLineSegment-chain
+// output — small, transient, meant to be persisted and discarded
+// immediately by the caller, mirroring Pass A's BatchResult
+// (pass_a_pipeline.go). Only produced when RunPassB/resolveACLineSegments
+// is called with a non-nil onACLineBatch callback (see
+// discoverACLineChainsStreaming's batched mode, acline_streaming.go) —
+// this is the fix for the 2026-07-18/19 load-test finding that Pass B's
+// peak RAM scaled with its total group/container count regardless of
+// JAG_STATION_BATCH_SIZE (Pass A's own batch-size knob), since Pass B
+// never batched its ACLineSegment build+write step at all. Pass B gets
+// its own, separate batch-size knob (JAG_PASS_B_BATCH_SIZE /
+// DefaultPassBBatchSize), analogous to how it already has its own
+// separate worker-count knob (JAG_PASS_B_WORKERS / DefaultPassBWorkers)
+// alongside Pass A's JAG_STATION_WORKERS.
+type PassBACLineBatchResult struct {
+	Containers []coremodel.Container
+	Equipment  []coremodel.Equipment
+	Nodes      []coremodel.Node
+	Edges      []coremodel.Edge
+	Attributes []coremodel.Attribute // acline container names
+	// OwnerID is this batch's own, distinct ElectricalGroups owner id
+	// (PassBOwnerID + "#" + batch index) — deliberately NOT the shared
+	// PassBOwnerID constant every batch would otherwise collide on:
+	// UpsertElectricalGroups (internal/sqlite/model.go) replaces an
+	// owner's rows wholesale (delete-then-insert) on every call, so two
+	// batches sharing one owner id would have the later batch silently
+	// wipe out the earlier batch's rows. Query-time code (e.g.
+	// GetElectricalGroup) already unions across ALL owners for a given
+	// node id with no owner-id filtering at all, so a distinct owner id
+	// per batch is fully transparent to every reader — exactly like Pass
+	// A's own per-station-root owner ids.
+	OwnerID    string
+	Groups     ElectricalGroups     // this batch's own trivial groups (see RunPassB's doc comment: none of Pass B's classes are switch-like, so no cross-batch merge is ever needed)
+	Anomalies  []Anomaly            // Terminal-resolution anomalies for this batch's ACLineSegment members
+	Violations []InvariantViolation // checkContainerPaths against this batch's own acline containers
+}
+
 // RunPassB resolves ACLineSegment (topological chain grouping, unchanged
 // from container.go's buildACLineChains) and standalone Junction/Muffe
 // (folded into the same acline chain grouping — see
@@ -107,10 +144,33 @@ type PassBResult struct {
 // Kept as an explicit parameter (not a package-level default silently
 // applied deep inside resolveACLineSegments) so callers can tune/sweep it
 // exactly like RunPassA's workers parameter.
-func RunPassB(store staging.Store, version uint64, chunkSize, workers int, sink Sink, flags FlagStore) (*PassBResult, error) {
+//
+// batchSize and onACLineBatch together control Pass B's ACLineSegment-chain
+// batching (see discoverACLineChainsStreaming's doc comment,
+// acline_streaming.go, and PassBACLineBatchResult above):
+//
+//   - onACLineBatch == nil preserves the original, whole-Pass-B-in-memory
+//     behavior — every ACLineSegment chain is built, accumulated into the
+//     returned *PassBResult (Containers/Nodes/Edges/... include ACLine
+//     data), and ElectricalGroups/checkContainerPaths run once at the end
+//     over everything. batchSize is ignored in this mode. Used by tests/
+//     oracles that need the full Pass B output for correctness comparison.
+//   - onACLineBatch != nil switches to batched, low-RAM production mode:
+//     ACLineSegment chains are built and streamed to onACLineBatch
+//     batchSize components at a time (<=0 defaults to
+//     DefaultPassBBatchSize) — each PassBACLineBatchResult already carries
+//     its own ElectricalGroups (owned by a batch-distinct id, see
+//     PassBACLineBatchResult.OwnerID) and checkContainerPaths violations,
+//     so the caller can persist-and-discard it immediately, exactly like
+//     Pass A's onBatchResult. The returned *PassBResult in this mode only
+//     contains Junction/boundary-EquivalentInjection data (still small,
+//     class-size-bounded, not batched — see resolveStandaloneJunctions/
+//     resolveBoundaryEquivalents) plus its own ElectricalGroups under the
+//     plain PassBOwnerID.
+func RunPassB(store staging.Store, version uint64, chunkSize, batchSize, workers int, sink Sink, flags FlagStore, onACLineBatch func(*PassBACLineBatchResult) error) (*PassBResult, error) {
 	res := &PassBResult{}
 
-	aclineNodeToContainer, err := resolveACLineSegments(store, version, chunkSize, workers, sink, res, flags)
+	aclineNodeToContainer, err := resolveACLineSegments(store, version, chunkSize, batchSize, workers, sink, res, flags, onACLineBatch)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +182,7 @@ func RunPassB(store staging.Store, version uint64, chunkSize, workers int, sink 
 		return nil, fmt.Errorf("common: BuildElectricalGroups on Pass B's own %d Nodes/%d Edges: %w", len(res.Nodes), len(res.Edges), err)
 	}
 	res.Groups = map[string]ElectricalGroups{PassBOwnerID: groups}
-	res.Violations = checkContainerPaths(&BuildContainersResult{Containers: res.Containers})
+	res.Violations = append(res.Violations, checkContainerPaths(&BuildContainersResult{Containers: res.Containers})...)
 	return res, nil
 }
 
@@ -140,7 +200,13 @@ func RunPassB(store staging.Store, version uint64, chunkSize, workers int, sink 
 // (ConnectivityNode ID -> acline container ID) so the caller (RunPassB)
 // can pass it on to resolveStandaloneJunctions, which needs it to assign a
 // Junction's own container membership.
-func resolveACLineSegments(store staging.Store, version uint64, chunkSize, workers int, sink Sink, res *PassBResult, flags FlagStore) (map[string]string, error) {
+//
+// onACLineBatch == nil accumulates every ACLineSegment chain into res
+// exactly as before; onACLineBatch != nil streams each batch
+// (discoverACLineChainsStreaming's batched mode) to onACLineBatch instead,
+// leaving res untouched by ACLineSegment data (see RunPassB's doc
+// comment).
+func resolveACLineSegments(store staging.Store, version uint64, chunkSize, batchSize, workers int, sink Sink, res *PassBResult, flags FlagStore, onACLineBatch func(*PassBACLineBatchResult) error) (map[string]string, error) {
 	lineIDs, lineIdx, err := scanClass(store, version, chunkSize, "Line")
 	if err != nil {
 		return nil, err
@@ -176,7 +242,27 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize, worke
 		}
 	}
 
-	aclChains, err := discoverACLineChainsStreaming(store, version, aclIDs, workers)
+	if onACLineBatch != nil {
+		// Batched, low-RAM production path: each batch is built,
+		// enriched (flags/Attributes/Geometry/ElectricalGroups/
+		// checkContainerPaths), handed to onACLineBatch, and discarded —
+		// res is never touched by ACLineSegment data in this mode.
+		batchIndex := 0
+		aclChains, err := discoverACLineChainsStreaming(store, version, aclIDs, workers, batchSize, func(batch *ACLineChainsResult) error {
+			idx := batchIndex
+			batchIndex++
+			return buildAndEmitACLineBatch(store, version, chunkSize, sink, flags, idx, batch, onACLineBatch)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := resolveBoundaryEquivalents(store, version, chunkSize, sink, res); err != nil {
+			return nil, err
+		}
+		return aclChains.NodeToContainer, nil
+	}
+
+	aclChains, err := discoverACLineChainsStreaming(store, version, aclIDs, workers, batchSize, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +348,88 @@ func resolveACLineSegments(store staging.Store, version uint64, chunkSize, worke
 		return nil, err
 	}
 	return aclChains.NodeToContainer, nil
+}
+
+// buildAndEmitACLineBatch enriches one already-built ACLineSegment batch
+// (Containers/Nodes/Edges/Names/Anomalies, see ACLineChainsResult) with
+// everything a whole-Pass-B-scope run used to compute once at the end —
+// flag marking, Sachdaten/Geometry, ElectricalGroups, and
+// checkContainerPaths violations — scoped to just THIS batch, then hands
+// the result to onACLineBatch for the caller to persist and discard.
+// batchIndex is used to derive this batch's own ElectricalGroups owner id
+// (see PassBACLineBatchResult.OwnerID's doc comment).
+func buildAndEmitACLineBatch(store staging.Store, version uint64, chunkSize int, sink Sink, flags FlagStore, batchIndex int, batch *ACLineChainsResult, onACLineBatch func(*PassBACLineBatchResult) error) error {
+	out := &PassBACLineBatchResult{
+		Containers: batch.Containers,
+		Attributes: batch.Names,
+		Nodes:      batch.Nodes,
+		Edges:      batch.Edges,
+		Anomalies:  containerAnomaliesToAnomalies(batch.Anomalies),
+		OwnerID:    fmt.Sprintf("%s#%d", PassBOwnerID, batchIndex),
+	}
+	out.Equipment = make([]coremodel.Equipment, 0, len(batch.EquipmentOf))
+	aclIDsBatch := make([]string, 0, len(batch.EquipmentOf))
+	for segID, contID := range batch.EquipmentOf {
+		out.Equipment = append(out.Equipment, coremodel.Equipment{ID: segID, ContainerID: contID})
+		aclIDsBatch = append(aclIDsBatch, segID)
+	}
+
+	// Flag marking (see flags.go) — mirrors resolveACLineSegments' own
+	// nil-callback-path reasoning: every ACLineSegment resolved here
+	// always gets an acline container, so installed == contained.
+	if flags != nil {
+		resolvedIDs := make([]string, 0, len(batch.Edges))
+		for _, e := range batch.Edges {
+			resolvedIDs = append(resolvedIDs, e.EquipmentID)
+		}
+		if err := flags.MarkFlags(version, FlagInstalledEquipment, resolvedIDs); err != nil {
+			return fmt.Errorf("common: marking installed-equipment flags for ACLineSegment batch %d: %w", batchIndex, err)
+		}
+		if err := flags.MarkFlags(version, FlagContainedEquipment, resolvedIDs); err != nil {
+			return fmt.Errorf("common: marking contained-equipment flags for ACLineSegment batch %d: %w", batchIndex, err)
+		}
+		nodeIDs := make([]string, 0, len(batch.Nodes))
+		for _, n := range batch.Nodes {
+			if n.EquipmentID != GNDNodeID {
+				nodeIDs = append(nodeIDs, n.EquipmentID)
+			}
+		}
+		if err := flags.MarkFlags(version, FlagReferencedNode, nodeIDs); err != nil {
+			return fmt.Errorf("common: marking referenced-node flags for ACLineSegment batch %d: %w", batchIndex, err)
+		}
+	}
+
+	// Sachdaten/Geometry for this batch's own ACLineSegment members and
+	// "acline" containers — scoped to just this batch's IDs, mirroring
+	// resolveACLineSegments' own nil-callback-path calls exactly.
+	if err := BuildAttributes(store, version, chunkSize, nil, aclIDsBatch, sink); err != nil {
+		return fmt.Errorf("common: building attributes for ACLineSegment batch %d (%d segments): %w", batchIndex, len(aclIDsBatch), err)
+	}
+	aclEquipmentIDSet := make(map[string]bool, len(aclIDsBatch))
+	for _, id := range aclIDsBatch {
+		aclEquipmentIDSet[id] = true
+	}
+	aclContainerIDSet := make(map[string]bool, len(batch.Containers))
+	for _, c := range batch.Containers {
+		aclContainerIDSet[c.ID] = true
+	}
+	if err := BuildGeometry(store, version, chunkSize, aclEquipmentIDSet, aclContainerIDSet, sink); err != nil {
+		return fmt.Errorf("common: building geometry for ACLineSegment batch %d (%d segments/%d containers): %w", batchIndex, len(aclIDsBatch), len(batch.Containers), err)
+	}
+
+	// This batch's own ElectricalGroups — see the package doc comment and
+	// PassBACLineBatchResult.OwnerID: safe to compute per-batch since none
+	// of Pass B's classes are ever switch-like, so no cross-batch merge is
+	// ever needed (each batch's own Nodes/Edges naturally produce trivial,
+	// always-singleton groups).
+	groups, _, err := BuildElectricalGroups(store, version, batch.Nodes, batch.Edges, nil)
+	if err != nil {
+		return fmt.Errorf("common: BuildElectricalGroups on ACLineSegment batch %d's own %d Nodes/%d Edges: %w", batchIndex, len(batch.Nodes), len(batch.Edges), err)
+	}
+	out.Groups = groups
+	out.Violations = checkContainerPaths(&BuildContainersResult{Containers: batch.Containers})
+
+	return onACLineBatch(out)
 }
 
 // containerAnomaliesToAnomalies converts the ContainerAnomaly slice used by

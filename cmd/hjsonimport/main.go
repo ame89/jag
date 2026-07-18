@@ -81,10 +81,10 @@ func main() {
 		chunkSize = n
 	}
 	batchSize := 0
-	if v := os.Getenv("JAG_BATCH_SIZE"); v != "" {
+	if v := os.Getenv("JAG_STATION_BATCH_SIZE"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid JAG_BATCH_SIZE: %v\n", err)
+			fmt.Fprintf(os.Stderr, "invalid JAG_STATION_BATCH_SIZE: %v\n", err)
 			os.Exit(1)
 		}
 		batchSize = n
@@ -106,6 +106,15 @@ func main() {
 			os.Exit(1)
 		}
 		passBWorkers = n
+	}
+	passBBatchSize := 0
+	if v := os.Getenv("JAG_PASS_B_BATCH_SIZE"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid JAG_PASS_B_BATCH_SIZE: %v\n", err)
+			os.Exit(1)
+		}
+		passBBatchSize = n
 	}
 
 	overallStart := time.Now()
@@ -177,7 +186,38 @@ func main() {
 	fmt.Printf("pass A: %d containers, %d equipment, %d nodes, %d edges (%s)\n", containerCount, equipmentCount, nodeCount, edgeCount, time.Since(passAStart))
 
 	passBStart := time.Now()
-	passB, err := common.RunPassB(store, result.Version, chunkSize, passBWorkers, sink, flags)
+	var aclineContainerCount, aclineEquipmentCount, aclineNodeCount, aclineEdgeCount int
+	passB, err := common.RunPassB(store, result.Version, chunkSize, passBBatchSize, passBWorkers, sink, flags, func(b *common.PassBACLineBatchResult) error {
+		if err := chunkUpsert(b.Containers, modelStore.UpsertContainers); err != nil {
+			return fmt.Errorf("persisting pass B acline batch containers: %w", err)
+		}
+		if err := chunkUpsert(b.Equipment, modelStore.UpsertEquipment); err != nil {
+			return fmt.Errorf("persisting pass B acline batch equipment: %w", err)
+		}
+		if err := chunkUpsert(b.Nodes, modelStore.UpsertNodes); err != nil {
+			return fmt.Errorf("persisting pass B acline batch nodes: %w", err)
+		}
+		if err := chunkUpsert(b.Edges, modelStore.UpsertEdges); err != nil {
+			return fmt.Errorf("persisting pass B acline batch edges: %w", err)
+		}
+		if err := chunkUpsert(b.Attributes, modelStore.UpsertAttributes); err != nil {
+			return fmt.Errorf("persisting pass B acline batch attributes: %w", err)
+		}
+		if err := modelStore.UpsertElectricalGroups(map[string]map[string]string{b.OwnerID: b.Groups}); err != nil {
+			return fmt.Errorf("persisting pass B acline batch electrical groups: %w", err)
+		}
+		aclineContainerCount += len(b.Containers)
+		aclineEquipmentCount += len(b.Equipment)
+		aclineNodeCount += len(b.Nodes)
+		aclineEdgeCount += len(b.Edges)
+		for _, a := range b.Anomalies {
+			fmt.Printf("  pass B acline batch anomaly: %s: %s\n", a.EquipmentID, a.Message)
+		}
+		for _, v := range b.Violations {
+			fmt.Printf("  pass B acline batch violation [%s]: %s\n", v.Rule, v.Message)
+		}
+		return nil
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pass B: %v\n", err)
 		os.Exit(1)
@@ -214,7 +254,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "persisting pass B electrical groups: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("pass B: %d containers, %d equipment, %d nodes, %d edges (%s)\n", len(passB.Containers), len(passB.Equipment), len(passB.Nodes), len(passB.Edges), time.Since(passBStart))
+	fmt.Printf("pass B: %d containers, %d equipment, %d nodes, %d edges (%s)\n",
+		aclineContainerCount+len(passB.Containers), aclineEquipmentCount+len(passB.Equipment),
+		aclineNodeCount+len(passB.Nodes), aclineEdgeCount+len(passB.Edges), time.Since(passBStart))
 	for _, a := range passB.Anomalies {
 		fmt.Printf("  pass B anomaly: %s: %s\n", a.EquipmentID, a.Message)
 	}

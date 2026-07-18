@@ -14,7 +14,7 @@ import (
 // confirmed batch-size-dependent bug found and fixed in ProcessStationBatch
 // (pass_a_pipeline.go) on 2026-07-15 against examples/cgmes/
 // ReliCapGrid_Espheim (107 Substations — large enough that different
-// JAG_BATCH_SIZE values actually split stations across different batches):
+// JAG_STATION_BATCH_SIZE values actually split stations across different batches):
 // MergeBusbarSectionNodes' internal shadow topology (which unions every
 // single-terminal Equipment onto the single shared GND node to decide
 // whether two BusbarSection nodes are "already connected") produced a
@@ -108,7 +108,7 @@ func TestPassABatchSizeInvariance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("batchSize=%d: RunPassA: %v", bs, err)
 		}
-		passB, err := RunPassB(store, result.Version, 1000, 0, nopSink{}, nil)
+		passB, err := RunPassB(store, result.Version, 1000, 0, 0, nopSink{}, nil, nil)
 		if err != nil {
 			t.Fatalf("batchSize=%d: RunPassB: %v", bs, err)
 		}
@@ -241,7 +241,7 @@ func TestPassBWorkerCountInvariance(t *testing.T) {
 	var snapshots []snapshot
 
 	for _, w := range []int{1, 4, 8} {
-		passB, err := RunPassB(store, result.Version, 1000, w, nopSink{}, nil)
+		passB, err := RunPassB(store, result.Version, 1000, 0, w, nopSink{}, nil, nil)
 		if err != nil {
 			t.Fatalf("workers=%d: RunPassB: %v", w, err)
 		}

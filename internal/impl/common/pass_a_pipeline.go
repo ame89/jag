@@ -35,7 +35,7 @@ import (
 	"gitlab.com/openk-nsc/jag/internal/core/staging"
 )
 
-// DefaultBatchSize is the default number of Substation/Building roots
+// DefaultStationBatchSize is the default number of Substation/Building roots
 // processed together in one Pass A batch (configurable by callers, e.g.
 // via an env var at the cmd layer, analogous to JAG_CHUNK_SIZE/
 // JAG_STATION_WORKERS).
@@ -53,11 +53,11 @@ import (
 // was chosen because it consistently landed within a few percent of the
 // fastest tested configurations at both tested scales, without the added
 // complexity of higher worker counts for only marginal RAM benefit.
-const DefaultBatchSize = 1000
+const DefaultStationBatchSize = 1000
 
 // DefaultPassAWorkers is the default pull-pool worker count for Pass A.
 //
-// Empirically re-validated alongside DefaultBatchSize (2026-07-15, see
+// Empirically re-validated alongside DefaultStationBatchSize (2026-07-15, see
 // above) — 4 workers stayed within the "good enough" default per the
 // user's request; 8 workers gave only a marginal (~5-10%) peak-RAM
 // reduction at both tested scales for no consistent speed benefit, not
@@ -371,7 +371,7 @@ type rootBatch struct {
 // already serializes writes) — mirrors Sink's concurrency contract.
 func RunPassA(store staging.Store, version uint64, chunkSize, batchSize, workers int, sink Sink, flags FlagStore, isNSC bool, onBatchResult func(*BatchResult) error) error {
 	if batchSize <= 0 {
-		batchSize = DefaultBatchSize
+		batchSize = DefaultStationBatchSize
 	}
 	if workers <= 0 {
 		workers = DefaultPassAWorkers
