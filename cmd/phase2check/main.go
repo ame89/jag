@@ -235,7 +235,7 @@ func main() {
 	}
 
 	// JAG_STATION_BATCH_SIZE controls Pass A's per-batch Substation/Building root
-	// count (common.DefaultStationBatchSize=50 if unset/0) — see
+	// count (common.DefaultStationBatchSize=1000 if unset/0) — see
 	// pass_a_pipeline.go's doc comment: this, not chunkSize, is now the
 	// real RAM-bounding knob (a batch's own Node/Edge/Attribute/Geometry
 	// footprint scales with batchSize, not with total model size).
