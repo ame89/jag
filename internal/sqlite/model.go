@@ -244,22 +244,33 @@ func (m *ModelStore) UpsertEquipment(equipment []coremodel.Equipment) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`
+		return upsertEquipmentTx(tx, equipment)
+	})
+}
+
+// upsertEquipmentTx is UpsertEquipment's actual insert body, factored out
+// so PersistBatch (below) can run it as one step of a single shared
+// transaction spanning an entire Pass A/B batch's writes, instead of each
+// entity type opening (and committing) its own transaction.
+func upsertEquipmentTx(tx *sql.Tx, equipment []coremodel.Equipment) error {
+	if len(equipment) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`
 			INSERT INTO model_equipment (id, container_id) VALUES (?, ?)
 			ON CONFLICT (id) DO UPDATE SET container_id = excluded.container_id
 		`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing equipment upsert: %w", err)
-		}
-		defer stmt.Close()
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing equipment upsert: %w", err)
+	}
+	defer stmt.Close()
 
-		for _, e := range equipment {
-			if _, err := stmt.Exec(e.ID, e.ContainerID); err != nil {
-				return fmt.Errorf("sqlite: upserting equipment %s: %w", e.ID, err)
-			}
+	for _, e := range equipment {
+		if _, err := stmt.Exec(e.ID, e.ContainerID); err != nil {
+			return fmt.Errorf("sqlite: upserting equipment %s: %w", e.ID, err)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // --- Container (hierarchy.Store) ---------------------------------------
@@ -335,22 +346,31 @@ func (m *ModelStore) UpsertContainers(containers []coremodel.Container) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`
+		return upsertContainersTx(tx, containers)
+	})
+}
+
+// upsertContainersTx is UpsertContainers' insert body — see
+// upsertEquipmentTx's doc comment for why this is factored out.
+func upsertContainersTx(tx *sql.Tx, containers []coremodel.Container) error {
+	if len(containers) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`
 			INSERT INTO model_container (id, type, parent_id) VALUES (?, ?, ?)
 			ON CONFLICT (id) DO UPDATE SET type = excluded.type, parent_id = excluded.parent_id
 		`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing container upsert: %w", err)
-		}
-		defer stmt.Close()
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing container upsert: %w", err)
+	}
+	defer stmt.Close()
 
-		for _, c := range containers {
-			if _, err := stmt.Exec(c.ID, string(c.Type), c.ParentID); err != nil {
-				return fmt.Errorf("sqlite: upserting container %s: %w", c.ID, err)
-			}
+	for _, c := range containers {
+		if _, err := stmt.Exec(c.ID, string(c.Type), c.ParentID); err != nil {
+			return fmt.Errorf("sqlite: upserting container %s: %w", c.ID, err)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // CountByType implements hierarchy.Store. Computed with a single GROUP BY
@@ -469,23 +489,32 @@ func (m *ModelStore) UpsertGeometry(geometries []coremodel.Geometry) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`
+		return upsertGeometryTx(tx, geometries)
+	})
+}
+
+// upsertGeometryTx is UpsertGeometry's insert body — see
+// upsertEquipmentTx's doc comment for why this is factored out.
+func upsertGeometryTx(tx *sql.Tx, geometries []coremodel.Geometry) error {
+	if len(geometries) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`
 			INSERT INTO model_geometry (owner_id, owner_kind, lat, lon) VALUES (?, ?, ?, ?)
 			ON CONFLICT (owner_id) DO UPDATE SET
 				owner_kind = excluded.owner_kind, lat = excluded.lat, lon = excluded.lon
 		`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing geometry upsert: %w", err)
-		}
-		defer stmt.Close()
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing geometry upsert: %w", err)
+	}
+	defer stmt.Close()
 
-		for _, g := range geometries {
-			if _, err := stmt.Exec(g.OwnerID, string(g.OwnerKind), g.Lat, g.Lon); err != nil {
-				return fmt.Errorf("sqlite: upserting geometry for %s: %w", g.OwnerID, err)
-			}
+	for _, g := range geometries {
+		if _, err := stmt.Exec(g.OwnerID, string(g.OwnerKind), g.Lat, g.Lon); err != nil {
+			return fmt.Errorf("sqlite: upserting geometry for %s: %w", g.OwnerID, err)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // --- Physical topology (Node/Edge) ---------------------------------------
@@ -631,22 +660,31 @@ func (m *ModelStore) UpsertNodes(nodes []coremodel.Node) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`
+		return upsertNodesTx(tx, nodes)
+	})
+}
+
+// upsertNodesTx is UpsertNodes' insert body — see upsertEquipmentTx's doc
+// comment for why this is factored out.
+func upsertNodesTx(tx *sql.Tx, nodes []coremodel.Node) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`
 			INSERT INTO model_node (id, kind) VALUES (?, ?)
 			ON CONFLICT (id) DO UPDATE SET kind = excluded.kind
 		`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing node upsert: %w", err)
-		}
-		defer stmt.Close()
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing node upsert: %w", err)
+	}
+	defer stmt.Close()
 
-		for _, n := range nodes {
-			if _, err := stmt.Exec(n.EquipmentID, string(n.Kind)); err != nil {
-				return fmt.Errorf("sqlite: upserting node %s: %w", n.EquipmentID, err)
-			}
+	for _, n := range nodes {
+		if _, err := stmt.Exec(n.EquipmentID, string(n.Kind)); err != nil {
+			return fmt.Errorf("sqlite: upserting node %s: %w", n.EquipmentID, err)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // UpsertEdges implements topology/physical.Store. Also maintains the
@@ -660,47 +698,56 @@ func (m *ModelStore) UpsertEdges(edges []coremodel.Edge) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		edgeStmt, err := tx.Prepare(`
+		return upsertEdgesTx(tx, edges)
+	})
+}
+
+// upsertEdgesTx is UpsertEdges' insert body — see upsertEquipmentTx's doc
+// comment for why this is factored out.
+func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
+	if len(edges) == 0 {
+		return nil
+	}
+	edgeStmt, err := tx.Prepare(`
 			INSERT INTO model_edge (equipment_id, terminal1_node_id, terminal2_node_id) VALUES (?, ?, ?)
 			ON CONFLICT (equipment_id) DO UPDATE SET
 				terminal1_node_id = excluded.terminal1_node_id,
 				terminal2_node_id = excluded.terminal2_node_id
 		`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing edge upsert: %w", err)
-		}
-		defer edgeStmt.Close()
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing edge upsert: %w", err)
+	}
+	defer edgeStmt.Close()
 
-		deleteEndpointsStmt, err := tx.Prepare(`DELETE FROM model_edge_endpoint WHERE edge_id = ?`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing edge_endpoint delete: %w", err)
-		}
-		defer deleteEndpointsStmt.Close()
+	deleteEndpointsStmt, err := tx.Prepare(`DELETE FROM model_edge_endpoint WHERE edge_id = ?`)
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing edge_endpoint delete: %w", err)
+	}
+	defer deleteEndpointsStmt.Close()
 
-		insertEndpointStmt, err := tx.Prepare(`INSERT INTO model_edge_endpoint (node_id, edge_id) VALUES (?, ?)`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing edge_endpoint insert: %w", err)
-		}
-		defer insertEndpointStmt.Close()
+	insertEndpointStmt, err := tx.Prepare(`INSERT INTO model_edge_endpoint (node_id, edge_id) VALUES (?, ?)`)
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing edge_endpoint insert: %w", err)
+	}
+	defer insertEndpointStmt.Close()
 
-		for _, e := range edges {
-			if _, err := edgeStmt.Exec(e.EquipmentID, e.Terminal1NodeID, e.Terminal2NodeID); err != nil {
-				return fmt.Errorf("sqlite: upserting edge %s: %w", e.EquipmentID, err)
+	for _, e := range edges {
+		if _, err := edgeStmt.Exec(e.EquipmentID, e.Terminal1NodeID, e.Terminal2NodeID); err != nil {
+			return fmt.Errorf("sqlite: upserting edge %s: %w", e.EquipmentID, err)
+		}
+		if _, err := deleteEndpointsStmt.Exec(e.EquipmentID); err != nil {
+			return fmt.Errorf("sqlite: clearing edge_endpoint rows for %s: %w", e.EquipmentID, err)
+		}
+		for _, nodeID := range []string{e.Terminal1NodeID, e.Terminal2NodeID} {
+			if nodeID == "" {
+				continue
 			}
-			if _, err := deleteEndpointsStmt.Exec(e.EquipmentID); err != nil {
-				return fmt.Errorf("sqlite: clearing edge_endpoint rows for %s: %w", e.EquipmentID, err)
-			}
-			for _, nodeID := range []string{e.Terminal1NodeID, e.Terminal2NodeID} {
-				if nodeID == "" {
-					continue
-				}
-				if _, err := insertEndpointStmt.Exec(nodeID, e.EquipmentID); err != nil {
-					return fmt.Errorf("sqlite: inserting edge_endpoint for %s/%s: %w", nodeID, e.EquipmentID, err)
-				}
+			if _, err := insertEndpointStmt.Exec(nodeID, e.EquipmentID); err != nil {
+				return fmt.Errorf("sqlite: inserting edge_endpoint for %s/%s: %w", nodeID, e.EquipmentID, err)
 			}
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // --- Electrical topology (grouping) --------------------------------------
@@ -819,30 +866,39 @@ func (m *ModelStore) UpsertElectricalGroups(owned map[string]map[string]string) 
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		deleteStmt, err := tx.Prepare(`DELETE FROM model_electrical_group WHERE owner_id = ?`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing electrical group delete-by-owner: %w", err)
-		}
-		defer deleteStmt.Close()
-
-		insertStmt, err := tx.Prepare(`INSERT INTO model_electrical_group (node_id, owner_id, group_id) VALUES (?, ?, ?)`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing electrical group insert: %w", err)
-		}
-		defer insertStmt.Close()
-
-		for owner, groups := range owned {
-			if _, err := deleteStmt.Exec(owner); err != nil {
-				return fmt.Errorf("sqlite: deleting prior electrical groups for owner %s: %w", owner, err)
-			}
-			for nodeID, groupID := range groups {
-				if _, err := insertStmt.Exec(nodeID, owner, groupID); err != nil {
-					return fmt.Errorf("sqlite: inserting electrical group for node %s (owner %s): %w", nodeID, owner, err)
-				}
-			}
-		}
-		return nil
+		return upsertElectricalGroupsTx(tx, owned)
 	})
+}
+
+// upsertElectricalGroupsTx is UpsertElectricalGroups' insert body — see
+// upsertEquipmentTx's doc comment for why this is factored out.
+func upsertElectricalGroupsTx(tx *sql.Tx, owned map[string]map[string]string) error {
+	if len(owned) == 0 {
+		return nil
+	}
+	deleteStmt, err := tx.Prepare(`DELETE FROM model_electrical_group WHERE owner_id = ?`)
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing electrical group delete-by-owner: %w", err)
+	}
+	defer deleteStmt.Close()
+
+	insertStmt, err := tx.Prepare(`INSERT INTO model_electrical_group (node_id, owner_id, group_id) VALUES (?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing electrical group insert: %w", err)
+	}
+	defer insertStmt.Close()
+
+	for owner, groups := range owned {
+		if _, err := deleteStmt.Exec(owner); err != nil {
+			return fmt.Errorf("sqlite: deleting prior electrical groups for owner %s: %w", owner, err)
+		}
+		for nodeID, groupID := range groups {
+			if _, err := insertStmt.Exec(nodeID, owner, groupID); err != nil {
+				return fmt.Errorf("sqlite: inserting electrical group for node %s (owner %s): %w", nodeID, owner, err)
+			}
+		}
+	}
+	return nil
 }
 
 // --- Sachdaten (Attribute) ------------------------------------------------
@@ -899,52 +955,62 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		deleteStmt, err := tx.Prepare(`DELETE FROM model_attribute WHERE owner_id = ? AND key = ?`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing attribute delete: %w", err)
-		}
-		defer deleteStmt.Close()
-
-		insertStmt, err := tx.Prepare(`INSERT INTO model_attribute (owner_id, key, seq, value) VALUES (?, ?, ?, ?)`)
-		if err != nil {
-			return fmt.Errorf("sqlite: preparing attribute insert: %w", err)
-		}
-		defer insertStmt.Close()
-
-		type ownerKey struct{ owner, key string }
-		cleared := map[ownerKey]bool{}
-		seq := map[ownerKey]int{}
-
-		for _, a := range attributes {
-			ok := ownerKey{a.OwnerID, string(a.Key)}
-			if !cleared[ok] {
-				if _, err := deleteStmt.Exec(a.OwnerID, string(a.Key)); err != nil {
-					return fmt.Errorf("sqlite: clearing attribute rows for %s.%s: %w", a.OwnerID, a.Key, err)
-				}
-				cleared[ok] = true
-			}
-			encoded, err := json.Marshal(a.Value)
-			if err != nil {
-				return fmt.Errorf("sqlite: encoding attribute value for %s.%s: %w", a.OwnerID, a.Key, err)
-			}
-			if _, err := insertStmt.Exec(a.OwnerID, string(a.Key), seq[ok], string(encoded)); err != nil {
-				return fmt.Errorf("sqlite: upserting attribute %s.%s: %w", a.OwnerID, a.Key, err)
-			}
-			seq[ok]++
-		}
-		return nil
+		return upsertAttributesTx(tx, attributes)
 	})
+}
+
+// upsertAttributesTx is UpsertAttributes' insert body — see
+// upsertEquipmentTx's doc comment for why this is factored out.
+func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
+	if len(attributes) == 0 {
+		return nil
+	}
+	deleteStmt, err := tx.Prepare(`DELETE FROM model_attribute WHERE owner_id = ? AND key = ?`)
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing attribute delete: %w", err)
+	}
+	defer deleteStmt.Close()
+
+	insertStmt, err := tx.Prepare(`INSERT INTO model_attribute (owner_id, key, seq, value) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("sqlite: preparing attribute insert: %w", err)
+	}
+	defer insertStmt.Close()
+
+	type ownerKey struct{ owner, key string }
+	cleared := map[ownerKey]bool{}
+	seq := map[ownerKey]int{}
+
+	for _, a := range attributes {
+		ok := ownerKey{a.OwnerID, string(a.Key)}
+		if !cleared[ok] {
+			if _, err := deleteStmt.Exec(a.OwnerID, string(a.Key)); err != nil {
+				return fmt.Errorf("sqlite: clearing attribute rows for %s.%s: %w", a.OwnerID, a.Key, err)
+			}
+			cleared[ok] = true
+		}
+		encoded, err := json.Marshal(a.Value)
+		if err != nil {
+			return fmt.Errorf("sqlite: encoding attribute value for %s.%s: %w", a.OwnerID, a.Key, err)
+		}
+		if _, err := insertStmt.Exec(a.OwnerID, string(a.Key), seq[ok], string(encoded)); err != nil {
+			return fmt.Errorf("sqlite: upserting attribute %s.%s: %w", a.OwnerID, a.Key, err)
+		}
+		seq[ok]++
+	}
+	return nil
 }
 
 // PersistBatch implements the modelWriter interface's combined batch
 // write (see cmd/phase2check/main.go's modelWriter for the full
-// rationale). SQLite is in-process, so — unlike internal/postgres, where
-// this is a genuine performance fix collapsing 7 network round-trip
-// commits into 1 — SQLite's per-Upsert* transactions already cost almost
-// nothing extra per commit. This is therefore a thin sequential wrapper
-// around the existing public Upsert* methods (each still opens/commits
-// its own transaction as before), kept only so *sqlite.ModelStore and
-// *postgres.ModelStore satisfy the same modelWriter interface.
+// rationale). Unlike internal/postgres, where consolidating 7 network
+// round-trip commits into 1 was a genuine measured performance fix,
+// SQLite is in-process — but running all 7 entity types inside ONE
+// transaction is still strictly better than 7 separate ones (fewer WAL
+// fsyncs, and it makes the whole batch atomic: a mid-batch failure no
+// longer leaves e.g. Containers committed but Equipment not). This now
+// mirrors internal/postgres's PersistBatch structure exactly: one
+// writeMu-guarded withTx call running every *Tx helper in sequence.
 func (m *ModelStore) PersistBatch(
 	containers []coremodel.Container,
 	equipment []coremodel.Equipment,
@@ -954,30 +1020,34 @@ func (m *ModelStore) PersistBatch(
 	geometries []coremodel.Geometry,
 	groups map[string]map[string]string,
 ) error {
-	if err := m.UpsertContainers(containers); err != nil {
-		return err
-	}
-	if err := m.UpsertEquipment(equipment); err != nil {
-		return err
-	}
-	if err := m.UpsertNodes(nodes); err != nil {
-		return err
-	}
-	if err := m.UpsertEdges(edges); err != nil {
-		return err
-	}
-	if err := m.UpsertAttributes(attributes); err != nil {
-		return err
-	}
-	if err := m.UpsertGeometry(geometries); err != nil {
-		return err
-	}
-	if len(groups) > 0 {
-		if err := m.UpsertElectricalGroups(groups); err != nil {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	return withTx(m.db, func(tx *sql.Tx) error {
+		if err := upsertContainersTx(tx, containers); err != nil {
 			return err
 		}
-	}
-	return nil
+		if err := upsertEquipmentTx(tx, equipment); err != nil {
+			return err
+		}
+		if err := upsertNodesTx(tx, nodes); err != nil {
+			return err
+		}
+		if err := upsertEdgesTx(tx, edges); err != nil {
+			return err
+		}
+		if err := upsertAttributesTx(tx, attributes); err != nil {
+			return err
+		}
+		if err := upsertGeometryTx(tx, geometries); err != nil {
+			return err
+		}
+		if len(groups) > 0 {
+			if err := upsertElectricalGroupsTx(tx, groups); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // --- shared helpers --------------------------------------------------------
