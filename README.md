@@ -1,6 +1,6 @@
 # jag
 
-## Umgebungsvariablen (`cmd/phase2check`)
+## Umgebungsvariablen (`cmd/phase2check`, teilweise auch `cmd/hjsonimport`)
 
 Der Phase-2-Testtreiber `cmd/phase2check` (Import + Container/Terminal/Circuit-Aufbau
 gegen eine CIM/CGMES/NSC-Beispieldatei oder ein ganzes Verzeichnis) liest folgende
@@ -16,6 +16,15 @@ Umgebungsvariablen, um die Verarbeitung zu steuern, ohne den Code anzufassen:
 | `JAG_PASS_B_WORKERS` | Anzahl paralleler Worker-Goroutinen für Pass B's ACLineSegment-Ketten-Build-Schritt (`common.RunPassB`/`discoverACLineChainsStreaming`). Die Ermittlung der Ketten-Zugehörigkeit selbst läuft bewusst einzelsträngig (Korrektheit hat Vorrang, siehe Kommentar in `acline_streaming.go`); nur der reine CPU-Build-Schritt pro bereits ermittelter Kette (Container-ID, Name, Node-/Edge-Aufbau) wird parallelisiert. Deckungsgleich mit `JAG_STATION_WORKERS`'s Default gehalten. | `4` (`common.DefaultPassBWorkers` = `common.DefaultPassAWorkers`) |
 | `JAG_PASS_B_BATCH_SIZE` | Analog zu `JAG_STATION_BATCH_SIZE`, aber für Pass B: Anzahl bereits ermittelter ACLineSegment-Ketten (physische Kabeltrassen), die in einem Batch gebaut, persistiert und wieder verworfen werden (`common.RunPassB`/`discoverACLineChainsStreaming`'s Batch-Modus). Ein Lasttest (lasttest-500, 2026-07-18/19) zeigte, dass Pass B's RAM-Spitze mit der Gesamtzahl seiner Gruppen/Container skaliert, unabhängig von `JAG_STATION_BATCH_SIZE` (Pass B las diese Variable nie) — dieser eigene Batch-Größen-Regler ist die Behebung dafür. | `1000` (`common.DefaultPassBBatchSize` = `common.DefaultStationBatchSize`) |
 | `JAG_CPU_PROFILE` | Pfad, unter dem ein `pprof`-CPU-Profil des gesamten Laufs geschrieben wird. | unset (kein Profil) |
+
+**`cmd/hjsonimport`** (der Fachmodell-HJSON-Gegenstück-Treiber, siehe Konzept.md's
+"HJSON Fachmodell"-Abschnitt) liest exakt dieselben sechs Variablen `JAG_DB_PATH`,
+`JAG_CHUNK_SIZE`, `JAG_STATION_BATCH_SIZE`, `JAG_STATION_WORKERS`, `JAG_PASS_B_WORKERS`
+und `JAG_PASS_B_BATCH_SIZE` mit identischen Defaults (nur der Default-Dateiname für
+`JAG_DB_PATH` unterscheidet sich: `hjsonimport.db` statt `phase2check.db`) — `JAG_FORCE_NSC`
+(HJSON hat keine CIM/CGMES/NSC-Dialekterkennung) und `JAG_CPU_PROFILE` (kein CPU-Profiling)
+gelten dort nicht. `cmd/hjsonexport` liest keine `JAG_*`-Variablen; es wird ausschließlich
+über Positionsargumente (`<db-path> <output-root> [default-netzregion]`) gesteuert.
 
 **Hinweis (aktueller Implementierungsstand)**: Phase 2/3 laufen seit dem Pass-A/B-Umbau
 (siehe `spec/Konzept.md`, Abschnitt "Pass A/B: Batch-weise Phase-2/3-Pipeline") nicht mehr als
