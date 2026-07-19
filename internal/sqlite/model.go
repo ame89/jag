@@ -936,6 +936,50 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 	})
 }
 
+// PersistBatch implements the modelWriter interface's combined batch
+// write (see cmd/phase2check/main.go's modelWriter for the full
+// rationale). SQLite is in-process, so — unlike internal/postgres, where
+// this is a genuine performance fix collapsing 7 network round-trip
+// commits into 1 — SQLite's per-Upsert* transactions already cost almost
+// nothing extra per commit. This is therefore a thin sequential wrapper
+// around the existing public Upsert* methods (each still opens/commits
+// its own transaction as before), kept only so *sqlite.ModelStore and
+// *postgres.ModelStore satisfy the same modelWriter interface.
+func (m *ModelStore) PersistBatch(
+	containers []coremodel.Container,
+	equipment []coremodel.Equipment,
+	nodes []coremodel.Node,
+	edges []coremodel.Edge,
+	attributes []coremodel.Attribute,
+	geometries []coremodel.Geometry,
+	groups map[string]map[string]string,
+) error {
+	if err := m.UpsertContainers(containers); err != nil {
+		return err
+	}
+	if err := m.UpsertEquipment(equipment); err != nil {
+		return err
+	}
+	if err := m.UpsertNodes(nodes); err != nil {
+		return err
+	}
+	if err := m.UpsertEdges(edges); err != nil {
+		return err
+	}
+	if err := m.UpsertAttributes(attributes); err != nil {
+		return err
+	}
+	if err := m.UpsertGeometry(geometries); err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		if err := m.UpsertElectricalGroups(groups); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // --- shared helpers --------------------------------------------------------
 
 // withTx runs fn inside a transaction, committing on success and rolling

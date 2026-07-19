@@ -12,34 +12,55 @@ import (
 	"time"
 
 	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	"gitlab.com/openk-nsc/jag/internal/core/staging"
 	"gitlab.com/openk-nsc/jag/internal/impl/common"
 	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
+	"gitlab.com/openk-nsc/jag/internal/postgres"
 	"gitlab.com/openk-nsc/jag/internal/sqlite"
 )
 
-// persistChunkSize bounds how many rows go into a single ModelStore
-// Upsert* transaction, mirroring the 1000-row chunking BuildAttributes/
-// BuildGeometry already use via Sink. Without this, persisting a whole
-// model's Containers/Equipment/Nodes/Edges/electrical groups in one
-// UpsertX call would open one single transaction spanning the entire
-// model — correct, but an unnecessarily large, long-lived transaction
-// (lock held the whole time, no incremental progress/durability) as
-// dataset size grows. Chunking keeps each transaction's size and duration
-// bounded regardless of model size, consistent with this project's
-// bulk-not-unbounded persistence stance (see Idee.md).
-const persistChunkSize = 1000
+// modelWriter is the subset of *sqlite.ModelStore's/*postgres.ModelStore's
+// method set actually used by this driver. Both backends' ModelStore types
+// implement every one of these methods with identical signatures (all
+// parameters/return values are coremodel/plain Go types, never a
+// backend-specific concrete type), so either one satisfies this interface
+// without an adapter — this is what lets main() below pick the backend at
+// runtime while the rest of the file stays backend-agnostic.
+type modelWriter interface {
+	UpsertContainers(containers []coremodel.Container) error
+	UpsertEquipment(equipment []coremodel.Equipment) error
+	UpsertNodes(nodes []coremodel.Node) error
+	UpsertEdges(edges []coremodel.Edge) error
+	UpsertElectricalGroups(owned map[string]map[string]string) error
+	UpsertAttributes(attributes []coremodel.Attribute) error
+	UpsertGeometry(geometries []coremodel.Geometry) error
+	// PersistBatch writes Containers/Equipment/Nodes/Edges/Attributes/
+	// Geometries/Groups for ONE Pass A/B batch inside a single
+	// transaction, instead of one transaction per entity type. See
+	// internal/postgres/model.go's PersistBatch doc comment for the
+	// PostgreSQL-specific commit/fsync-count rationale that made this
+	// necessary (internal/sqlite's implementation is a thin sequential
+	// wrapper around its existing per-entity Upsert* methods, since
+	// SQLite's in-process commits don't pay that cost).
+	PersistBatch(
+		containers []coremodel.Container,
+		equipment []coremodel.Equipment,
+		nodes []coremodel.Node,
+		edges []coremodel.Edge,
+		attributes []coremodel.Attribute,
+		geometries []coremodel.Geometry,
+		groups map[string]map[string]string,
+	) error
+	GroupSizes() (map[string]int, error)
+}
 
-func chunkUpsert[T any](items []T, upsert func([]T) error) error {
-	for i := 0; i < len(items); i += persistChunkSize {
-		end := i + persistChunkSize
-		if end > len(items) {
-			end = len(items)
-		}
-		if err := upsert(items[i:end]); err != nil {
-			return err
-		}
-	}
-	return nil
+// storeCloser is the small extra bit staging.Store itself doesn't require
+// (see internal/core/staging/store.go's doc comment: Close is a resource
+// lifecycle concern, not a staging-data operation) but both
+// *sqlite.StagingStore and *postgres.StagingStore provide.
+type storeCloser interface {
+	staging.Store
+	Close() error
 }
 
 // reportSink is phase2check's common.Sink implementation: it only needs
@@ -109,7 +130,7 @@ func (s *reportSink) WriteGeometries(batch []coremodel.Geometry) error {
 // and each call's transaction is independent.
 type persistSink struct {
 	*reportSink
-	model *sqlite.ModelStore
+	model modelWriter
 }
 
 func (s *persistSink) WriteAttributes(batch []coremodel.Attribute) error {
@@ -150,25 +171,51 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	// NSC dialect files use a .rdf extension instead of CGMES's .xml — the
-	// underlying parser is dialect-neutral RDF/XML either way (see
-	// internal/importer/cgmes/parser.go). Which Phase 1 entry point to use
-	// is decided per directory (not per file): if any .rdf files are
-	// present, the whole directory is treated as an NSC dataset and run
-	// through phase1.RunNSCFiles (which also normalizes NSC's dialect
-	// quirks — see internal/importer/nsc's doc comment); a pure .xml
-	// directory keeps using phase1.RunCGMESFiles. Mixing both dialects in
-	// one directory isn't a real scenario in the example data and isn't
-	// supported here.
-	xmlFiles, err := filepath.Glob(filepath.Join(dir, "*.xml"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "globbing %s: %v\n", dir, err)
-		os.Exit(1)
-	}
-	rdfFiles, err := filepath.Glob(filepath.Join(dir, "*.rdf"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "globbing %s: %v\n", dir, err)
-		os.Exit(1)
+	// The argument may name either a directory (globbed for *.xml/*.rdf,
+	// the original behavior) or a single file directly — the latter is
+	// what lets a caller point straight at e.g.
+	// examples/lasttest/lasttest-200-10-10_10s.xml without first having to
+	// copy/hardlink it into an isolated directory just so this glob-based
+	// directory scan sees exactly one file (see .github/copilot-
+	// instructions.md's binding "always use examples/lasttest/ directly,
+	// never re-create copies under .data/" rule — examples/lasttest/
+	// deliberately holds two independent, same-named-object-space fixtures
+	// side by side, so a directory-only argument could never isolate one
+	// from the other without a copy).
+	var xmlFiles, rdfFiles []string
+	var err error
+	if info, statErr := os.Stat(dir); statErr == nil && !info.IsDir() {
+		switch filepath.Ext(dir) {
+		case ".xml":
+			xmlFiles = []string{dir}
+		case ".rdf":
+			rdfFiles = []string{dir}
+		default:
+			fmt.Fprintf(os.Stderr, "unsupported file extension for %s (expected .xml or .rdf)\n", dir)
+			os.Exit(1)
+		}
+	} else {
+		// NSC dialect files use a .rdf extension instead of CGMES's .xml — the
+		// underlying parser is dialect-neutral RDF/XML either way (see
+		// internal/importer/cgmes/parser.go). Which Phase 1 entry point to use
+		// is decided per directory (not per file): if any .rdf files are
+		// present, the whole directory is treated as an NSC dataset and run
+		// through phase1.RunNSCFiles (which also normalizes NSC's dialect
+		// quirks — see internal/importer/nsc's doc comment); a pure .xml
+		// directory keeps using phase1.RunCGMESFiles. Mixing both dialects in
+		// one directory isn't a real scenario in the example data and isn't
+		// supported here.
+		var err error
+		xmlFiles, err = filepath.Glob(filepath.Join(dir, "*.xml"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "globbing %s: %v\n", dir, err)
+			os.Exit(1)
+		}
+		rdfFiles, err = filepath.Glob(filepath.Join(dir, "*.rdf"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "globbing %s: %v\n", dir, err)
+			os.Exit(1)
+		}
 	}
 	// The 20 NSC ".rdf" scenario files under examples/nsc turned out to be
 	// non-canonical, independent variant fragments that share IDs with
@@ -294,15 +341,36 @@ func main() {
 	}
 
 	overallStart := time.Now()
-	store, err := sqlite.Open(dbPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "opening store: %v\n", err)
-		os.Exit(1)
+	// Backend selection: JAG_BACKEND=postgres (see
+	// internal/postgres/dsn.go's DSNFromEnv doc comment for the full
+	// JAG_POSTGRES_* variable set) switches to a PostgreSQL-backed store;
+	// anything else (including unset, the default) keeps the original
+	// SQLite-file behavior unchanged.
+	var store storeCloser
+	var modelStore modelWriter
+	var flags common.FlagStore
+	if dsn, usePostgres := postgres.DSNFromEnv(); usePostgres {
+		pg, err := postgres.Open(dsn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "opening postgres store: %v\n", err)
+			os.Exit(1)
+		}
+		store = pg
+		modelStore = pg.Model()
+		flags = pg.Flags()
+		fmt.Println("using postgres backend")
+	} else {
+		sq, err := sqlite.Open(dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "opening sqlite store: %v\n", err)
+			os.Exit(1)
+		}
+		store = sq
+		modelStore = sq.Model()
+		flags = sq.Flags()
+		fmt.Printf("using sqlite file: %s\n", dbPath)
 	}
 	defer store.Close()
-	fmt.Printf("using sqlite file: %s\n", dbPath)
-	modelStore := store.Model()
-	flags := store.Flags()
 
 	phase1Start := time.Now()
 	var result phase1.Result
@@ -330,18 +398,6 @@ func main() {
 
 	passAStart := time.Now()
 	err = common.RunPassA(store, result.Version, chunkSize, batchSize, stationWorkers, sink, flags, isNSC, func(b *common.BatchResult) error {
-		if err := chunkUpsert(b.Containers, modelStore.UpsertContainers); err != nil {
-			return fmt.Errorf("persisting containers: %w", err)
-		}
-		if err := chunkUpsert(b.Equipment, modelStore.UpsertEquipment); err != nil {
-			return fmt.Errorf("persisting equipment: %w", err)
-		}
-		if err := chunkUpsert(b.Nodes, modelStore.UpsertNodes); err != nil {
-			return fmt.Errorf("persisting nodes: %w", err)
-		}
-		if err := chunkUpsert(b.Edges, modelStore.UpsertEdges); err != nil {
-			return fmt.Errorf("persisting edges: %w", err)
-		}
 		// Pass A's own groups: one independently-computed
 		// map[node_id]group_id per owner (station root ID) — persisted
 		// via UpsertElectricalGroups, which replaces only each owner's own
@@ -352,8 +408,17 @@ func main() {
 		for owner, groups := range b.Groups {
 			owned[owner] = groups
 		}
-		if err := modelStore.UpsertElectricalGroups(owned); err != nil {
-			return fmt.Errorf("persisting electrical groups: %w", err)
+		// Containers/Equipment/Nodes/Edges/Groups for this whole batch are
+		// written in exactly ONE transaction via PersistBatch (see its doc
+		// comment) — NOT one transaction per entity type. Attributes/
+		// Geometries for this batch flow through sink (WriteAttributes/
+		// WriteGeometries), streamed per-station as they're computed
+		// rather than accumulated for the whole batch, so they aren't
+		// included here (kept as their own already-batched, already
+		// single-transaction-per-chunk writes for RAM-boundedness reasons
+		// — see persistSink's doc comment).
+		if err := modelStore.PersistBatch(b.Containers, b.Equipment, b.Nodes, b.Edges, nil, nil, owned); err != nil {
+			return fmt.Errorf("persisting batch: %w", err)
 		}
 		report.addBatch(b)
 		return nil
@@ -382,29 +447,15 @@ func main() {
 	// with its total group/container count regardless of
 	// JAG_STATION_BATCH_SIZE (Pass B never read that variable at all).
 	passB, err := common.RunPassB(store, result.Version, chunkSize, passBBatchSize, passBWorkers, sink, flags, func(b *common.PassBACLineBatchResult) error {
-		if err := chunkUpsert(b.Containers, modelStore.UpsertContainers); err != nil {
-			return fmt.Errorf("persisting pass B acline batch containers: %w", err)
-		}
-		if err := chunkUpsert(b.Equipment, modelStore.UpsertEquipment); err != nil {
-			return fmt.Errorf("persisting pass B acline batch equipment: %w", err)
-		}
-		if err := chunkUpsert(b.Nodes, modelStore.UpsertNodes); err != nil {
-			return fmt.Errorf("persisting pass B acline batch nodes: %w", err)
-		}
-		if err := chunkUpsert(b.Edges, modelStore.UpsertEdges); err != nil {
-			return fmt.Errorf("persisting pass B acline batch edges: %w", err)
-		}
-		if err := chunkUpsert(b.Attributes, modelStore.UpsertAttributes); err != nil {
-			return fmt.Errorf("persisting pass B acline batch name attributes: %w", err)
-		}
 		// This batch's own groups persist under their own batch-distinct
 		// owner ID (b.OwnerID, see PassBACLineBatchResult's doc comment)
 		// — coexists independently alongside every other batch's/Pass A
 		// station's rows for the same Node ID, since UpsertElectricalGroups
 		// only ever replaces the given owner's own rows and query-time
 		// code unions across ALL owners with no owner-id filtering.
-		if err := modelStore.UpsertElectricalGroups(map[string]map[string]string{b.OwnerID: b.Groups}); err != nil {
-			return fmt.Errorf("persisting pass B acline batch electrical groups: %w", err)
+		groups := map[string]map[string]string{b.OwnerID: b.Groups}
+		if err := modelStore.PersistBatch(b.Containers, b.Equipment, b.Nodes, b.Edges, b.Attributes, nil, groups); err != nil {
+			return fmt.Errorf("persisting pass B acline batch: %w", err)
 		}
 		report.addACLineBatch(b)
 		aclineBatches++
@@ -421,31 +472,10 @@ func main() {
 	}
 	// The remaining passB (Junction/boundary EquivalentInjection data,
 	// still small/class-size-bounded, not batched — see RunPassB's doc
-	// comment) is persisted once, exactly as before.
-	if err := chunkUpsert(passB.Containers, modelStore.UpsertContainers); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting pass B containers: %v\n", err)
-		os.Exit(1)
-	}
-	if err := chunkUpsert(passB.Equipment, modelStore.UpsertEquipment); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting pass B equipment: %v\n", err)
-		os.Exit(1)
-	}
-	if err := chunkUpsert(passB.Nodes, modelStore.UpsertNodes); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting pass B nodes: %v\n", err)
-		os.Exit(1)
-	}
-	if err := chunkUpsert(passB.Edges, modelStore.UpsertEdges); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting pass B edges: %v\n", err)
-		os.Exit(1)
-	}
-	if err := chunkUpsert(passB.Attributes, modelStore.UpsertAttributes); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting pass B acline-name attributes: %v\n", err)
-		os.Exit(1)
-	}
-	if err := chunkUpsert(passB.LineRefs, modelStore.UpsertAttributes); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting pass B cim:Line references: %v\n", err)
-		os.Exit(1)
-	}
+	// comment) is persisted once, in a single transaction via
+	// PersistBatch (passB.Attributes and passB.LineRefs are both
+	// Attribute rows, concatenated so both go through the same call/
+	// transaction instead of two separate UpsertAttributes transactions).
 	// Pass B's own (Junction/boundary) groups persist under its fixed
 	// sentinel owner ID (common.PassBOwnerID, see RunPassB's doc comment)
 	// — this coexists independently alongside any Pass A station's rows
@@ -457,8 +487,11 @@ func main() {
 	for owner, groups := range passB.Groups {
 		passBOwned[owner] = groups
 	}
-	if err := modelStore.UpsertElectricalGroups(passBOwned); err != nil {
-		fmt.Fprintf(os.Stderr, "persisting pass B electrical groups: %v\n", err)
+	passBAttributes := make([]coremodel.Attribute, 0, len(passB.Attributes)+len(passB.LineRefs))
+	passBAttributes = append(passBAttributes, passB.Attributes...)
+	passBAttributes = append(passBAttributes, passB.LineRefs...)
+	if err := modelStore.PersistBatch(passB.Containers, passB.Equipment, passB.Nodes, passB.Edges, passBAttributes, nil, passBOwned); err != nil {
+		fmt.Fprintf(os.Stderr, "persisting pass B remainder: %v\n", err)
 		os.Exit(1)
 	}
 	report.addPassB(passB)

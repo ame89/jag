@@ -26,6 +26,41 @@ und `JAG_PASS_B_BATCH_SIZE` mit identischen Defaults (nur der Default-Dateiname 
 gelten dort nicht. `cmd/hjsonexport` liest keine `JAG_*`-Variablen; es wird ausschließlich
 über Positionsargumente (`<db-path> <output-root> [default-netzregion]`) gesteuert.
 
+### PostgreSQL-Backend (`cmd/phase2check`)
+
+`cmd/phase2check` unterstützt seit dem PostgreSQL-Persistenz-Backend (`internal/postgres`,
+Ports-&-Adapters-Gegenstück zu `internal/sqlite`) auch PostgreSQL statt SQLite als
+Ziel-Datenbank. Standardmäßig (`JAG_BACKEND` unset) ändert sich nichts — es wird weiterhin
+die SQLite-Datei aus `JAG_DB_PATH` verwendet.
+
+| Variable | Wirkung | Default |
+|---|---|---|
+| `JAG_BACKEND` | `postgres` schaltet auf das PostgreSQL-Backend um. Jeder andere Wert (inkl. unset) behält das bisherige SQLite-Verhalten unverändert bei. | unset (SQLite) |
+| `JAG_POSTGRES_DSN` | Vollständiger PostgreSQL-Connection-String/-URL (z. B. `postgres://jag:jag@localhost:5432/jag?sslmode=disable`), wird unverändert übernommen. Ist diese Variable gesetzt, werden alle anderen `JAG_POSTGRES_*`-Variablen ignoriert. | unset |
+| `JAG_POSTGRES_HOST` | Hostname des PostgreSQL-Servers (nur relevant, wenn `JAG_POSTGRES_DSN` nicht gesetzt ist). | `localhost` |
+| `JAG_POSTGRES_PORT` | Port des PostgreSQL-Servers. | `5432` |
+| `JAG_POSTGRES_USER` | PostgreSQL-Benutzername. | `jag` |
+| `JAG_POSTGRES_PASSWORD` | PostgreSQL-Passwort. | `jag` |
+| `JAG_POSTGRES_DB` | Name der Datenbank. Bewusst nur ein Vorschlag/Default, kein fester Name — jede Installation kann hier ihre eigene, z. B. regional benannte Datenbank angeben (z. B. `stromnord`). | `jag` |
+| `JAG_POSTGRES_SSLMODE` | PostgreSQL-`sslmode`-Parameter. | `disable` |
+
+Das Schema selbst wird immer im PostgreSQL-Standardschema `public` angelegt (`CREATE TABLE
+IF NOT EXISTS ...` ohne Schema-Qualifizierung) — JAG legt kein eigenes Schema an und bietet
+dafür bewusst keine eigene Umgebungsvariable an; wer die Tabellen in einem anderen Schema
+haben möchte, steuert das server-/rollenseitig über den `search_path` (z. B. via
+`JAG_POSTGRES_DSN`'s `search_path`-Query-Parameter).
+
+Beispiel für einen lokalen Testlauf gegen einen Docker-Container:
+
+```
+docker run -d --name jag-pg -e POSTGRES_USER=jag -e POSTGRES_PASSWORD=jag -e POSTGRES_DB=jag -p 5432:5432 postgres:16-alpine
+JAG_BACKEND=postgres go run ./cmd/phase2check examples/cgmes/BaseCase_Complete
+```
+
+`cmd/hjsonimport` verwendet aktuell noch ausschließlich SQLite — das PostgreSQL-Backend ist
+dort (noch) nicht verdrahtet.
+
+
 **Hinweis (aktueller Implementierungsstand)**: Phase 2/3 laufen seit dem Pass-A/B-Umbau
 (siehe `spec/Konzept.md`, Abschnitt "Pass A/B: Batch-weise Phase-2/3-Pipeline") nicht mehr als
 einzelne whole-model-Schritte, sondern batch-weise über `common.RunPassA` (Stationen) gefolgt
