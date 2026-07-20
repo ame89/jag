@@ -22,9 +22,13 @@ import (
 // that silently alters the result is caught.
 func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 	tests := []struct {
-		dir           string
-		wantCircuits  int
-		wantSizesDesc []int // Node count per Circuit, descending; nil if 0 Circuits
+		dir                       string
+		wantCircuits              int
+		wantSizesDesc             []int // Node count per Circuit, descending; nil if 0 Circuits
+		wantEquipment             int
+		wantBusbars               int
+		wantSectionsPerBusbarDesc []int // BusbarSection-role Equipment count per Busbar container, descending
+		wantEquipmentPerBayDesc   []int // Equipment count per Bay/Feeder container, descending
 	}{
 		{
 			// Pure bus-branch model: no ConnectivityNode at all, only
@@ -35,11 +39,16 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 			dir:           "BaseCase_Complete",
 			wantCircuits:  3,
 			wantSizesDesc: []int{105, 12, 1},
+			wantEquipment: 325,
+			wantBusbars:   0,
 		},
 		{
-			dir:           "MicroGrid_NL_BusCoupler",
-			wantCircuits:  4,
-			wantSizesDesc: []int{8, 7, 2, 2},
+			dir:                       "MicroGrid_NL_BusCoupler",
+			wantCircuits:              4,
+			wantSizesDesc:             []int{8, 7, 2, 2},
+			wantEquipment:             35,
+			wantBusbars:               2,
+			wantSectionsPerBusbarDesc: []int{2, 2},
 		},
 		{
 			// Updated 2026-07-14: BusbarSection was added to
@@ -51,9 +60,13 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 			// nodeedge.go's doc comment. This dataset had 6 such
 			// previously-rejected BusbarSections; correctly including
 			// them merges two previously-separate Circuits into one.
-			dir:           "MiniGrid_NodeBreaker_Switchgear",
-			wantCircuits:  7,
-			wantSizesDesc: []int{58, 14, 11, 7, 4, 4, 4},
+			dir:                       "MiniGrid_NodeBreaker_Switchgear",
+			wantCircuits:              7,
+			wantSizesDesc:             []int{58, 14, 11, 7, 4, 4, 4},
+			wantEquipment:             124,
+			wantBusbars:               10,
+			wantSectionsPerBusbarDesc: concatInts([]int{2}, repeatInt(1, 9)),
+			wantEquipmentPerBayDesc:   repeatInt(3, 30),
 		},
 		{
 			dir:          "ReliCapGrid_Espheim",
@@ -62,18 +75,26 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 				1133, 116, 53, 35, 13, 6, 4, 4, 2, 2, 2, 2,
 				1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 			},
+			wantEquipment:             1777,
+			wantBusbars:               117,
+			wantSectionsPerBusbarDesc: concatInts([]int{3}, repeatInt(1, 116)),
+			wantEquipmentPerBayDesc:   concatInts(repeatInt(3, 9), repeatInt(2, 369)),
 		},
 		{
-			dir:           "Telemark_LV_Fuse",
-			wantCircuits:  1,
-			wantSizesDesc: []int{52},
+			dir:                       "Telemark_LV_Fuse",
+			wantCircuits:              1,
+			wantSizesDesc:             []int{52},
+			wantEquipment:             74,
+			wantBusbars:               7,
+			wantSectionsPerBusbarDesc: repeatInt(1, 7),
+			wantEquipmentPerBayDesc:   repeatInt(1, 31),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.dir, func(t *testing.T) {
 			dir := filepath.Join("..", "..", "..", "examples", "cgmes", tt.dir)
-			gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+			gotCircuits, gotSizes, gotStats := buildCircuitsForDataset(t, dir)
 
 			if gotCircuits != tt.wantCircuits {
 				t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, tt.wantCircuits, gotSizes)
@@ -81,6 +102,7 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 			if tt.wantSizesDesc != nil && !equalInts(gotSizes, tt.wantSizesDesc) {
 				t.Fatalf("Circuit sizes = %v, want %v", gotSizes, tt.wantSizesDesc)
 			}
+			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc)
 		})
 	}
 }
@@ -91,24 +113,39 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 // easy to tell apart from the smaller CGMES v2.4.15 datasets above.
 func TestBuildCircuitsAgainstRealDatasetsCGMES3(t *testing.T) {
 	tests := []struct {
-		dir           string
-		wantCircuits  int
-		wantSizesDesc []int
+		dir                       string
+		wantCircuits              int
+		wantSizesDesc             []int
+		wantEquipment             int
+		wantBusbars               int
+		wantSectionsPerBusbarDesc []int
+		wantEquipmentPerBayDesc   []int
 	}{
 		{
-			dir:           "MicroGrid",
-			wantCircuits:  7,
-			wantSizesDesc: []int{18, 12, 4, 2, 2, 2, 1},
+			dir:                       "MicroGrid",
+			wantCircuits:              7,
+			wantSizesDesc:             []int{18, 12, 4, 2, 2, 2, 1},
+			wantEquipment:             83,
+			wantBusbars:               7,
+			wantSectionsPerBusbarDesc: concatInts(repeatInt(3, 2), repeatInt(2, 2), repeatInt(1, 3)),
 		},
 		{
-			dir:           "MiniGrid",
-			wantCircuits:  6,
-			wantSizesDesc: []int{62, 14, 11, 7, 4, 4},
+			dir:                       "MiniGrid",
+			wantCircuits:              6,
+			wantSizesDesc:             []int{62, 14, 11, 7, 4, 4},
+			wantEquipment:             125,
+			wantBusbars:               10,
+			wantSectionsPerBusbarDesc: concatInts([]int{2}, repeatInt(1, 9)),
+			wantEquipmentPerBayDesc:   repeatInt(2, 30),
 		},
 		{
-			dir:           "SmallGrid",
-			wantCircuits:  3,
-			wantSizesDesc: []int{1119, 102, 4},
+			dir:                       "SmallGrid",
+			wantCircuits:              3,
+			wantSizesDesc:             []int{1119, 102, 4},
+			wantEquipment:             1547,
+			wantBusbars:               115,
+			wantSectionsPerBusbarDesc: repeatInt(1, 115),
+			wantEquipmentPerBayDesc:   repeatInt(2, 369),
 		},
 		{
 			dir:          "Svedala",
@@ -116,14 +153,17 @@ func TestBuildCircuitsAgainstRealDatasetsCGMES3(t *testing.T) {
 			// Only the largest few groups are pinned exactly; the long tail
 			// of many small (<=3-Node) circuits is checked only by count
 			// above to keep this test maintainable.
-			wantSizesDesc: nil,
+			wantSizesDesc:             nil,
+			wantEquipment:             1895,
+			wantBusbars:               75,
+			wantSectionsPerBusbarDesc: concatInts(repeatInt(3, 16), repeatInt(2, 21), repeatInt(1, 38)),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.dir, func(t *testing.T) {
 			dir := filepath.Join("..", "..", "..", "examples", "cgmes3", tt.dir)
-			gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+			gotCircuits, gotSizes, gotStats := buildCircuitsForDataset(t, dir)
 
 			if gotCircuits != tt.wantCircuits {
 				t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, tt.wantCircuits, gotSizes)
@@ -131,6 +171,7 @@ func TestBuildCircuitsAgainstRealDatasetsCGMES3(t *testing.T) {
 			if tt.wantSizesDesc != nil && !equalInts(gotSizes, tt.wantSizesDesc) {
 				t.Fatalf("Circuit sizes = %v, want %v", gotSizes, tt.wantSizesDesc)
 			}
+			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc)
 		})
 	}
 }
@@ -144,8 +185,10 @@ func TestBuildCircuitsAgainstRealDatasetsCigreMV(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "examples", "cigre_mv")
 	wantCircuits := 3
 	wantSizesDesc := []int{11, 3, 1}
+	wantEquipment := 33
+	wantBusbars := 0
 
-	gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+	gotCircuits, gotSizes, gotStats := buildCircuitsForDataset(t, dir)
 
 	if gotCircuits != wantCircuits {
 		t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, wantCircuits, gotSizes)
@@ -153,6 +196,7 @@ func TestBuildCircuitsAgainstRealDatasetsCigreMV(t *testing.T) {
 	if !equalInts(gotSizes, wantSizesDesc) {
 		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
 	}
+	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, nil, nil)
 }
 
 // TestBuildCircuitsAgainstRealDatasetsNSC mirrors
@@ -171,25 +215,47 @@ func TestBuildCircuitsAgainstRealDatasetsNSC(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "examples", "nsc")
 
 	tests := []struct {
-		file          string
-		wantCircuits  int
-		wantSizesDesc []int
+		file                      string
+		wantCircuits              int
+		wantSizesDesc             []int
+		wantEquipment             int
+		wantBusbars               int
+		wantSectionsPerBusbarDesc []int
+		wantEquipmentPerBayDesc   []int
 	}{
 		{
-			file:          "example_as_cim.xml",
-			wantCircuits:  9,
-			wantSizesDesc: []int{35, 20, 13, 13, 8, 6, 6, 3, 3},
+			// Updated 2026-07-20: fixed a container-grouping bug (see
+			// container.go's baseBusbarSectionID doc comment) where NSC's
+			// no-VoltageLevel BusbarSection equipment was grouped into one
+			// shared Busbar container per Substation instead of one per
+			// physically distinct busbar. ONS 1 (S-000001) legitimately
+			// has 2 separate busbars ("Busbar 1"/"Busbar 2"); before the
+			// fix they were wrongly merged into a single Node, artificially
+			// joining what should be two separate Circuits. The fix raises
+			// this dataset's Circuit count from 9 to 13 and changes several
+			// Circuit sizes accordingly.
+			file:                      "example_as_cim.xml",
+			wantCircuits:              13,
+			wantSizesDesc:             []int{28, 15, 13, 13, 8, 6, 6, 6, 5, 4, 3, 3, 3},
+			wantEquipment:             156,
+			wantBusbars:               9,
+			wantSectionsPerBusbarDesc: concatInts([]int{5}, repeatInt(3, 5), repeatInt(2, 3)),
+			wantEquipmentPerBayDesc:   concatInts(repeatInt(4, 2), repeatInt(3, 3), repeatInt(2, 7), []int{1}),
 		},
 		{
-			file:          "Eine_ONS_mit_2_KVS_3_Muffen_und_9_Häuser_ohne_Trafo_MD.xml",
-			wantCircuits:  3,
-			wantSizesDesc: []int{23, 18, 6},
+			file:                      "Eine_ONS_mit_2_KVS_3_Muffen_und_9_Häuser_ohne_Trafo_MD.xml",
+			wantCircuits:              3,
+			wantSizesDesc:             []int{23, 18, 6},
+			wantEquipment:             64,
+			wantBusbars:               3,
+			wantSectionsPerBusbarDesc: concatInts([]int{3}, repeatInt(2, 2)),
+			wantEquipmentPerBayDesc:   repeatInt(2, 4),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
-			gotCircuits, gotSizes := buildCircuitsForFiles(t, []string{filepath.Join(dir, tt.file)}, true)
+			gotCircuits, gotSizes, gotStats := buildCircuitsForFiles(t, []string{filepath.Join(dir, tt.file)}, true)
 
 			if gotCircuits != tt.wantCircuits {
 				t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, tt.wantCircuits, gotSizes)
@@ -197,6 +263,7 @@ func TestBuildCircuitsAgainstRealDatasetsNSC(t *testing.T) {
 			if !equalInts(gotSizes, tt.wantSizesDesc) {
 				t.Fatalf("Circuit sizes = %v, want %v", gotSizes, tt.wantSizesDesc)
 			}
+			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc)
 		})
 	}
 }
@@ -210,8 +277,10 @@ func TestBuildCircuitsAgainstRealDatasetsPfCimBeispielOrtsnetz(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "examples", "pf-cim-beispiel-ortsnetz")
 	wantCircuits := 2
 	wantSizesDesc := []int{587, 1}
+	wantEquipment := 625
+	wantBusbars := 8
 
-	gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+	gotCircuits, gotSizes, gotStats := buildCircuitsForDataset(t, dir)
 
 	if gotCircuits != wantCircuits {
 		t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, wantCircuits, gotSizes)
@@ -219,6 +288,7 @@ func TestBuildCircuitsAgainstRealDatasetsPfCimBeispielOrtsnetz(t *testing.T) {
 	if !equalInts(gotSizes, wantSizesDesc) {
 		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
 	}
+	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, repeatInt(1, 8), nil)
 }
 
 // TestBuildCircuitsAgainstRealDatasetsPandapowerCIM mirrors
@@ -228,8 +298,10 @@ func TestBuildCircuitsAgainstRealDatasetsPandapowerCIM(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "examples", "pandapower-cim")
 	wantCircuits := 2
 	wantSizesDesc := []int{12, 1}
+	wantEquipment := 36
+	wantBusbars := 4
 
-	gotCircuits, gotSizes := buildCircuitsForDataset(t, dir)
+	gotCircuits, gotSizes, gotStats := buildCircuitsForDataset(t, dir)
 
 	if gotCircuits != wantCircuits {
 		t.Fatalf("Circuit count = %d, want %d (sizes: %v)", gotCircuits, wantCircuits, gotSizes)
@@ -237,6 +309,7 @@ func TestBuildCircuitsAgainstRealDatasetsPandapowerCIM(t *testing.T) {
 	if !equalInts(gotSizes, wantSizesDesc) {
 		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
 	}
+	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, repeatInt(1, 4), nil)
 }
 
 // TestBuildCircuitsWithSwitchOverrides is a regression/behavior test for
@@ -277,7 +350,7 @@ func TestBuildCircuitsWithSwitchOverrides(t *testing.T) {
 	}
 	sort.Strings(files)
 
-	store, version, nodes, edges := buildPipelineForFiles(t, files, false)
+	store, version, nodes, edges, _, _ := buildPipelineForFiles(t, files, false)
 	defer store.Close()
 
 	t.Run("default switch states", func(t *testing.T) {
@@ -374,9 +447,10 @@ func TestBuildCircuitsWithSwitchOverrides(t *testing.T) {
 // use (Phase 1 -> ResolveTerminals -> BuildContainers -> MergeJunctionNodes
 // -> MergeBusbarSectionNodes -> BuildNodesAndEdges -> BuildCircuits) against
 // every *.xml file in dir (CGMES dialect, via phase1.RunCGMESFiles) and
-// returns the resulting Circuit count plus each Circuit's Node count,
-// sorted descending.
-func buildCircuitsForDataset(t *testing.T, dir string) (int, []int) {
+// returns the resulting Circuit count, each Circuit's Node count (sorted
+// descending), and container-level datasetStats (Busbar/Bay/Equipment
+// counts).
+func buildCircuitsForDataset(t *testing.T, dir string) (int, []int, datasetStats) {
 	t.Helper()
 
 	files, err := filepath.Glob(filepath.Join(dir, "*.xml"))
@@ -396,10 +470,10 @@ func buildCircuitsForDataset(t *testing.T, dir string) (int, []int) {
 // below (which must import one file at a time — see RunNSCFiles' doc
 // comment on why NSC scenario files sharing an object ID across files is a
 // hard error, not something a directory-wide glob can handle here).
-func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int) {
+func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int, datasetStats) {
 	t.Helper()
 
-	store, version, nodes, edges := buildPipelineForFiles(t, files, isNSC)
+	store, version, nodes, edges, containers, equipmentCount := buildPipelineForFiles(t, files, isNSC)
 	defer store.Close()
 
 	circuits, _, _, err := BuildCircuits(store, version, nodes, edges, nil)
@@ -407,7 +481,7 @@ func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int
 		t.Fatalf("BuildCircuits: %v", err)
 	}
 
-	return len(circuits), circuitSizesDesc(circuits)
+	return len(circuits), circuitSizesDesc(circuits), computeDatasetStats(containers, equipmentCount)
 }
 
 // buildPipelineForFiles runs Phase 1 -> ResolveTerminals -> BuildContainers
@@ -418,7 +492,12 @@ func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int
 // different SwitchStateOverrides, without re-running the import/model-build
 // steps for each variant. The caller is responsible for closing the
 // returned store.
-func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.StagingStore, uint64, []coremodel.Node, []coremodel.Edge) {
+//
+// The extra *BuildContainersResult and equipment-count return values let
+// callers additionally pin container-level stats (Busbar/Bay counts,
+// Equipment count) via datasetStats/computeDatasetStats below, without a
+// second pipeline run.
+func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.StagingStore, uint64, []coremodel.Node, []coremodel.Edge, *BuildContainersResult, int) {
 	t.Helper()
 
 	store, err := sqlite.Open(":memory:")
@@ -473,7 +552,116 @@ func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.St
 	mergedResolved := MergeBusbarSectionNodes(junctionMerged, containers, nodeOnlyIDs)
 	nodes, edges := BuildNodesAndEdges(mergedResolved, nodeOnlyIDs)
 
-	return store, result.Version, nodes, edges
+	return store, result.Version, nodes, edges, containers, len(resolved)
+}
+
+// datasetStats holds container-level regression stats gathered alongside
+// Circuit/Node counts: Busbar count, the number of BusbarSection-role
+// Equipment grouped under each Busbar container (descending, one entry per
+// Busbar), the total Equipment count, and the number of Equipment items
+// directly assigned to each Bay/Feeder container (descending, one entry
+// per Bay/Feeder).
+//
+// "Sections" here means Equipment classified as a busbar Node-role member
+// (BusbarSection, post NSC-dialect Terminal-split — see
+// internal/importer/nsc/normalize.go's doc comment) and grouped under one
+// busbar Container by BuildContainers/pass_a.go — NOT the post-merge
+// electrically-distinct Node count (see busbarmerge.go). This pins the
+// container-grouping step's current behavior, independent of
+// MergeBusbarSectionNodes' later electrical-node unification.
+type datasetStats struct {
+	equipment             int
+	busbars               int
+	sectionsPerBusbarDesc []int
+	equipmentPerBayDesc   []int
+}
+
+// computeDatasetStats derives datasetStats from a BuildContainersResult and
+// the total resolved-Equipment count returned by buildPipelineForFiles.
+func computeDatasetStats(containers *BuildContainersResult, equipmentCount int) datasetStats {
+	contType := map[string]coremodel.ContainerType{}
+	for _, c := range containers.Containers {
+		contType[c.ID] = c.Type
+	}
+
+	busbars := 0
+	for _, ct := range contType {
+		if ct == ContainerTypeBusbar {
+			busbars++
+		}
+	}
+
+	sectionsByBusbar := map[string]int{}
+	eqByBay := map[string]int{}
+	for eqID, contID := range containers.EquipmentToCont {
+		switch contType[contID] {
+		case ContainerTypeBusbar:
+			sectionsByBusbar[contID]++
+		case ContainerTypeBay:
+			eqByBay[contID]++
+		}
+		_ = eqID
+	}
+
+	return datasetStats{
+		equipment:             equipmentCount,
+		busbars:               busbars,
+		sectionsPerBusbarDesc: descCounts(sectionsByBusbar),
+		equipmentPerBayDesc:   descCounts(eqByBay),
+	}
+}
+
+// descCounts returns the values of m sorted descending.
+func descCounts(m map[string]int) []int {
+	out := make([]int, 0, len(m))
+	for _, n := range m {
+		out = append(out, n)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(out)))
+	return out
+}
+
+// repeatInt returns a slice of n copies of v — used to keep the
+// per-Busbar/per-Bay want*Desc literals below readable for datasets with
+// many identical entries (e.g. "every Bay has exactly 2 Equipment").
+func repeatInt(v, n int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = v
+	}
+	return out
+}
+
+// concatInts concatenates its arguments into one []int, used together with
+// repeatInt to build the want*Desc literals below out of a few
+// run-length-encoded groups instead of one long literal.
+func concatInts(parts ...[]int) []int {
+	var out []int
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
+}
+
+// checkDatasetStats compares got against want, reporting each mismatching
+// field individually. A nil want*Desc slice skips that particular
+// comparison (mirrors wantSizesDesc's "nil = skip" convention above, used
+// for datasets whose per-Bay/per-Busbar distribution is too long to
+// usefully pin item-by-item).
+func checkDatasetStats(t *testing.T, got datasetStats, wantEquipment, wantBusbars int, wantSectionsPerBusbarDesc, wantEquipmentPerBayDesc []int) {
+	t.Helper()
+	if got.equipment != wantEquipment {
+		t.Errorf("Equipment count = %d, want %d", got.equipment, wantEquipment)
+	}
+	if got.busbars != wantBusbars {
+		t.Errorf("Busbar count = %d, want %d", got.busbars, wantBusbars)
+	}
+	if wantSectionsPerBusbarDesc != nil && !equalInts(got.sectionsPerBusbarDesc, wantSectionsPerBusbarDesc) {
+		t.Errorf("Sections per Busbar = %v, want %v", got.sectionsPerBusbarDesc, wantSectionsPerBusbarDesc)
+	}
+	if wantEquipmentPerBayDesc != nil && !equalInts(got.equipmentPerBayDesc, wantEquipmentPerBayDesc) {
+		t.Errorf("Equipment per Bay/Feeder = %v, want %v", got.equipmentPerBayDesc, wantEquipmentPerBayDesc)
+	}
 }
 
 // circuitSizesDesc returns each Circuit's Node count, sorted descending.

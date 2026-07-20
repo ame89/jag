@@ -215,9 +215,35 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 		bayToContainer[id] = id
 	}
 
+	// Own records of the BusbarSection Equipment themselves (needed for
+	// their own Name attribute — a busbar container is now named after its
+	// own BusbarSection, not the owning Substation/VoltageLevel, see the
+	// busbar-splitting decision below).
+	var bbSectionIDs []string
+	for bbID, info := range directVLAttach {
+		if info.class == "BusbarSection" {
+			bbSectionIDs = append(bbSectionIDs, bbID)
+		}
+	}
+	for bbID, info := range directSubAttach {
+		if info.class == "BusbarSection" {
+			bbSectionIDs = append(bbSectionIDs, bbID)
+		}
+	}
+	bbOwnRecs, err := getByIDsIndexed(store, version, bbSectionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("common: fetching %d BusbarSection records: %w", len(bbSectionIDs), err)
+	}
+	bbNameOf := map[string]string{}
+	for _, id := range bbSectionIDs {
+		bbNameOf[id] = BuildObjectIndex(bbOwnRecs[id]).NameOf(id)
+	}
+
 	// BusbarSection grouping — one shared "busbar" container per
-	// VoltageLevel (or, NSC dialect with no VoltageLevel, per Substation
-	// directly), mirroring BuildContainers' identical grouping exactly.
+	// VoltageLevel (or, NSC dialect with no VoltageLevel, per busbar's own
+	// base ID within the Substation — see container.go's
+	// baseBusbarSectionID/busbar-splitting doc comment), mirroring
+	// BuildContainers' identical grouping exactly.
 	type busbarGroup struct {
 		containerID string
 		parentID    string
@@ -235,10 +261,11 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 			parentID = vlToSubstation[info.container]
 			name = vlNameOf[info.container]
 		case subSet[info.container]:
-			key = "substation:" + info.container
-			containerID = "busbar:" + info.container
+			base := baseBusbarSectionID(bbID)
+			key = "substation:" + info.container + ":" + base
+			containerID = "busbar:" + base
 			parentID = info.container
-			name = ownIdx.NameOf(info.container)
+			name = bbNameOf[bbID]
 		default:
 			return
 		}

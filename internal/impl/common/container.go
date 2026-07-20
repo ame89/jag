@@ -9,11 +9,33 @@ package common
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
 	"gitlab.com/openk-nsc/jag/internal/core/staging"
 	importmodel "gitlab.com/openk-nsc/jag/internal/importer/model"
 )
+
+// baseBusbarSectionID strips the "#<n>" suffix the NSC dialect's Terminal
+// split adds to a multi-Terminal BusbarSection's extra copies (see
+// internal/importer/nsc/normalize.go's package doc, fix 2: "B-1-1" stays
+// as-is, its extra copies become "B-1-1#2", "B-1-1#3", ...). Used to group
+// a physical busbar's Terminal-split copies back under one busbar
+// grouping key/Container (see the "NSC has no VoltageLevel" busbar-group
+// decision below) — without this, every one of a busbar's Feeder-Terminal
+// copies would look like a separate physical busbar.
+func baseBusbarSectionID(id string) string {
+	i := strings.LastIndexByte(id, '#')
+	if i < 0 || i+1 >= len(id) {
+		return id
+	}
+	for _, r := range id[i+1:] {
+		if r < '0' || r > '9' {
+			return id
+		}
+	}
+	return id[:i]
+}
 
 // ContainerAnomaly describes a container-hierarchy resolution problem
 // (dangling/unresolvable reference) found while building containers.
@@ -224,10 +246,22 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 	// have several BusbarSections, e.g. double-busbar arrangements — they
 	// share ONE busbar container). The NSC dialect has no VoltageLevel at
 	// all (see the Feeder/Bay decision above) — there, BusbarSection
-	// attaches directly to its Substation, so the group key/parent falls
-	// back to the Substation itself. The container ID can't simply reuse
-	// the Substation ID in that case (already taken by the Substation's own
-	// Container), hence the "busbar:" prefix.
+	// attaches directly to its Substation. A Substation can itself contain
+	// several genuinely distinct physical busbars (confirmed with the user
+	// 2026-07-20 against examples/nsc/example_as_cim.xml's ONS 1, which has
+	// two separately named busbars, "Busbar 1" and "Busbar 2", both
+	// attached directly to the same Substation) — grouping by Substation
+	// alone would wrongly merge them into one busbar/Node. So the group
+	// key/Container falls back to each busbar's own (Terminal-split-)base
+	// ID (baseBusbarSectionID) instead of the Substation, with the
+	// Substation only used as the Container's parent. Two busbars that are
+	// genuinely electrically linked via a real coupler/switch Equipment in
+	// the raw CIM data stay connected regardless of this container split —
+	// that connection is an ordinary Edge, independent of Container
+	// grouping (see busbarmerge.go's doc comment on real couplers). The
+	// container ID can't simply reuse the Substation ID in that case
+	// (already taken by the Substation's own Container), hence the
+	// "busbar:" prefix.
 	type busbarGroup struct {
 		containerID string
 		parentID    string
@@ -245,10 +279,11 @@ func BuildContainers(store staging.Store, version uint64, chunkSize int) (*Build
 			parentID = vlToSubstation[container]
 			name = vlIdx.NameOf(container)
 		case subSet[container]:
-			key = "substation:" + container
-			containerID = "busbar:" + container
+			base := baseBusbarSectionID(id)
+			key = "substation:" + container + ":" + base
+			containerID = "busbar:" + base
 			parentID = container
-			name = subIdx.NameOf(container)
+			name = bbIdx.NameOf(id)
 		default:
 			res.Anomalies = append(res.Anomalies, ContainerAnomaly{ObjectID: id, Message: "BusbarSection container (expected VoltageLevel or Substation) unresolved"})
 			continue
