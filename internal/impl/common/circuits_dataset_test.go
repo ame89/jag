@@ -22,13 +22,16 @@ import (
 // that silently alters the result is caught.
 func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 	tests := []struct {
-		dir                       string
-		wantCircuits              int
-		wantSizesDesc             []int // Node count per Circuit, descending; nil if 0 Circuits
-		wantEquipment             int
-		wantBusbars               int
-		wantSectionsPerBusbarDesc []int // BusbarSection-role Equipment count per Busbar container, descending
-		wantEquipmentPerBayDesc   []int // Equipment count per Bay/Feeder container, descending
+		dir                              string
+		wantCircuits                     int
+		wantSizesDesc                    []int // Node count per Circuit, descending; nil if 0 Circuits
+		wantEquipment                    int
+		wantBusbars                      int
+		wantSectionsPerBusbarDesc        []int // BusbarSection-role Equipment count per Busbar container, descending
+		wantEquipmentPerBayDesc          []int // Equipment count per Bay/Feeder container, descending
+		wantEquipmentWithoutContainer    int
+		wantUnreferencedNode             int
+		wantElectricalTopologyMismatches int
 	}{
 		{
 			// Pure bus-branch model: no ConnectivityNode at all, only
@@ -41,14 +44,23 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 			wantSizesDesc: []int{105, 12, 1},
 			wantEquipment: 325,
 			wantBusbars:   0,
+			// 3 EquivalentInjection (boundary equipment, EQ-BD profile
+			// doesn't assign a container) — pre-existing, accepted gap.
+			wantEquipmentWithoutContainer: 3,
 		},
 		{
-			dir:                       "MicroGrid_NL_BusCoupler",
-			wantCircuits:              4,
-			wantSizesDesc:             []int{8, 7, 2, 2},
-			wantEquipment:             35,
-			wantBusbars:               2,
-			wantSectionsPerBusbarDesc: []int{2, 2},
+			dir:                           "MicroGrid_NL_BusCoupler",
+			wantCircuits:                  4,
+			wantSizesDesc:                 []int{8, 7, 2, 2},
+			wantEquipment:                 35,
+			wantBusbars:                   2,
+			wantSectionsPerBusbarDesc:     []int{2, 2},
+			wantEquipmentWithoutContainer: 5,
+			// Bus-coupler Breaker has Switch.retained=true (a CGMES
+			// "always a topology boundary" convention JAG's Zero-Ohm
+			// reduction doesn't model yet) — see
+			// addInvariantAndTopologyStats' doc comment.
+			wantElectricalTopologyMismatches: 1,
 		},
 		{
 			// Updated 2026-07-14: BusbarSection was added to
@@ -60,13 +72,20 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 			// nodeedge.go's doc comment. This dataset had 6 such
 			// previously-rejected BusbarSections; correctly including
 			// them merges two previously-separate Circuits into one.
-			dir:                       "MiniGrid_NodeBreaker_Switchgear",
-			wantCircuits:              7,
-			wantSizesDesc:             []int{58, 14, 11, 7, 4, 4, 4},
-			wantEquipment:             124,
-			wantBusbars:               10,
-			wantSectionsPerBusbarDesc: concatInts([]int{2}, repeatInt(1, 9)),
-			wantEquipmentPerBayDesc:   repeatInt(3, 30),
+			dir:                           "MiniGrid_NodeBreaker_Switchgear",
+			wantCircuits:                  7,
+			wantSizesDesc:                 []int{58, 14, 11, 7, 4, 4, 4},
+			wantEquipment:                 124,
+			wantBusbars:                   10,
+			wantSectionsPerBusbarDesc:     concatInts([]int{2}, repeatInt(1, 9)),
+			wantEquipmentPerBayDesc:       repeatInt(3, 30),
+			wantEquipmentWithoutContainer: 2,
+			// Caused by the two known default-open Breakers (see
+			// TestBuildCircuitsWithSwitchOverrides): the shipped TP
+			// profile disagrees with the shipped SSH profile's switch
+			// state — a TP/SSH inconsistency in this conformance test
+			// dataset, not a JAG defect.
+			wantElectricalTopologyMismatches: 3,
 		},
 		{
 			dir:          "ReliCapGrid_Espheim",
@@ -75,10 +94,15 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 				1133, 116, 53, 35, 13, 6, 4, 4, 2, 2, 2, 2,
 				1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 			},
-			wantEquipment:             1777,
-			wantBusbars:               117,
-			wantSectionsPerBusbarDesc: concatInts([]int{3}, repeatInt(1, 116)),
-			wantEquipmentPerBayDesc:   concatInts(repeatInt(3, 9), repeatInt(2, 369)),
+			wantEquipment:                 1777,
+			wantBusbars:                   117,
+			wantSectionsPerBusbarDesc:     concatInts([]int{3}, repeatInt(1, 116)),
+			wantEquipmentPerBayDesc:       concatInts(repeatInt(3, 9), repeatInt(2, 369)),
+			wantEquipmentWithoutContainer: 7,
+			// Same class of TP/SSH inconsistency as MiniGrid above: a
+			// closed, non-retained switch JAG correctly merges, but whose
+			// shipped TP profile keeps the two sides separate.
+			wantElectricalTopologyMismatches: 5,
 		},
 		{
 			dir:                       "Telemark_LV_Fuse",
@@ -102,7 +126,7 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 			if tt.wantSizesDesc != nil && !equalInts(gotSizes, tt.wantSizesDesc) {
 				t.Fatalf("Circuit sizes = %v, want %v", gotSizes, tt.wantSizesDesc)
 			}
-			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc)
+			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc, tt.wantEquipmentWithoutContainer, 0, tt.wantElectricalTopologyMismatches)
 		})
 	}
 }
@@ -113,39 +137,52 @@ func TestBuildCircuitsAgainstRealDatasets(t *testing.T) {
 // easy to tell apart from the smaller CGMES v2.4.15 datasets above.
 func TestBuildCircuitsAgainstRealDatasetsCGMES3(t *testing.T) {
 	tests := []struct {
-		dir                       string
-		wantCircuits              int
-		wantSizesDesc             []int
-		wantEquipment             int
-		wantBusbars               int
-		wantSectionsPerBusbarDesc []int
-		wantEquipmentPerBayDesc   []int
+		dir                              string
+		wantCircuits                     int
+		wantSizesDesc                    []int
+		wantEquipment                    int
+		wantBusbars                      int
+		wantSectionsPerBusbarDesc        []int
+		wantEquipmentPerBayDesc          []int
+		wantEquipmentWithoutContainer    int
+		wantUnreferencedNode             int
+		wantElectricalTopologyMismatches int
 	}{
 		{
-			dir:                       "MicroGrid",
-			wantCircuits:              7,
-			wantSizesDesc:             []int{18, 12, 4, 2, 2, 2, 1},
-			wantEquipment:             83,
-			wantBusbars:               7,
-			wantSectionsPerBusbarDesc: concatInts(repeatInt(3, 2), repeatInt(2, 2), repeatInt(1, 3)),
+			dir:                           "MicroGrid",
+			wantCircuits:                  7,
+			wantSizesDesc:                 []int{18, 12, 4, 2, 2, 2, 1},
+			wantEquipment:                 83,
+			wantBusbars:                   7,
+			wantSectionsPerBusbarDesc:     concatInts(repeatInt(3, 2), repeatInt(2, 2), repeatInt(1, 3)),
+			wantEquipmentWithoutContainer: 10,
+			// 2 genuinely unreferenced ConnectivityNodes — pre-existing,
+			// accepted gap (not caused by this test).
+			wantUnreferencedNode: 2,
+			// Same TP/SSH-inconsistency root cause as the cgmes/MiniGrid_
+			// NodeBreaker_Switchgear dataset (shares structure/IDs).
+			wantElectricalTopologyMismatches: 1,
 		},
 		{
-			dir:                       "MiniGrid",
-			wantCircuits:              6,
-			wantSizesDesc:             []int{62, 14, 11, 7, 4, 4},
-			wantEquipment:             125,
-			wantBusbars:               10,
-			wantSectionsPerBusbarDesc: concatInts([]int{2}, repeatInt(1, 9)),
-			wantEquipmentPerBayDesc:   repeatInt(2, 30),
+			dir:                              "MiniGrid",
+			wantCircuits:                     6,
+			wantSizesDesc:                    []int{62, 14, 11, 7, 4, 4},
+			wantEquipment:                    125,
+			wantBusbars:                      10,
+			wantSectionsPerBusbarDesc:        concatInts([]int{2}, repeatInt(1, 9)),
+			wantEquipmentPerBayDesc:          repeatInt(2, 30),
+			wantEquipmentWithoutContainer:    2,
+			wantElectricalTopologyMismatches: 1,
 		},
 		{
-			dir:                       "SmallGrid",
-			wantCircuits:              3,
-			wantSizesDesc:             []int{1119, 102, 4},
-			wantEquipment:             1547,
-			wantBusbars:               115,
-			wantSectionsPerBusbarDesc: repeatInt(1, 115),
-			wantEquipmentPerBayDesc:   repeatInt(2, 369),
+			dir:                           "SmallGrid",
+			wantCircuits:                  3,
+			wantSizesDesc:                 []int{1119, 102, 4},
+			wantEquipment:                 1547,
+			wantBusbars:                   115,
+			wantSectionsPerBusbarDesc:     repeatInt(1, 115),
+			wantEquipmentPerBayDesc:       repeatInt(2, 369),
+			wantEquipmentWithoutContainer: 3,
 		},
 		{
 			dir:          "Svedala",
@@ -171,7 +208,7 @@ func TestBuildCircuitsAgainstRealDatasetsCGMES3(t *testing.T) {
 			if tt.wantSizesDesc != nil && !equalInts(gotSizes, tt.wantSizesDesc) {
 				t.Fatalf("Circuit sizes = %v, want %v", gotSizes, tt.wantSizesDesc)
 			}
-			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc)
+			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc, tt.wantEquipmentWithoutContainer, tt.wantUnreferencedNode, tt.wantElectricalTopologyMismatches)
 		})
 	}
 }
@@ -196,7 +233,7 @@ func TestBuildCircuitsAgainstRealDatasetsCigreMV(t *testing.T) {
 	if !equalInts(gotSizes, wantSizesDesc) {
 		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
 	}
-	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, nil, nil)
+	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, nil, nil, 0, 0, 0)
 }
 
 // TestBuildCircuitsAgainstRealDatasetsNSC mirrors
@@ -215,13 +252,14 @@ func TestBuildCircuitsAgainstRealDatasetsNSC(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "examples", "nsc")
 
 	tests := []struct {
-		file                      string
-		wantCircuits              int
-		wantSizesDesc             []int
-		wantEquipment             int
-		wantBusbars               int
-		wantSectionsPerBusbarDesc []int
-		wantEquipmentPerBayDesc   []int
+		file                          string
+		wantCircuits                  int
+		wantSizesDesc                 []int
+		wantEquipment                 int
+		wantBusbars                   int
+		wantSectionsPerBusbarDesc     []int
+		wantEquipmentPerBayDesc       []int
+		wantEquipmentWithoutContainer int
 	}{
 		{
 			// Updated 2026-07-20: fixed a container-grouping bug (see
@@ -250,6 +288,10 @@ func TestBuildCircuitsAgainstRealDatasetsNSC(t *testing.T) {
 			wantBusbars:               3,
 			wantSectionsPerBusbarDesc: concatInts([]int{3}, repeatInt(2, 2)),
 			wantEquipmentPerBayDesc:   repeatInt(2, 4),
+			// 3 free-standing Junction splices without a container — a
+			// known, not-yet-decided NSC gap (see Konzept.md's "Was fehlt
+			// noch?").
+			wantEquipmentWithoutContainer: 3,
 		},
 	}
 
@@ -263,7 +305,7 @@ func TestBuildCircuitsAgainstRealDatasetsNSC(t *testing.T) {
 			if !equalInts(gotSizes, tt.wantSizesDesc) {
 				t.Fatalf("Circuit sizes = %v, want %v", gotSizes, tt.wantSizesDesc)
 			}
-			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc)
+			checkDatasetStats(t, gotStats, tt.wantEquipment, tt.wantBusbars, tt.wantSectionsPerBusbarDesc, tt.wantEquipmentPerBayDesc, tt.wantEquipmentWithoutContainer, 0, 0)
 		})
 	}
 }
@@ -288,7 +330,7 @@ func TestBuildCircuitsAgainstRealDatasetsPfCimBeispielOrtsnetz(t *testing.T) {
 	if !equalInts(gotSizes, wantSizesDesc) {
 		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
 	}
-	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, repeatInt(1, 8), nil)
+	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, repeatInt(1, 8), nil, 0, 0, 0)
 }
 
 // TestBuildCircuitsAgainstRealDatasetsPandapowerCIM mirrors
@@ -309,7 +351,7 @@ func TestBuildCircuitsAgainstRealDatasetsPandapowerCIM(t *testing.T) {
 	if !equalInts(gotSizes, wantSizesDesc) {
 		t.Fatalf("Circuit sizes = %v, want %v", gotSizes, wantSizesDesc)
 	}
-	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, repeatInt(1, 4), nil)
+	checkDatasetStats(t, gotStats, wantEquipment, wantBusbars, repeatInt(1, 4), nil, 0, 0, 0)
 }
 
 // TestBuildCircuitsWithSwitchOverrides is a regression/behavior test for
@@ -350,7 +392,7 @@ func TestBuildCircuitsWithSwitchOverrides(t *testing.T) {
 	}
 	sort.Strings(files)
 
-	store, version, nodes, edges, _, _ := buildPipelineForFiles(t, files, false)
+	store, version, nodes, edges, _, _, _ := buildPipelineForFiles(t, files, false)
 	defer store.Close()
 
 	t.Run("default switch states", func(t *testing.T) {
@@ -473,7 +515,7 @@ func buildCircuitsForDataset(t *testing.T, dir string) (int, []int, datasetStats
 func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int, datasetStats) {
 	t.Helper()
 
-	store, version, nodes, edges, containers, equipmentCount := buildPipelineForFiles(t, files, isNSC)
+	store, version, nodes, edges, containers, equipmentCount, resolved := buildPipelineForFiles(t, files, isNSC)
 	defer store.Close()
 
 	circuits, _, _, err := BuildCircuits(store, version, nodes, edges, nil)
@@ -481,7 +523,9 @@ func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int
 		t.Fatalf("BuildCircuits: %v", err)
 	}
 
-	return len(circuits), circuitSizesDesc(circuits), computeDatasetStats(containers, equipmentCount)
+	stats := computeDatasetStats(containers, equipmentCount)
+	addInvariantAndTopologyStats(t, store, version, resolved, containers, nodes, edges, isNSC, &stats)
+	return len(circuits), circuitSizesDesc(circuits), stats
 }
 
 // buildPipelineForFiles runs Phase 1 -> ResolveTerminals -> BuildContainers
@@ -497,7 +541,7 @@ func buildCircuitsForFiles(t *testing.T, files []string, isNSC bool) (int, []int
 // callers additionally pin container-level stats (Busbar/Bay counts,
 // Equipment count) via datasetStats/computeDatasetStats below, without a
 // second pipeline run.
-func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.StagingStore, uint64, []coremodel.Node, []coremodel.Edge, *BuildContainersResult, int) {
+func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.StagingStore, uint64, []coremodel.Node, []coremodel.Edge, *BuildContainersResult, int, map[string]EquipmentTerminals) {
 	t.Helper()
 
 	store, err := sqlite.Open(":memory:")
@@ -552,7 +596,7 @@ func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.St
 	mergedResolved := MergeBusbarSectionNodes(junctionMerged, containers, nodeOnlyIDs)
 	nodes, edges := BuildNodesAndEdges(mergedResolved, nodeOnlyIDs)
 
-	return store, result.Version, nodes, edges, containers, len(resolved)
+	return store, result.Version, nodes, edges, containers, len(resolved), mergedResolved
 }
 
 // datasetStats holds container-level regression stats gathered alongside
@@ -570,10 +614,14 @@ func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.St
 // container-grouping step's current behavior, independent of
 // MergeBusbarSectionNodes' later electrical-node unification.
 type datasetStats struct {
-	equipment             int
-	busbars               int
-	sectionsPerBusbarDesc []int
-	equipmentPerBayDesc   []int
+	equipment                     int
+	busbars                       int
+	sectionsPerBusbarDesc         []int
+	equipmentPerBayDesc           []int
+	stationConnectivityViolations int
+	equipmentWithoutContainer     int
+	unreferencedNode              int
+	electricalTopologyMismatches  int
 }
 
 // computeDatasetStats derives datasetStats from a BuildContainersResult and
@@ -609,6 +657,94 @@ func computeDatasetStats(containers *BuildContainersResult, equipmentCount int) 
 		sectionsPerBusbarDesc: descCounts(sectionsByBusbar),
 		equipmentPerBayDesc:   descCounts(eqByBay),
 	}
+}
+
+// addInvariantAndTopologyStats runs Phase 3 (CheckInvariants, see
+// consistency.go) and the "Schaltkreis"/electrical-topology cross-check
+// against CGMES's own TopologicalNode data (CheckElectricalTopologyAgainstCGMES,
+// see electrical.go) against an already-built model and fills the
+// corresponding fields of stats. Both checks were, before this test was
+// added, never exercised against any real dataset at all (only against
+// small hand-built fixtures in station_connectivity_test.go) — see the
+// session notes for the investigation that established the pinned counts
+// below and their root causes.
+//
+// "station-connectivity" (checkStationConnectivity) is asserted to be 0 for
+// every dataset here — Idee.md's invariant "all elements form one connected
+// graph from the highest voltage level down to GND", checked per Station/
+// House/KVS/ACLine (see consistency.go's doc comment on why this is no
+// longer a whole-model check) — and is expected to genuinely hold
+// everywhere; a non-zero count here is always a real regression, never an
+// accepted/known gap.
+//
+// "equipment-without-container" and "unreferenced-node" have real,
+// pre-existing non-zero counts in several CGMES/CGMES3 datasets
+// (EquivalentInjection equipment that CGMES's boundary/EQ-BD profiles
+// don't assign a container to, and — in cgmes3/MicroGrid — 2 genuinely
+// unreferenced ConnectivityNodes) and NSC's second file (3 free-standing
+// Junction splices without a container — a known, not yet decided NSC
+// gap, see Konzept.md's "Was fehlt noch?"). These counts are pinned as
+// the current known baseline, not asserted to be 0.
+//
+// "electrical-topology-mismatch" (CheckElectricalTopologyAgainstCGMES) has
+// non-zero counts in 5 datasets, each individually root-caused during this
+// session's investigation (not JAG bugs):
+//   - MicroGrid_NL_BusCoupler (1): a closed bus-coupler Breaker has
+//     Switch.retained=true, a CGMES convention meaning "always keep this as
+//     a topology boundary regardless of open/closed state" — JAG's
+//     Zero-Ohm reduction (BuildElectricalGroups) does not model
+//     Switch.retained at all yet (open question, not yet decided, whether
+//     it should — see Konzept.md's "Offene Punkte").
+//   - MiniGrid_NodeBreaker_Switchgear (3) and cgmes3/MiniGrid (1): caused by
+//     the two known default-open Breakers already used in
+//     TestBuildCircuitsWithSwitchOverrides — the shipped TP profile merges
+//     across them as if they were closed, while the shipped SSH profile
+//     has them open; a TP/SSH profile-pairing inconsistency in this
+//     ENTSO-E conformance test dataset, not a JAG defect (JAG correctly
+//     follows the SSH-declared switch state it imported).
+//   - ReliCapGrid_Espheim (5) and cgmes3/MicroGrid (1): same class of
+//     TP/SSH inconsistency — a closed, non-retained switch that JAG
+//     correctly merges, but whose shipped TP profile still keeps the two
+//     sides as separate TopologicalNodes.
+func addInvariantAndTopologyStats(
+	t *testing.T,
+	store *sqlite.StagingStore,
+	version uint64,
+	resolved map[string]EquipmentTerminals,
+	containers *BuildContainersResult,
+	nodes []coremodel.Node,
+	edges []coremodel.Edge,
+	isNSC bool,
+	stats *datasetStats,
+) {
+	t.Helper()
+
+	result, err := CheckInvariants(store, version, resolved, containers, nodes, edges, isNSC)
+	if err != nil {
+		t.Fatalf("CheckInvariants: %v", err)
+	}
+	for _, v := range result.Violations {
+		switch v.Rule {
+		case "station-connectivity":
+			stats.stationConnectivityViolations++
+		case "equipment-without-container":
+			stats.equipmentWithoutContainer++
+		case "unreferenced-node":
+			stats.unreferencedNode++
+		default:
+			t.Fatalf("unexpected invariant violation rule %q (%s: %s) — real dataset tests only expect station-connectivity/equipment-without-container/unreferenced-node here", v.Rule, v.ObjectID, v.Message)
+		}
+	}
+
+	groups, _, err := BuildElectricalGroups(store, version, nodes, edges, nil)
+	if err != nil {
+		t.Fatalf("BuildElectricalGroups: %v", err)
+	}
+	topoViolations, err := CheckElectricalTopologyAgainstCGMES(store, version, groups)
+	if err != nil {
+		t.Fatalf("CheckElectricalTopologyAgainstCGMES: %v", err)
+	}
+	stats.electricalTopologyMismatches = len(topoViolations)
 }
 
 // descCounts returns the values of m sorted descending.
@@ -647,8 +783,14 @@ func concatInts(parts ...[]int) []int {
 // field individually. A nil want*Desc slice skips that particular
 // comparison (mirrors wantSizesDesc's "nil = skip" convention above, used
 // for datasets whose per-Bay/per-Busbar distribution is too long to
-// usefully pin item-by-item).
-func checkDatasetStats(t *testing.T, got datasetStats, wantEquipment, wantBusbars int, wantSectionsPerBusbarDesc, wantEquipmentPerBayDesc []int) {
+// usefully pin item-by-item). wantEquipmentWithoutContainer/
+// wantUnreferencedNode/wantElectricalTopologyMismatches pin the current
+// known baseline for those Phase 3 rules (see addInvariantAndTopologyStats'
+// doc comment for the root cause behind each dataset's non-zero counts).
+// stationConnectivityViolations is always asserted to be exactly 0 — see
+// addInvariantAndTopologyStats' doc comment on why that invariant is
+// expected to hold everywhere, never merely "known to be violated".
+func checkDatasetStats(t *testing.T, got datasetStats, wantEquipment, wantBusbars int, wantSectionsPerBusbarDesc, wantEquipmentPerBayDesc []int, wantEquipmentWithoutContainer, wantUnreferencedNode, wantElectricalTopologyMismatches int) {
 	t.Helper()
 	if got.equipment != wantEquipment {
 		t.Errorf("Equipment count = %d, want %d", got.equipment, wantEquipment)
@@ -661,6 +803,18 @@ func checkDatasetStats(t *testing.T, got datasetStats, wantEquipment, wantBusbar
 	}
 	if wantEquipmentPerBayDesc != nil && !equalInts(got.equipmentPerBayDesc, wantEquipmentPerBayDesc) {
 		t.Errorf("Equipment per Bay/Feeder = %v, want %v", got.equipmentPerBayDesc, wantEquipmentPerBayDesc)
+	}
+	if got.stationConnectivityViolations != 0 {
+		t.Errorf("station-connectivity violations = %d, want 0", got.stationConnectivityViolations)
+	}
+	if got.equipmentWithoutContainer != wantEquipmentWithoutContainer {
+		t.Errorf("equipment-without-container violations = %d, want %d", got.equipmentWithoutContainer, wantEquipmentWithoutContainer)
+	}
+	if got.unreferencedNode != wantUnreferencedNode {
+		t.Errorf("unreferenced-node violations = %d, want %d", got.unreferencedNode, wantUnreferencedNode)
+	}
+	if got.electricalTopologyMismatches != wantElectricalTopologyMismatches {
+		t.Errorf("electrical-topology-mismatch count = %d, want %d", got.electricalTopologyMismatches, wantElectricalTopologyMismatches)
 	}
 }
 
