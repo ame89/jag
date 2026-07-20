@@ -39,12 +39,28 @@ package hjson
 // No "id" field exists at the top level — the container's own ID always
 // comes from the filename (see Konzept.md: "Da die Datei bereits über
 // ihren Pfad eindeutig identifiziert ist, entfällt ein zusätzliches
-// id-Feld im Dateiinhalt selbst").
+// id-Feld im Dateiinhalt selbst"), and is therefore always global.
+//
+// ID scoping convention (2026-07-20 revision): every OTHER id/connects/
+// from/to value appearing anywhere in a file is either local or global,
+// distinguished purely by a leading "@": a name starting with "@" is
+// local — only unique within this one file — and expands to
+// "<this file's container ID>-<name without the leading @>" (e.g. "@6"
+// inside O-5.hjson becomes "O-5-6"); a name NOT starting with "@" is
+// already a global ID, valid verbatim inside and outside the file (e.g.
+// "ABC" stays "ABC" no matter which file it appears in). See
+// internal/importer/hjson2/resolve.go's localIDPrefix/resolveID for the
+// import-side implementation, and internal/exporter/hjson2/build.go's
+// shortenID for the export-side counterpart (an ID exported with a
+// "<rootID>-" prefix is shortened AND marked local with "@"; anything
+// else — including most Kabel/ACLine segment and node IDs, since those
+// rarely happen to share a station-root prefix in raw CIM/CGMES/NSC data —
+// is left as a global ID unchanged).
 type File struct {
 	Busbars    []Busbar               `json:"busbars"`
 	Bays       []Bay                  `json:"bays"`
 	Segments   []Segment              `json:"segments"`
-	Equipment  []Equipment            `json:"equipment"`
+	Equipment  []Equipment            `json:"equipments"`
 	Attributes map[string]interface{} `json:"attributes"`
 	Geometry   *GeometryPoint         `json:"geometry"`
 }
@@ -71,7 +87,8 @@ type GeometryPoint struct {
 // node (see internal/exporter/hjson2/build.go's buildBusbarSections),
 // which is not necessarily the "conceptual root" equipment of a branch
 // (e.g. a Fuse directly touching the busbar, while the Transformer behind
-// it keeps its own ordinary node). Section long IDs ("BB-1-1") are what a
+// it keeps its own ordinary node). Section long IDs ("@BB-1-1") are local
+// (see File's doc comment on the "@" convention) and are what a
 // connecting Equipment's connects list references directly instead of a
 // raw node ID.
 type Busbar struct {
@@ -120,7 +137,7 @@ type BusbarSectionEntry struct {
 // file, holding its own Equipment list.
 type Bay struct {
 	ID        string      `json:"id"`
-	Equipment []Equipment `json:"equipment"`
+	Equipment []Equipment `json:"equipments"`
 }
 
 // Equipment is one piece of electrical equipment (Zweipol or, per the
@@ -176,10 +193,10 @@ type Equipment struct {
 
 // Segment is one ACLineSegment within an ACLine ("Kabel") file. From/To
 // name the two connection nodes — a cross-file reference (into a
-// Substation/KVS/House file) must use the already fully-prefixed global ID
-// (see Konzept.md's ID-prefixing decision); a same-file reference (rare,
-// e.g. an inline splice between two of this file's own Segments) uses the
-// short local name like any other connects entry.
+// Substation/KVS/House file) must use the already-global ID (no leading
+// "@", see File's doc comment on the "@" convention) verbatim; a same-file
+// reference (rare, e.g. an inline splice between two of this file's own
+// Segments) uses a local "@"-prefixed name like any other connects entry.
 type Segment struct {
 	ID         string                 `json:"id"`
 	From       string                 `json:"from"`

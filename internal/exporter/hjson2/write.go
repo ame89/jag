@@ -55,7 +55,7 @@ func writeFile(b *strings.Builder, f importhjson.File) {
 		writeGeometryPoint(b, f.Geometry, 1)
 	}
 	if len(f.Equipment) > 0 {
-		b.WriteString("  equipment: [\n")
+		b.WriteString("  equipments: [\n")
 		for _, eq := range f.Equipment {
 			writeEquipment(b, eq, 2)
 		}
@@ -122,7 +122,7 @@ func writeBay(b *strings.Builder, bay importhjson.Bay, depth int) {
 	fmt.Fprintf(b, "id: %s\n", quote(bay.ID))
 	if len(bay.Equipment) > 0 {
 		indent(b, depth+1)
-		b.WriteString("equipment: [\n")
+		b.WriteString("equipments: [\n")
 		for _, eq := range bay.Equipment {
 			writeEquipment(b, eq, depth+2)
 		}

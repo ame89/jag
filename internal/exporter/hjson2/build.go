@@ -236,7 +236,7 @@ func classifyInternalACLines(s *Snapshot, roots []coremodel.Container, nodeEquip
 // examples/nsc's "...ohne_Trafo..." dataset). Such equipment previously
 // existed in the model (s.EquipmentByContainer[rootID]) but was silently
 // dropped from export since only child containers were walked; it's now
-// rendered via the station file's own top-level "equipment" list (the
+// rendered via the station file's own top-level "equipments" list (the
 // same File.Equipment field already used for House files) so the station
 // layout as-imported can be fully seen/maintained in the .hjson file.
 //
@@ -261,20 +261,22 @@ func classifyInternalACLines(s *Snapshot, roots []coremodel.Container, nodeEquip
 // A-9's CN9, C-17's CN16 — see the busbar-topology checkpoint history.
 //
 // Once a station's busbar node(s) are found, each is assigned a short,
-// per-station synthetic ID ("BB-1", "BB-2", ...), independent of any
-// original CIM object ID (busbar containers/BusbarSection Equipment IDs
-// are container-hierarchy artifacts, not electrical identity — see
-// container.go's "busbar:"-prefix doc comment). Every piece of Equipment
-// that is actually wired to that node (regardless of which Bay or the
-// root it lives in) gets its own "Section" under that Busbar (a per-
-// connection slot, NOT a distinct electrical point — all Sections of one
-// Busbar are, by definition, the very same node, confirmed explicitly by
-// the user: "eine Busbar und alle ihre BusbarSections haben immer
-// DIESELBE Spannungsebene"). The connecting Equipment's own "connects"
-// entry is rewritten from the raw node ID to this Section's long ID
-// ("BB-1-1"), so a human reading the file sees "connects: [BB-1-1]"
-// instead of an opaque "CN3". Any equipment NOT wired to a busbar node
-// keeps its ordinary (shortened) node ID unchanged.
+// per-station synthetic local ID ("@BB-1", "@BB-2", ...; the "@" prefix
+// marks it explicitly as file-local, see internal/importer/hjson2's
+// localIDPrefix/resolveID), independent of any original CIM object ID
+// (busbar containers/BusbarSection Equipment IDs are container-hierarchy
+// artifacts, not electrical identity — see container.go's "busbar:"-
+// prefix doc comment). Every piece of Equipment that is actually wired to
+// that node (regardless of which Bay or the root it lives in) gets its
+// own "Section" under that Busbar (a per-connection slot, NOT a distinct
+// electrical point — all Sections of one Busbar are, by definition, the
+// very same node, confirmed explicitly by the user: "eine Busbar und alle
+// ihre BusbarSections haben immer DIESELBE Spannungsebene"). The
+// connecting Equipment's own "connects" entry is rewritten from the raw
+// node ID to this Section's long local ID ("@BB-1-1"), so a human reading
+// the file sees "connects: [@BB-1-1]" instead of an opaque "CN3". Any
+// equipment NOT wired to a busbar node keeps its ordinary (shortened)
+// node ID unchanged.
 func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines []coremodel.Container) {
 	rootEqs := append([]coremodel.Equipment(nil), s.EquipmentByContainer[rootID]...)
 	sort.Slice(rootEqs, func(i, j int) bool { return rootEqs[i].ID < rootEqs[j].ID })
@@ -329,7 +331,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines 
 // importhjson.Busbar per busbarContainers entry to f.Busbars. It returns
 // the "connects" rewrite table: overrides[eqID][nodeID] = the Section long
 // ID that eqID's connects entry for nodeID must be rewritten to (e.g.
-// overrides["MD-2"]["O-5-CN3"] = "BB-1-2").
+// overrides["MD-2"]["O-5-CN3"] = "@BB-1-2").
 //
 // busbarContainers and the found convergence nodes are paired up in
 // sorted order (busbar container ID ascending <-> node ID ascending) —
@@ -420,7 +422,7 @@ func buildBusbarSections(
 	}
 
 	for k, bbContainer := range busbarContainers {
-		bb := importhjson.Busbar{ID: fmt.Sprintf("BB-%d", k+1)}
+		bb := importhjson.Busbar{ID: fmt.Sprintf("@BB-%d", k+1)}
 		if k >= len(candidateNodes) {
 			// No convergence node found for this busbar container (e.g. a
 			// station with only a single branch) — render the busbar
@@ -851,17 +853,21 @@ func regionOf(s *Snapshot, ownerID, defaultNetzregion string) string {
 	return defaultNetzregion
 }
 
-// shortenID strips a "<rootID>-" prefix if present (the Fachmodell
-// importer's own ID-prefixing scheme — see internal/importer/hjson's
-// resolveID); GND and IDs without that prefix (e.g. raw CIM/CGMES/NSC
-// mRIDs, or cross-file references into a different root) are returned
+// shortenID strips a "<rootID>-" prefix if present and marks the result
+// as an explicitly local ID with the "@" prefix (see
+// internal/importer/hjson2's resolveID/localIDPrefix — a name is local to
+// a file iff it starts with "@", global otherwise); GND and IDs without
+// the "<rootID>-" prefix (e.g. raw CIM/CGMES/NSC mRIDs, or cross-file
+// references into a different root — Kabel/ACLine files in particular
+// rarely have IDs sharing any station-root prefix, so this rule fires
+// there only rarely, staying global/unprefixed as expected) are returned
 // unchanged.
 func shortenID(rootID, id string) string {
 	if id == gndToken {
 		return gndToken
 	}
 	if strings.HasPrefix(id, rootID+"-") {
-		return strings.TrimPrefix(id, rootID+"-")
+		return "@" + strings.TrimPrefix(id, rootID+"-")
 	}
 	return id
 }

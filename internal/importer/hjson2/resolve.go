@@ -81,11 +81,9 @@ func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingEr
 		return nil, nil, fmt.Errorf("hjson: walking %s: %w", root, err)
 	}
 
-	// Pass 1: every top-level container ID is already globally unique and
-	// fully qualified (it's the file's own name) — collect them all up
-	// front so pass 2 can tell "already-fully-qualified cross-file
-	// reference" apart from "local name needing this file's prefix".
-	known := make([]string, 0, len(infos))
+	// Pass 1: check for duplicate top-level container IDs across files
+	// (a genuine authoring error — two files claiming the same station/
+	// house/ACLine root ID).
 	seen := map[string]FileInfo{}
 	var errs []model.StagingError
 	for _, fi := range infos {
@@ -98,11 +96,7 @@ func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingEr
 			continue
 		}
 		seen[fi.ContainerID] = fi
-		known = append(known, fi.ContainerID)
 	}
-	// Longest-first so a prefix check never wrongly matches a shorter,
-	// unrelated container ID that happens to also be a prefix.
-	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
 
 	var records []model.StagingRecord
 	for _, fi := range infos {
@@ -114,39 +108,41 @@ func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingEr
 			errs = append(errs, model.StagingError{Version: version, SourceFile: fi.Path, Message: err.Error()})
 			continue
 		}
-		recs, fileErrs := emitFile(version, fi, f, known)
+		recs, fileErrs := emitFile(version, fi, f)
 		records = append(records, recs...)
 		errs = append(errs, fileErrs...)
 	}
 	return records, errs, nil
 }
 
+// localIDPrefix marks a name occurring in a Fachmodell file as a local ID
+// (only unique within that one file) rather than an already-global ID —
+// see Konzept.md's ID-prefixing decision (2026-07-20 revision): a name is
+// local if and only if it starts with "@"; anything else is global and
+// used verbatim, in and outside the file, unchanged.
+const localIDPrefix = "@"
+
 // resolveID translates a name occurring in the given file (either an
 // entity's own declared ID, or a connects/from/to token) into its final
-// global ID: GND stays GND; a name already starting with (or equal to)
-// another known container's ID is treated as an already-fully-qualified
-// cross-file reference and used verbatim; anything else is a local name
-// invented within this file and gets the file's own container ID
-// prepended (see Konzept.md's ID-prefixing decision).
-func resolveID(fileContainerID, name string, known []string) string {
+// global ID: GND stays GND; a name starting with "@" is local to this
+// file and expands to "<fileContainerID>-<name without @>"; anything else
+// is already a global ID and is used verbatim.
+func resolveID(fileContainerID, name string) string {
 	if name == gndToken {
 		return gndToken
 	}
-	for _, c := range known {
-		if name == c || strings.HasPrefix(name, c+"-") {
-			return name
-		}
+	if strings.HasPrefix(name, localIDPrefix) {
+		return fileContainerID + "-" + strings.TrimPrefix(name, localIDPrefix)
 	}
-	return fileContainerID + "-" + name
+	return name
 }
 
 // r is a tiny per-file record-emission helper carrying the shared context
-// (version, file info, known-ID list) so individual emit* helpers don't
-// need to thread five parameters each.
+// (version, file info) so individual emit* helpers don't need to thread
+// several parameters each.
 type r struct {
 	version uint64
 	fi      FileInfo
-	known   []string
 	recs    []model.StagingRecord
 	errs    []model.StagingError
 }
@@ -157,7 +153,7 @@ func (e *r) add(id, class, attr, value string, isRef bool, seq int) {
 	})
 }
 
-func (e *r) resolve(name string) string { return resolveID(e.fi.ContainerID, name, e.known) }
+func (e *r) resolve(name string) string { return resolveID(e.fi.ContainerID, name) }
 
 // addGeometry synthesizes the minimal CIM GL-profile shape
 // (PowerSystemResource.Location -> Location -> PositionPoint) BuildGeometry
@@ -348,8 +344,8 @@ func (e *r) addTerminals(equipmentID string, connects []string) {
 
 // emitFile translates one parsed Fachmodell file into StagingRecords,
 // dispatching on its classified top-level type.
-func emitFile(version uint64, fi FileInfo, f *File, known []string) ([]model.StagingRecord, []model.StagingError) {
-	e := &r{version: version, fi: fi, known: known}
+func emitFile(version uint64, fi FileInfo, f *File) ([]model.StagingRecord, []model.StagingError) {
+	e := &r{version: version, fi: fi}
 	switch fi.Type {
 	case TopLevelSubstation, TopLevelDistributionBox:
 		e.emitStation(f)
