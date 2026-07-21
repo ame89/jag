@@ -84,7 +84,25 @@ func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingEr
 	// Pass 1: check for duplicate top-level container IDs across files
 	// (a genuine authoring error — two files claiming the same station/
 	// house/ACLine root ID).
+	//
+	// duplicate tracks every ContainerID seen more than once, separately
+	// from seen (which only ever records the FIRST file for a given ID,
+	// purely to name it in the error message above). Checking against
+	// seen's mere presence in the second loop below was a real bug (found
+	// 2026-07-21 while adding this package's first unit tests): since
+	// seen[fi.ContainerID] is set on first sight and never removed, its
+	// presence is true for BOTH the first AND every later duplicate file
+	// sharing that ID, so neither was ever actually skipped — every
+	// duplicate file's Equipment still got emitted (silently merged into
+	// the same container), even though an error was correctly recorded.
+	// duplicate is populated only for genuinely duplicate IDs and is
+	// checked instead, so ALL files sharing a duplicated container ID are
+	// skipped (not just the second one) — a duplicate ID is an authoring
+	// error with no principled way to pick a "correct" one of the two, so
+	// neither is imported, matching the "duplicate, already reported
+	// above" comment's original intent.
 	seen := map[string]FileInfo{}
+	duplicate := map[string]bool{}
 	var errs []model.StagingError
 	for _, fi := range infos {
 		if prev, dup := seen[fi.ContainerID]; dup {
@@ -93,6 +111,7 @@ func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingEr
 				SourceFile: fi.Path,
 				Message:    fmt.Sprintf("duplicate top-level container ID %q (already used by %s)", fi.ContainerID, prev.Path),
 			})
+			duplicate[fi.ContainerID] = true
 			continue
 		}
 		seen[fi.ContainerID] = fi
@@ -100,7 +119,7 @@ func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingEr
 
 	var records []model.StagingRecord
 	for _, fi := range infos {
-		if _, ok := seen[fi.ContainerID]; !ok {
+		if duplicate[fi.ContainerID] {
 			continue // duplicate, already reported above
 		}
 		f, err := ParseFile(fi.Path)
