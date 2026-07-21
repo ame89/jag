@@ -94,6 +94,15 @@ type GeometryPoint struct {
 type Busbar struct {
 	ID       string               `json:"id"`
 	Sections []BusbarSectionEntry `json:"sections"`
+	// Attributes holds Sachdaten hoisted up to the whole Busbar rather
+	// than repeated on every Section (currently only ever
+	// "IdentifiedObject.name" — see internal/exporter/hjson2/build.go's
+	// hoistCommonSectionName) — a compaction added 2026-07-21. A Section
+	// missing its own value for a key present here inherits this value on
+	// import (see resolve.go's emitStation), so exporting a hoisted name
+	// and re-importing it reconstructs the exact same per-Section name
+	// every Section originally had.
+	Attributes map[string]interface{} `json:"attributes,omitempty"`
 }
 
 // Satellite is one folded "Anhängsel"/satellite object (e.g. a Wallbox
@@ -134,10 +143,17 @@ type BusbarSectionEntry struct {
 }
 
 // Bay is one field (Abgangsfeld/Einspeisefeld) within a Substation/KVS
-// file, holding its own Equipment list.
+// file, holding its own Equipment list. Attributes holds the Bay
+// container's own Sachdaten (currently just AttributeKeyName, "name" —
+// added 2026-07-21: previously the Bay container's own name Sachdaten was
+// never captured at all, and resolve.go unconditionally fell back to the
+// Bay's own ID as its name, silently losing any real captured Bay name —
+// found via a ReliCapGrid_Espheim export/reimport round-trip. Mirrors
+// Busbar.Attributes' same round-trip mechanism.
 type Bay struct {
-	ID        string      `json:"id"`
-	Equipment []Equipment `json:"equipments"`
+	ID         string                 `json:"id"`
+	Attributes map[string]interface{} `json:"attributes,omitempty"`
+	Equipment  []Equipment            `json:"equipments"`
 }
 
 // Equipment is one piece of electrical equipment (Zweipol or, per the
@@ -189,6 +205,18 @@ type Equipment struct {
 	// resolve.go's addDiscreteControlLimits) — a hjson2-only
 	// approximation, not necessarily the original CIM name.
 	Steps []float64 `json:"steps,omitempty"`
+	// ConnectRefs is an hjson2-export-only, never-parsed-back annotation
+	// (json:"-") parallel to Connects: ConnectRefs[i], if non-empty, names
+	// the Kabel file (e.g. "Kabel/LIN-FEED-11-D-18_LIN-FEED-11-H-30") whose
+	// ACLine chain touches the same electrical node as Connects[i], so a
+	// reader looking at a Substation/KVS/House file can immediately see
+	// which of its nodes are external station boundary points and which
+	// Kabel file continues from there — added 2026-07-21 on user request.
+	// Rendered as a trailing "# -> ..." comment (see
+	// internal/exporter/hjson2/write.go's writeEquipment), which HJSON
+	// happily ignores on re-import, so this carries no round-trip
+	// obligation whatsoever.
+	ConnectRefs []string `json:"-"`
 }
 
 // Segment is one ACLineSegment within an ACLine ("Kabel") file. From/To
@@ -211,4 +239,14 @@ type Segment struct {
 	// PositionPoint.sequenceNumber, first entry = sequenceNumber 1) rather
 	// than a single point.
 	Geometry []GeometryPoint `json:"geometry,omitempty"`
+	// FromRef/ToRef are hjson2-export-only, never-parsed-back annotations
+	// (json:"-") mirroring Equipment.ConnectRefs, but for the opposite
+	// direction: if From/To lands on a node also touched by equipment
+	// inside a Substation/KVS/House file, FromRef/ToRef names that file
+	// (e.g. "ONS/O-5"), so a reader looking at a Kabel file can
+	// immediately see which station or house each end of the cable route
+	// connects into — added 2026-07-21 on user request. Rendered as a
+	// trailing "# -> ..." comment (see write.go's writeSegment).
+	FromRef string `json:"-"`
+	ToRef   string `json:"-"`
 }

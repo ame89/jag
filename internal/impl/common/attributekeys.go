@@ -46,4 +46,31 @@ const (
 	// Equipment/Segment/BusbarSectionEntry.Satellites list instead of
 	// exposing them as a plain Sachdaten attribute.
 	AttributeKeySatellite coremodel.AttributeKey = "satellite"
+
+	// AttributeKeyBusbarNode records, for a BusbarSection Equipment ID,
+	// the canonical electrical Node ID it was merged into by
+	// MergeBusbarSectionNodes (see busbarmerge.go) — i.e. the very same
+	// coremodel.Node ID that Edge.Terminal1NodeID/Terminal2NodeID use for
+	// every OTHER piece of Equipment actually wired to that busbar. Added
+	// 2026-07-21: the persisted model (model_node/model_edge) otherwise
+	// has no way to look this up again once BuildNodesAndEdges runs,
+	// since a BusbarSection's own raw ConnectivityNode ID is deliberately
+	// remapped away and never appears as a Node on its own (see
+	// busbarmerge.go's package doc comment) — internal/exporter/hjson2's
+	// buildBusbarSections previously had to *guess* a station's busbar
+	// node via a "2+ independent branches converge here" heuristic, which
+	// was found to misidentify plain series pass-through points as
+	// spurious busbars whenever a station's busbar-adjacent disconnectors
+	// hang directly off the station's own root container rather than a
+	// dedicated Bay (observed in examples/cgmes/ReliCapGrid_Espheim,
+	// giving 303 instead of 48 Circuits after an hjson2 export/reimport
+	// round-trip). This key removes the guesswork: it's written once per
+	// BusbarSection Equipment ID during Pass A (ProcessStationBatch, using
+	// that station's own already-computed stMergedResolved), and the
+	// exporter reads it back directly instead of re-deriving anything.
+	// Emitted only for genuine BusbarSection Equipment (never for
+	// ordinary Equipment), so buildAttributes/writeAttributesBlock must
+	// skip it exactly like AttributeKeySatellite — it is bookkeeping, not
+	// a Sachdaten value a user should ever see in an exported file.
+	AttributeKeyBusbarNode coremodel.AttributeKey = "busbar_node_id"
 )

@@ -93,6 +93,8 @@ func Build(s *Snapshot, defaultNetzregion string) ([]FileOutput, error) {
 		sort.Slice(stationACLines[k], func(i, j int) bool { return stationACLines[k][i].ID < stationACLines[k][j].ID })
 	}
 
+	nodeKabelFile, nodeStationFile := buildCrossFileRefs(s, acLineOwner, defaultNetzregion)
+
 	var outputs []FileOutput
 	for _, root := range roots {
 		if _, owned := acLineOwner[root.ID]; owned {
@@ -114,27 +116,232 @@ func Build(s *Snapshot, defaultNetzregion string) ([]FileOutput, error) {
 			f.Geometry = &importhjson.GeometryPoint{Lat: g.Lat, Lon: g.Lon}
 		}
 
+		fileID := root.ID
 		switch root.Type {
 		case common.ContainerTypeSubstation, common.ContainerTypeDistributionBox:
-			buildStation(s, root.ID, &f, stationACLines[root.ID])
+			buildStation(s, root.ID, &f, stationACLines[root.ID], region, nodeKabelFile)
 		case common.ContainerTypeHouse:
 			for _, eq := range s.EquipmentByContainer[root.ID] {
-				f.Equipment = append(f.Equipment, buildEquipment(s, root.ID, eq.ID, nil))
+				f.Equipment = append(f.Equipment, buildEquipment(s, root.ID, eq.ID, region, nodeKabelFile))
 			}
 		case common.ContainerTypeACLine:
 			for _, eq := range s.EquipmentByContainer[root.ID] {
-				f.Segments = append(f.Segments, buildSegment(s, root.ID, eq.ID, nil))
+				f.Segments = append(f.Segments, buildSegment(s, root.ID, eq.ID, region, nodeStationFile))
 			}
+			// The "acline:" prefix (see acline_streaming.go's
+			// buildACLineComponentResult) is an internal disambiguation
+			// marker only needed to keep container IDs distinct from
+			// Equipment/Node IDs elsewhere in the model — it has no
+			// value in a human-facing filename, which is otherwise
+			// exactly "<firstACLineSegmentID>_<lastACLineSegmentID>"
+			// (colon already turned into "_" by sanitizeSegment).
+			fileID = strings.TrimPrefix(root.ID, "acline:")
 		}
 
 		outputs = append(outputs, FileOutput{
 			Netzregion: region,
 			Dir:        dirForType[root.Type],
-			ID:         root.ID,
+			ID:         fileID,
 			File:       f,
 		})
 	}
+
+	if boundary := buildBoundaryEquipment(s, defaultNetzregion); len(boundary) > 0 {
+		outputs = append(outputs, boundary...)
+	}
 	return outputs, nil
+}
+
+// boundaryDir is the top-level directory name for containerless equipment
+// (see importhjson.TopLevelBoundary's doc comment) — not part of
+// dirForType since it has no associated coremodel.ContainerType (no
+// container is ever created for these).
+const boundaryDir = "Grenzknoten"
+
+// buildBoundaryEquipment collects every Equipment that has an Edge (i.e.
+// is part of the node-edge model) but no Equipment/Container membership
+// at all — currently only boundary EquivalentInjection (see Konzept.md's
+// resolveBoundaryEquivalents doc comment: some CIM EquivalentInjection
+// attach only to a boundary "Line" object that may not even be imported,
+// so Pass B deliberately leaves them containerless rather than inventing
+// a synthetic parent). Grouped into one "Boundary.hjson" file per
+// Netzregion (added 2026-07-21 on user request, so these otherwise-
+// invisible-to-hjson2 equipment round-trip through export/import too).
+func buildBoundaryEquipment(s *Snapshot, defaultNetzregion string) []FileOutput {
+	var orphanIDs []string
+	for eqID := range s.Edges {
+		if _, hasContainer := s.Equipment[eqID]; !hasContainer {
+			orphanIDs = append(orphanIDs, eqID)
+		}
+	}
+	if len(orphanIDs) == 0 {
+		return nil
+	}
+	sort.Strings(orphanIDs)
+
+	byRegion := map[string][]string{}
+	for _, eqID := range orphanIDs {
+		region := regionOf(s, eqID, defaultNetzregion)
+		byRegion[region] = append(byRegion[region], eqID)
+	}
+
+	regions := make([]string, 0, len(byRegion))
+	for region := range byRegion {
+		regions = append(regions, region)
+	}
+	sort.Strings(regions)
+
+	var outputs []FileOutput
+	for _, region := range regions {
+		f := importhjson.File{}
+		for _, eqID := range byRegion[region] {
+			// rootID = "" — boundary equipment IDs are raw CIM mRIDs with
+			// no shared station prefix to strip (see shortenID: an ID
+			// without the "<rootID>-" prefix is returned unchanged), and
+			// there is no cross-file node ref tracking for boundary
+			// equipment's own nodes (nil map).
+			f.Equipment = append(f.Equipment, buildEquipment(s, "", eqID, region, nil))
+		}
+		outputs = append(outputs, FileOutput{
+			Netzregion: region,
+			Dir:        boundaryDir,
+			ID:         "Boundary",
+			File:       f,
+		})
+	}
+	return outputs
+}
+
+// fileRef names one exported file (Netzregion/Dir/ID, matching
+// FileOutput's own fields) — used only to compute the relative-path
+// cross-reference comments below (see relativeFileRef).
+type fileRef struct {
+	Region string
+	Dir    string
+	ID     string // fileID, exactly as used for that file's own filename
+}
+
+// buildCrossFileRefs scans every Equipment's Edge once and, for every
+// node touched by more than one top-level file's own equipment, records
+// which Kabel file(s) and which Substation/KVS/House file(s) touch it —
+// added 2026-07-21 on user request, to let a reader immediately see, from
+// a Station/House file, which external Kabel file continues at one of its
+// nodes, and vice versa from a Kabel file which Station/House it ends at.
+// An ACLineSegment folded into its owning station (see
+// classifyInternalACLines) is redirected to that owning station's own
+// file identity here (effRoot), since it has no separate Kabel file of
+// its own to reference.
+//
+// Returns two maps keyed by raw (unshortened) node ID: nodeKabelRefs (the
+// Kabel file(s) touching that node, for annotating Station/House files)
+// and nodeStationRefs (the Station/House file(s) touching that node, for
+// annotating Kabel files). A node only appears in a returned map if it is
+// touched by at least one file of that map's own kind — a purely
+// station-internal or purely Kabel-internal node is absent from both,
+// which is exactly the desired "no comment" behavior at render time (see
+// write.go's writeEquipment/writeSegment).
+func buildCrossFileRefs(s *Snapshot, acLineOwner map[string]string, defaultNetzregion string) (nodeKabelRefs, nodeStationRefs map[string][]fileRef) {
+	nodeKabelRefs = map[string][]fileRef{}
+	nodeStationRefs = map[string][]fileRef{}
+	refCache := map[string]fileRef{}
+	seen := map[string]map[string]bool{} // nodeID -> set of effRootID already recorded
+
+	for eqID, edge := range s.Edges {
+		eq, ok := s.Equipment[eqID]
+		if !ok {
+			continue
+		}
+		root := containerRootOf(s, eq.ContainerID)
+		if root == "" {
+			continue
+		}
+		rc, ok := s.Containers[root]
+		if !ok {
+			continue
+		}
+		effRoot, effType := root, rc.Type
+		if rc.Type == common.ContainerTypeACLine {
+			if owner, isOwned := acLineOwner[root]; isOwned {
+				effRoot = owner
+				if oc, ok2 := s.Containers[owner]; ok2 {
+					effType = oc.Type
+				}
+			}
+		}
+		ref, cached := refCache[effRoot]
+		if !cached {
+			id := effRoot
+			if effType == common.ContainerTypeACLine {
+				id = strings.TrimPrefix(effRoot, "acline:")
+			}
+			ref = fileRef{Region: regionOf(s, effRoot, defaultNetzregion), Dir: dirForType[effType], ID: id}
+			refCache[effRoot] = ref
+		}
+		for _, n := range []string{edge.Terminal1NodeID, edge.Terminal2NodeID} {
+			if n == "" || n == gndToken {
+				continue
+			}
+			if seen[n] == nil {
+				seen[n] = map[string]bool{}
+			}
+			if seen[n][effRoot] {
+				continue
+			}
+			seen[n][effRoot] = true
+			if effType == common.ContainerTypeACLine {
+				nodeKabelRefs[n] = append(nodeKabelRefs[n], ref)
+			} else {
+				nodeStationRefs[n] = append(nodeStationRefs[n], ref)
+			}
+		}
+	}
+
+	sortFileRefs := func(m map[string][]fileRef) {
+		for n := range m {
+			sort.Slice(m[n], func(i, j int) bool {
+				if m[n][i].Region != m[n][j].Region {
+					return m[n][i].Region < m[n][j].Region
+				}
+				if m[n][i].Dir != m[n][j].Dir {
+					return m[n][i].Dir < m[n][j].Dir
+				}
+				return m[n][i].ID < m[n][j].ID
+			})
+		}
+	}
+	sortFileRefs(nodeKabelRefs)
+	sortFileRefs(nodeStationRefs)
+	return nodeKabelRefs, nodeStationRefs
+}
+
+// relativeFileRef renders r as a path relative to a file located at
+// <fromRegion>/<anything>/<file>.hjson (see FileOutput.Netzregion/Dir/ID):
+// "../<Dir>/<ID>.hjson" if r is in the same Netzregion, or
+// "../../<Region>/<Dir>/<ID>.hjson" if it's in a different one — added
+// 2026-07-21 on user request so a cross-reference comment can be followed
+// directly from a text editor/file browser instead of just naming a bare
+// file/dir pair.
+func relativeFileRef(fromRegion string, r fileRef) string {
+	name := sanitizeSegment(r.ID) + ".hjson"
+	if fromRegion == r.Region {
+		return "../" + r.Dir + "/" + name
+	}
+	return "../../" + sanitizeSegment(r.Region) + "/" + r.Dir + "/" + name
+}
+
+// formatFileRefs joins every ref in refs (see buildCrossFileRefs) into one
+// comma-separated comment string of relative paths (see relativeFileRef),
+// or "" if refs is empty (the overwhelmingly common case: most nodes
+// don't cross a file boundary at all).
+func formatFileRefs(fromRegion string, refs []fileRef) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(refs))
+	for _, r := range refs {
+		parts = append(parts, relativeFileRef(fromRegion, r))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // containerRootOf walks up containerID's parent chain to find its
@@ -277,7 +484,7 @@ func classifyInternalACLines(s *Snapshot, roots []coremodel.Container, nodeEquip
 // the file sees "connects: [@BB-1-1]" instead of an opaque "CN3". Any
 // equipment NOT wired to a busbar node keeps its ordinary (shortened)
 // node ID unchanged.
-func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines []coremodel.Container) {
+func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines []coremodel.Container, region string, nodeKabelRefs map[string][]fileRef) {
 	rootEqs := append([]coremodel.Equipment(nil), s.EquipmentByContainer[rootID]...)
 	sort.Slice(rootEqs, func(i, j int) bool { return rootEqs[i].ID < rootEqs[j].ID })
 
@@ -295,53 +502,71 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines 
 		}
 	}
 
-	overrides := buildBusbarSections(s, rootID, rootEqs, bayContainers, ownedACLines, busbarContainers, f)
+	buildBusbarSections(s, rootID, rootEqs, bayContainers, ownedACLines, busbarContainers, f)
 
 	for _, eq := range rootEqs {
-		f.Equipment = append(f.Equipment, buildEquipment(s, rootID, eq.ID, overrides))
+		f.Equipment = append(f.Equipment, buildEquipment(s, rootID, eq.ID, region, nodeKabelRefs))
 	}
 
 	for _, child := range bayContainers {
 		bay := importhjson.Bay{ID: shortenID(rootID, child.ID)}
+		// Bay's own container-level Sachdaten (currently just "name") —
+		// see Bay.Attributes' doc comment in
+		// internal/importer/hjson2/types.go for why this is needed at
+		// all (previously silently dropped, defaulting to the Bay's own
+		// ID on reimport).
+		bay.Attributes = buildAttributes(s, child.ID, false)
 		eqs := append([]coremodel.Equipment(nil), s.EquipmentByContainer[child.ID]...)
 		sort.Slice(eqs, func(i, j int) bool { return eqs[i].ID < eqs[j].ID })
 		for _, eq := range eqs {
-			bay.Equipment = append(bay.Equipment, buildEquipment(s, rootID, eq.ID, overrides))
+			bay.Equipment = append(bay.Equipment, buildEquipment(s, rootID, eq.ID, region, nodeKabelRefs))
 		}
 		f.Bays = append(f.Bays, bay)
 	}
 
 	// ownedACLines: station-internal ACLineSegments folded straight into
 	// this file's own Segments list instead of a separate Kabel file (see
-	// classifyInternalACLines) — overrides applies here too, so an inline
-	// jumper cable ending at a busbar node (e.g. O-5's TRAF-4-ISEG ->
-	// CN3) gets its own "connects"-equivalent (From/To) rewritten to that
-	// Busbar Section's ID exactly like ordinary Equipment does.
+	// classifyInternalACLines) — an inline jumper cable ending at a
+	// busbar node (e.g. O-5's TRAF-4-ISEG -> CN3) renders its From/To for
+	// that node exactly like ordinary Equipment does (see
+	// resolveConnectTarget/shortenID — the busbar's own ID already IS
+	// that node's shortened form, so no special-casing is needed here).
 	for _, ac := range ownedACLines {
 		eqs := append([]coremodel.Equipment(nil), s.EquipmentByContainer[ac.ID]...)
 		sort.Slice(eqs, func(i, j int) bool { return eqs[i].ID < eqs[j].ID })
 		for _, eq := range eqs {
-			f.Segments = append(f.Segments, buildSegment(s, rootID, eq.ID, overrides))
+			f.Segments = append(f.Segments, buildSegment(s, rootID, eq.ID, region, nodeKabelRefs))
 		}
 	}
 }
 
-// buildBusbarSections implements this station's busbar-node convergence
-// detection (see buildStation's doc comment) and appends one
-// importhjson.Busbar per busbarContainers entry to f.Busbars. It returns
-// the "connects" rewrite table: overrides[eqID][nodeID] = the Section long
-// ID that eqID's connects entry for nodeID must be rewritten to (e.g.
-// overrides["MD-2"]["O-5-CN3"] = "@BB-1-2").
+// buildBusbarSections finds each busbar container's real electrical Node
+// directly from the AttributeKeyBusbarNode bookkeeping written by
+// internal/impl/common's Pass A (ProcessStationBatch, see that key's doc
+// comment) — one row per original BusbarSection Equipment ID, holding the
+// canonical Node ID it was merged into by MergeBusbarSectionNodes. This
+// replaced an earlier "2+ independent branches converge on this node"
+// guessing heuristic (found 2026-07-21, ReliCapGrid_Espheim round-trip
+// investigation, to misidentify ordinary series pass-through points as
+// spurious busbars whenever a station's busbar-adjacent disconnectors hang
+// directly off the station root instead of a dedicated Bay, silently
+// turning 48 real Circuits into 303 after an export/reimport cycle) — the
+// persisted attribute is exact, no guessing needed.
 //
-// busbarContainers and the found convergence nodes are paired up in
-// sorted order (busbar container ID ascending <-> node ID ascending) —
-// this station's dataset only ever has one busbar container per station,
-// so this pairing is unambiguous there; a station with genuinely multiple
-// physically separate busbars would need this pairing to be exact, which
-// cannot be fully guaranteed from convergence alone, but no such example
-// exists in this project's current fixtures (see Konzept.md's Topologie
-// section: double-busbar arrangements stay linked via a real coupler
-// Equipment and would need further, not-yet-observed handling).
+// Busbar.ID is simply the shortened form of that real Node ID (e.g.
+// "@CN3" — see shortenID), NOT an arbitrary synthetic "@BB-1" name.
+// Consequence (decided with the user 2026-07-21, "Selbst die IDs aus dem
+// CIM kann man korrekt durchreichen"): every connecting Equipment's own
+// "connects"/From/To entry for this node is left completely untouched —
+// it already renders as this exact same shortened ID via the ordinary
+// resolveConnectTarget fallback (shortenID(rootID, nodeID)), since that's
+// literally the same node. No connects-rewrite/override table is needed
+// at all: a Busbar Section is purely an informational attribute-holder
+// (e.g. per-section ipMax), never a distinct connects target — import and
+// export are symmetric by construction, with no post-hoc node-merging
+// step required on reimport.
+//
+// It appends one importhjson.Busbar per busbarContainers entry to f.Busbars.
 func buildBusbarSections(
 	s *Snapshot,
 	rootID string,
@@ -350,29 +575,17 @@ func buildBusbarSections(
 	ownedACLines []coremodel.Container,
 	busbarContainers []coremodel.Container,
 	f *importhjson.File,
-) map[string]map[string]string {
+) {
 	if len(busbarContainers) == 0 {
-		return nil
+		return
 	}
 
-	// branches: one entry for the station's own root-level equipment
-	// (including any station-internal ACLineSegment folded into this
-	// file, see classifyInternalACLines/buildStation — a jumper cable
-	// simply continuing the root's own series chain is part of the same
-	// "root" branch, NOT an independent one), plus one further entry per
-	// Bay — each branch's member IDs are used only to decide which nodes
-	// are touched by 2+ *genuinely different* branches. Bays are always
-	// their own branch since a Bay/Feeder is by definition an
-	// independently-switched feed; an owned ACLine is deliberately merged
-	// into "__root__" rather than given its own branch key, since
-	// otherwise a plain degree-2 pass-through point (e.g. O-5's CN2,
-	// where the Transformer's Fuse simply hands off to the jumper cable
-	// TRAF-4-ISEG in series, no real fork) would wrongly look like a
-	// 2-branch convergence purely because the same physical wiring
-	// happens to cross a container-type boundary (root Equipment ->
-	// ACLineSegment). Only where that cable's OTHER end also meets a
-	// genuinely independent branch (a Bay, in O-5's case FEED-1) does a
-	// real busbar convergence exist (O-5's CN3).
+	// branches: the station's own root-level equipment (including any
+	// station-internal ACLineSegment folded into this file — see
+	// classifyInternalACLines/buildStation) plus one further entry per
+	// Bay. Only used below to find every piece of Equipment actually
+	// wired to a busbar's now-directly-known Node, regardless of which
+	// Bay (or the root) it lives in.
 	type branch struct {
 		key string
 		eqs []coremodel.Equipment
@@ -386,65 +599,53 @@ func buildBusbarSections(
 		branches = append(branches, branch{key: bay.ID, eqs: s.EquipmentByContainer[bay.ID]})
 	}
 
-	nodeBranches := map[string]map[string]bool{} // nodeID -> set of branch keys touching it
-	for _, br := range branches {
-		for _, eq := range br.eqs {
-			edge, ok := s.Edges[eq.ID]
-			if !ok {
-				continue
-			}
-			for _, n := range []string{edge.Terminal1NodeID, edge.Terminal2NodeID} {
-				if n == "" || n == gndToken {
-					continue
+	// busbarNodeOf looks up eqID's AttributeKeyBusbarNode value (see that
+	// key's doc comment) — the exact canonical Node ID a BusbarSection
+	// Equipment was merged into during Pass A, no guessing involved.
+	busbarNodeOf := func(eqID string) string {
+		for _, a := range s.AttributesByOwner[eqID] {
+			if a.Key == common.AttributeKeyBusbarNode {
+				if v, ok := a.Value.(string); ok {
+					return v
 				}
-				if nodeBranches[n] == nil {
-					nodeBranches[n] = map[string]bool{}
-				}
-				nodeBranches[n][br.key] = true
 			}
 		}
+		return ""
 	}
 
-	var candidateNodes []string
-	for n, brs := range nodeBranches {
-		if len(brs) >= 2 {
-			candidateNodes = append(candidateNodes, n)
-		}
-	}
-	sort.Strings(candidateNodes)
-
-	overrides := map[string]map[string]string{}
-	addOverride := func(eqID, nodeID, sectionLongID string) {
-		if overrides[eqID] == nil {
-			overrides[eqID] = map[string]string{}
-		}
-		overrides[eqID][nodeID] = sectionLongID
-	}
-
-	for k, bbContainer := range busbarContainers {
-		bb := importhjson.Busbar{ID: fmt.Sprintf("@BB-%d", k+1)}
-		if k >= len(candidateNodes) {
-			// No convergence node found for this busbar container (e.g. a
-			// station with only a single branch) — render the busbar
-			// with no sections rather than guessing.
-			f.Busbars = append(f.Busbars, bb)
-			continue
-		}
-		node := candidateNodes[k]
-
+	for _, bbContainer := range busbarContainers {
 		// Original BusbarSection Equipment objects for this busbar
-		// container — used only as a best-effort source of per-section
-		// Attributes/Satellites/Geometry (see buildStation's doc comment:
-		// there is no reliable way to know which original BusbarSection
-		// corresponded to which connecting Equipment, so original
-		// sections are paired index-wise, in ID order, with the
-		// connecting Equipment found below).
+		// container — both the source of the container's real Node (via
+		// AttributeKeyBusbarNode) and a best-effort source of per-section
+		// Attributes/Satellites/Geometry (see below: there is no reliable
+		// way to know which original BusbarSection corresponded to which
+		// connecting Equipment, so original sections are paired
+		// index-wise, in ID order, with the connecting Equipment found
+		// below).
 		origSections := append([]coremodel.Equipment(nil), s.EquipmentByContainer[bbContainer.ID]...)
 		sort.Slice(origSections, func(i, j int) bool { return origSections[i].ID < origSections[j].ID })
 
+		var node string
+		for _, orig := range origSections {
+			if n := busbarNodeOf(orig.ID); n != "" {
+				node = n
+				break
+			}
+		}
+		if node == "" {
+			// No AttributeKeyBusbarNode bookkeeping found for this
+			// container (e.g. no BusbarSection equipment at all, or a
+			// pre-2026-07-21 model reimported without going through the
+			// updated Pass A) — skip rather than guessing.
+			continue
+		}
+
+		bb := importhjson.Busbar{ID: shortenID(rootID, node)}
+
 		// Find every piece of Equipment (station-wide) actually wired to
 		// this node, sorted by ID for determinism, and assign each its
-		// own Section.
+		// own Section (informational Attributes/Satellites/Geometry
+		// only — see this function's doc comment).
 		var connecting []coremodel.Equipment
 		for _, br := range branches {
 			for _, eq := range br.eqs {
@@ -459,10 +660,8 @@ func buildBusbarSections(
 		}
 		sort.Slice(connecting, func(i, j int) bool { return connecting[i].ID < connecting[j].ID })
 
-		for i, eq := range connecting {
+		for i := range connecting {
 			sectionShortID := strconv.Itoa(i + 1)
-			sectionLongID := fmt.Sprintf("%s-%d", bb.ID, i+1)
-			addOverride(eq.ID, node, sectionLongID)
 
 			sec := importhjson.BusbarSectionEntry{ID: sectionShortID}
 			if i < len(origSections) {
@@ -473,9 +672,50 @@ func buildBusbarSections(
 			}
 			bb.Sections = append(bb.Sections, sec)
 		}
+		hoistCommonSectionName(&bb)
 		f.Busbars = append(f.Busbars, bb)
 	}
-	return overrides
+}
+
+// hoistCommonSectionName lifts a Busbar's "IdentifiedObject.name" Sachdaten
+// attribute out of every one of its Sections up onto the Busbar itself,
+// but only when EVERY Section shares the exact same name — the
+// overwhelmingly common case, since hjson2's Sections are just individual
+// electrical connection slots of ONE physical busbar (see this file's
+// Konzept.md-documented busbar-redesign), so their raw CIM
+// BusbarSection.name values are typically identical copies of the
+// busbar's own name. Added 2026-07-21 as a compaction: without this, an
+// N-section busbar repeats the same name string N times. A Section whose
+// name legitimately differs (or is entirely missing) prevents ANY hoist
+// for that busbar — no partial/best-effort hoisting, to avoid silently
+// dropping a genuinely distinct Section name. See
+// internal/importer/hjson2/resolve.go's emitStation for the corresponding
+// import-side fallback (a Section without its own name inherits the
+// Busbar's hoisted one), which keeps this fully round-trip safe.
+func hoistCommonSectionName(bb *importhjson.Busbar) {
+	if len(bb.Sections) < 2 {
+		return
+	}
+	var name string
+	for i, sec := range bb.Sections {
+		v, ok := sec.Attributes[attributesLeadKey]
+		if !ok {
+			return
+		}
+		s, ok := v.(string)
+		if !ok {
+			return
+		}
+		if i == 0 {
+			name = s
+		} else if s != name {
+			return
+		}
+	}
+	bb.Attributes = map[string]interface{}{attributesLeadKey: name}
+	for i := range bb.Sections {
+		delete(bb.Sections[i].Attributes, attributesLeadKey)
+	}
 }
 
 // buildEquipment reconstructs one ordinary (non-BusbarSection,
@@ -484,10 +724,15 @@ func buildBusbarSections(
 // internal/impl/common/attributekeys.go for why this round-trips through
 // Sachdaten instead of a dedicated field), its connects (from its own
 // Edge, omitting GND for single-terminal source/sink equipment per the
-// auto-GND-wiring decision, and rewritten to a Busbar Section's long ID
-// per overrides — see buildBusbarSections), and its remaining literal
-// attributes.
-func buildEquipment(s *Snapshot, rootID, eqID string, overrides map[string]map[string]string) importhjson.Equipment {
+// auto-GND-wiring decision), and its remaining literal attributes.
+// region/nodeKabelRefs (see buildCrossFileRefs) populate eq.ConnectRefs
+// with a relative-path cross-reference comment for any connects entry
+// whose node is also touched by an external Kabel file. A connects entry
+// landing on a Busbar's node needs no special handling here — see
+// buildBusbarSections' doc comment: the Busbar's own ID already IS that
+// node's shortened form, so the ordinary shortenID fallback in
+// resolveConnectTarget already renders it correctly.
+func buildEquipment(s *Snapshot, rootID, eqID string, region string, nodeKabelRefs map[string][]fileRef) importhjson.Equipment {
 	eq := importhjson.Equipment{ID: shortenID(rootID, eqID)}
 	attrs := s.AttributesByOwner[eqID]
 	for _, a := range attrs {
@@ -497,11 +742,14 @@ func buildEquipment(s *Snapshot, rootID, eqID string, overrides map[string]map[s
 		}
 	}
 	if edge, ok := s.Edges[eqID]; ok {
-		n1 := resolveConnectTarget(rootID, eqID, edge.Terminal1NodeID, overrides)
+		n1, ref1 := resolveConnectTarget(rootID, edge.Terminal1NodeID, region, nodeKabelRefs)
 		if edge.Terminal2NodeID == gndToken {
 			eq.Connects = []string{n1}
+			eq.ConnectRefs = []string{ref1}
 		} else {
-			eq.Connects = []string{n1, resolveConnectTarget(rootID, eqID, edge.Terminal2NodeID, overrides)}
+			n2, ref2 := resolveConnectTarget(rootID, edge.Terminal2NodeID, region, nodeKabelRefs)
+			eq.Connects = []string{n1, n2}
+			eq.ConnectRefs = []string{ref1, ref2}
 		}
 	}
 	eq.Attributes = buildAttributes(s, eqID, true)
@@ -514,17 +762,15 @@ func buildEquipment(s *Snapshot, rootID, eqID string, overrides map[string]map[s
 	return eq
 }
 
-// resolveConnectTarget renders one connects entry: nodeID is replaced by
-// its Busbar Section's long ID if eqID has an override for it (see
-// buildBusbarSections), otherwise it falls back to the ordinary shortened
-// node ID.
-func resolveConnectTarget(rootID, eqID, nodeID string, overrides map[string]map[string]string) string {
-	if m, ok := overrides[eqID]; ok {
-		if repl, ok := m[nodeID]; ok {
-			return repl
-		}
-	}
-	return shortenID(rootID, nodeID)
+// resolveConnectTarget renders one connects entry as its shortened node ID
+// (see shortenID) — this already renders a Busbar's node correctly, since
+// a Busbar's own ID is exactly that same shortened form (see
+// buildBusbarSections). The second return value is a relative-path
+// cross-reference comment (see buildCrossFileRefs/formatFileRefs), or ""
+// if nodeID isn't also touched by a file in xref.
+func resolveConnectTarget(rootID, nodeID string, region string, xref map[string][]fileRef) (string, string) {
+	ref := formatFileRefs(region, xref[nodeID])
+	return shortenID(rootID, nodeID), ref
 }
 
 // extractDiscreteControlLimits implements Equipment.Steps' compaction (see
@@ -599,6 +845,37 @@ func extractMeterSchedules(eq *importhjson.Equipment) {
 	eq.Measuring = schedules[0].Attributes
 	eq.Transmission = schedules[1].Attributes
 	eq.Satellites = rest
+	dropRedundantScheduleName(eq.Measuring, eq.Attributes)
+	dropRedundantScheduleName(eq.Transmission, eq.Attributes)
+}
+
+// dropRedundantScheduleName drops "IdentifiedObject.name" from a
+// measuring/transmission TimeSchedule's own attrs when it is IDENTICAL to
+// the owning Equipment's own name — added 2026-07-21 as a further
+// compaction: a Meter's TimeSchedule satellites are, in every observed
+// dataset, simply named after their own Meter (e.g. "Meter Feeder ONS 0"
+// three times over: the Meter itself plus both its schedules), so
+// repeating it verbatim in both blocks is pure noise. Left untouched
+// (schedule keeps its own, presumably meaningful, name) if it differs.
+// See internal/importer/hjson2/resolve.go's addMeterSchedules for the
+// corresponding import-side fallback (a schedule missing its own name
+// inherits the owning Equipment's name), which keeps this round-trip
+// safe.
+func dropRedundantScheduleName(schedule, ownerAttrs map[string]interface{}) {
+	if schedule == nil || ownerAttrs == nil {
+		return
+	}
+	name, ok := schedule[attributesLeadKey]
+	if !ok {
+		return
+	}
+	ownerName, ok := ownerAttrs[attributesLeadKey]
+	if !ok {
+		return
+	}
+	if name == ownerName {
+		delete(schedule, attributesLeadKey)
+	}
 }
 
 // buildSegment reconstructs one ACLineSegment as a Segment entry (From/To
@@ -606,12 +883,18 @@ func extractMeterSchedules(eq *importhjson.Equipment) {
 // (see buildBusbarSections) rewrites From/To exactly like buildEquipment
 // does for Connects — relevant for a station-internal ACLine folded into
 // its owning station's own file (see classifyInternalACLines) whose
-// From/To lands on that station's busbar node.
-func buildSegment(s *Snapshot, rootID, eqID string, overrides map[string]map[string]string) importhjson.Segment {
+// From/To lands on that station's busbar node. region/xref (see
+// buildCrossFileRefs) populate seg.FromRef/ToRef with a relative-path
+// cross-reference comment: xref is nodeStationRefs for a standalone Kabel
+// file (naming which Station/House file each end connects into) or
+// nodeKabelRefs for a station-internal folded segment (naming an
+// external Kabel file, in the rare case such a jumper also happens to
+// touch one — see buildStation's own call site).
+func buildSegment(s *Snapshot, rootID, eqID string, region string, xref map[string][]fileRef) importhjson.Segment {
 	seg := importhjson.Segment{ID: shortenID(rootID, eqID)}
 	if edge, ok := s.Edges[eqID]; ok {
-		seg.From = resolveConnectTarget(rootID, eqID, edge.Terminal1NodeID, overrides)
-		seg.To = resolveConnectTarget(rootID, eqID, edge.Terminal2NodeID, overrides)
+		seg.From, seg.FromRef = resolveConnectTarget(rootID, edge.Terminal1NodeID, region, xref)
+		seg.To, seg.ToRef = resolveConnectTarget(rootID, edge.Terminal2NodeID, region, xref)
 	}
 	// Like BusbarSectionEntry, Segment has no dedicated Class field — its
 	// class is always implicitly ACLineSegment — so skip re-surfacing the
@@ -655,6 +938,9 @@ func buildAttributes(s *Snapshot, ownerID string, skipClass bool) map[string]int
 		}
 		if a.Key == common.AttributeKeySatellite {
 			continue // rendered separately, see buildSatellites
+		}
+		if a.Key == common.AttributeKeyBusbarNode {
+			continue // internal bookkeeping (see that key's doc comment), never a visible Sachdaten value
 		}
 		key := string(a.Key)
 		val := a.Value

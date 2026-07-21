@@ -233,6 +233,13 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 	// scheduling order.
 	mergedResolved := make(map[string]EquipmentTerminals, len(resolved)) // batch-wide, post-merge — only used by checkBayCableCount below
 	ownedGroups := map[string]ElectricalGroups{}
+	// busbarNodeAttrs: one AttributeKeyBusbarNode row per BusbarSection
+	// equipment ID (stNodeRoleIDs, within Pass A, is exactly the
+	// BusbarSection equipment — see the comment on nodeRoleIDs above),
+	// recording its own final post-merge canonical Node ID so
+	// internal/exporter/hjson2 never has to re-derive/guess it (see
+	// AttributeKeyBusbarNode's doc comment).
+	var busbarNodeAttrs []coremodel.Attribute
 	for _, owner := range owners {
 		stEqIDs := stationEquipment[owner]
 		stResolved := make(map[string]EquipmentTerminals, len(stEqIDs))
@@ -263,6 +270,20 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 		ownedGroups[owner] = stGroups
 		for id, et := range stMergedResolved {
 			mergedResolved[id] = et
+		}
+		for eqID := range stNodeRoleIDs {
+			if et, ok := stMergedResolved[eqID]; ok && et.Node1 != "" {
+				busbarNodeAttrs = append(busbarNodeAttrs, coremodel.Attribute{
+					OwnerID: eqID,
+					Key:     AttributeKeyBusbarNode,
+					Value:   et.Node1,
+				})
+			}
+		}
+	}
+	if len(busbarNodeAttrs) > 0 {
+		if err := sink.WriteAttributes(busbarNodeAttrs); err != nil {
+			return nil, fmt.Errorf("common: writing busbar-node attributes for batch: %w", err)
 		}
 	}
 

@@ -85,16 +85,60 @@ func (m *ModelStore) AllEdges(afterID string, limit int) ([]coremodel.Edge, erro
 
 // AllAttributes pages through every Attribute in (owner_id, key, seq)
 // order — same decoding as GetByOwnerIDs.
+//
+// Bugfix 2026-07-21: the initial version of this cursor paged purely by
+// owner_id (`WHERE owner_id > ?`). Whenever an owner's attribute rows
+// straddled a page boundary (i.e. the LIMIT cut off in the middle of one
+// owner_id's rows, which happens routinely once total attribute count
+// exceeds one page), the next call's `owner_id > afterOwnerID` cursor
+// silently skipped that owner's remaining rows entirely — they were
+// simply lost, not just reordered. This was found via a real ReliCapGrid
+// export/reimport round-trip: a handful of equipment lost their
+// "cim_class" attribute (whichever key happened to sort after the page
+// cutoff), producing an unparseable `class: ""` in the hjson2 export.
+// Fixed by never letting a page end mid-owner: after the LIMIT-bounded
+// query, if the last row's owner still has more rows, fetch the rest of
+// that one owner's rows (bounded by that owner's own attribute count, not
+// model size) before returning the page.
 func (m *ModelStore) AllAttributes(afterOwnerID string, limit int) ([]coremodel.Attribute, error) {
 	rows, err := m.db.Query(
-		`SELECT owner_id, key, value FROM model_attribute WHERE owner_id > ? ORDER BY owner_id, key, seq LIMIT ?`,
+		`SELECT owner_id, key, seq, value FROM model_attribute WHERE owner_id > ? ORDER BY owner_id, key, seq LIMIT ?`,
 		afterOwnerID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: paging attributes: %w", err)
 	}
-	defer rows.Close()
-	return scanAttributeRows(rows)
+	result, lastKey, lastSeq, err := scanAttributeRowsWithCursor(rows)
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	for len(result) > 0 && len(result) >= limit {
+		lastOwner := result[len(result)-1].OwnerID
+		moreRows, err := m.db.Query(
+			`SELECT owner_id, key, seq, value FROM model_attribute WHERE owner_id = ? AND (key, seq) > (?, ?) ORDER BY key, seq LIMIT ?`,
+			lastOwner, lastKey, lastSeq, limit,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: paging attributes (owner continuation): %w", err)
+		}
+		more, newLastKey, newLastSeq, err := scanAttributeRowsWithCursor(moreRows)
+		moreRows.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(more) == 0 {
+			break
+		}
+		result = append(result, more...)
+		lastKey, lastSeq = newLastKey, newLastSeq
+		if len(more) < limit {
+			break
+		}
+	}
+
+	return result, nil
 }
 
 // AllGeometry pages through every Geometry in owner-ID order — added
@@ -126,6 +170,37 @@ func (m *ModelStore) AllGeometry(afterOwnerID string, limit int) ([]coremodel.Ge
 		return nil, fmt.Errorf("sqlite: iterating geometry rows: %w", err)
 	}
 	return result, nil
+}
+
+// scanAttributeRowsWithCursor decodes rows produced by a "SELECT owner_id,
+// key, seq, value FROM model_attribute ..." query (like scanAttributeRows,
+// but also tracking the last row's key/seq so AllAttributes' owner-
+// continuation query above can resume exactly where this page left off).
+func scanAttributeRowsWithCursor(rows *sql.Rows) ([]coremodel.Attribute, string, int, error) {
+	var result []coremodel.Attribute
+	var lastKey string
+	var lastSeq int
+	for rows.Next() {
+		var ownerID, key, rawValue string
+		var seq int
+		if err := rows.Scan(&ownerID, &key, &seq, &rawValue); err != nil {
+			return nil, "", 0, fmt.Errorf("sqlite: scanning attribute row: %w", err)
+		}
+		var value any
+		if err := json.Unmarshal([]byte(rawValue), &value); err != nil {
+			return nil, "", 0, fmt.Errorf("sqlite: decoding attribute value for %s.%s: %w", ownerID, key, err)
+		}
+		result = append(result, coremodel.Attribute{
+			OwnerID: ownerID,
+			Key:     coremodel.AttributeKey(key),
+			Value:   value,
+		})
+		lastKey, lastSeq = key, seq
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", 0, fmt.Errorf("sqlite: iterating attribute rows: %w", err)
+	}
+	return result, lastKey, lastSeq, nil
 }
 
 // scanAttributeRows decodes rows produced by a "SELECT owner_id, key,

@@ -50,6 +50,7 @@ func sanitizeSegment(s string) string {
 
 func writeFile(b *strings.Builder, f importhjson.File) {
 	b.WriteString("{\n")
+	writeDefaultOmissionNote(b, 1)
 	writeAttributesBlock(b, f.Attributes, 1)
 	if f.Geometry != nil {
 		writeGeometryPoint(b, f.Geometry, 1)
@@ -94,6 +95,7 @@ func writeBusbar(b *strings.Builder, bb importhjson.Busbar, depth int) {
 	b.WriteString("{\n")
 	indent(b, depth+1)
 	fmt.Fprintf(b, "id: %s\n", quote(bb.ID))
+	writeAttributesBlock(b, bb.Attributes, depth+1)
 	if len(bb.Sections) > 0 {
 		indent(b, depth+1)
 		b.WriteString("sections: [\n")
@@ -120,6 +122,7 @@ func writeBay(b *strings.Builder, bay importhjson.Bay, depth int) {
 	b.WriteString("{\n")
 	indent(b, depth+1)
 	fmt.Fprintf(b, "id: %s\n", quote(bay.ID))
+	writeAttributesBlock(b, bay.Attributes, depth+1)
 	if len(bay.Equipment) > 0 {
 		indent(b, depth+1)
 		b.WriteString("equipments: [\n")
@@ -146,9 +149,19 @@ func writeEquipment(b *strings.Builder, eq importhjson.Equipment, depth int) {
 	if len(eq.Connects) > 0 {
 		indent(b, depth+1)
 		b.WriteString("connects: [\n")
-		for _, n := range eq.Connects {
+		for i, n := range eq.Connects {
 			indent(b, depth+2)
-			fmt.Fprintf(b, "%s\n", quoteConnectsEntry(n))
+			var line string
+			if i < len(eq.ConnectRefs) && eq.ConnectRefs[i] != "" {
+				// HJSON's quoteless-string rule makes an unquoted value
+				// absorb the rest of the line, so a bare entry here would
+				// swallow the trailing "# -> ..." ref comment into the ID
+				// itself. Always quote when a same-line comment follows.
+				line = quote(n) + " # -> " + eq.ConnectRefs[i]
+			} else {
+				line = quoteConnectsEntry(n)
+			}
+			fmt.Fprintf(b, "%s\n", line)
 		}
 		indent(b, depth+1)
 		b.WriteString("]\n")
@@ -183,9 +196,17 @@ func writeSegment(b *strings.Builder, seg importhjson.Segment, depth int) {
 	indent(b, depth+1)
 	fmt.Fprintf(b, "id: %s\n", quote(seg.ID))
 	indent(b, depth+1)
-	fmt.Fprintf(b, "from: %s\n", quote(seg.From))
+	fromLine := fmt.Sprintf("from: %s", quote(seg.From))
+	if seg.FromRef != "" {
+		fromLine += " # -> " + seg.FromRef
+	}
+	fmt.Fprintf(b, "%s\n", fromLine)
 	indent(b, depth+1)
-	fmt.Fprintf(b, "to: %s\n", quote(seg.To))
+	toLine := fmt.Sprintf("to: %s", quote(seg.To))
+	if seg.ToRef != "" {
+		toLine += " # -> " + seg.ToRef
+	}
+	fmt.Fprintf(b, "%s\n", toLine)
 	writeAttributesBlock(b, seg.Attributes, depth+1)
 	writeSatellitesBlock(b, seg.Satellites, depth+1)
 	writeGeometryArray(b, seg.Geometry, depth+1)
@@ -210,13 +231,200 @@ func writeSegment(b *strings.Builder, seg importhjson.Segment, depth int) {
 const attributesLeadKey = "IdentifiedObject.name"
 const attributesLeadKeyAlias = "name"
 
+// writeDefaultOmissionNote documents, once per exported file, hjson2's
+// compaction convention (added 2026-07-21, following a user question about
+// how to make hjson2 output more compact) of dropping two extremely
+// common CIM boolean attributes whenever they hold their default value —
+// see isDefaultOmitted for the two keys/defaults. This is a deliberate,
+// intentionally-lossy compaction: on re-import a dropped
+// "Equipment.normallyInService"/"TimeSchedule.disabled" Sachdaten row is
+// simply absent rather than explicitly re-created as "true"/"false" (both
+// keys are pure inert Sachdaten never consulted by Phase 2/3's electrical
+// topology or consistency logic — see Konzept.md's "Switch.retained" note
+// for the one CIM state flag that IS load-bearing, unaffected by this).
+// This comment exists purely so a reader (or a future session) doesn't
+// mistake a missing field for a bug or lost data.
+func writeDefaultOmissionNote(b *strings.Builder, depth int) {
+	indent(b, depth)
+	b.WriteString("# hjson2 omits normallyInService: true and (measuring/transmission) disabled: false\n")
+	indent(b, depth)
+	b.WriteString("# whenever they equal their default; only non-default values are shown explicitly.\n")
+}
+
+// defaultOmitAttrs lists raw "Class.attribute" CIM keys (see attrUnits'
+// same keying convention) whose value is dropped entirely from the
+// rendered attributes/measuring/transmission block when it equals the
+// given default — see writeDefaultOmissionNote's doc comment. A curated,
+// deliberately short, seed list (same precedent as attrUnits/kwToMWKeys):
+// extend only for another boolean attribute confirmed to be this
+// overwhelmingly common AND confirmed inert (never read by Phase 2/3).
+var defaultOmitAttrs = map[string]string{
+	"Equipment.normallyInService": "true",
+	"TimeSchedule.disabled":       "false",
+}
+
+// isDefaultOmitted reports whether (k, v) is exactly the default value
+// registered in defaultOmitAttrs for k — v may already be a Go bool
+// (native JSON-decoded value) or the plain "true"/"false" string this
+// pipeline's CIM-derived Sachdaten values are normally stored as.
+func isDefaultOmitted(k string, v interface{}) bool {
+	want, ok := defaultOmitAttrs[k]
+	if !ok {
+		return false
+	}
+	switch val := v.(type) {
+	case string:
+		return val == want
+	case bool:
+		return strconv.FormatBool(val) == want
+	}
+	return false
+}
+
+// numericAttrKeys is a curated set of raw "Class.attribute" CIM keys
+// (same keying convention as attrUnits) known to hold a numeric value —
+// sourced from internal/scaffold/cim/cimdata's own documented `type:
+// float`/`type: int` attribute declarations (see that package's per-group
+// .hjson files), i.e. keys the project has ALREADY typed as numeric
+// elsewhere, not a fresh guess. A string value under one of these keys is
+// rendered as a bare HJSON number instead of a quoted string (see
+// renderAttrValue) — added 2026-07-21 as a compaction. Deliberately NOT a
+// blanket "looks like a number, so render as a number" rule: several real
+// Sachdaten values that parse as float (e.g. "measurementLocationIdentifier"
+// = "000000000000000000000000000000001") are actually opaque IDs where
+// converting to a native number would silently destroy leading zeros/
+// precision — this key-based whitelist keeps that data safely quoted.
+var numericAttrKeys = map[string]bool{
+	"ACLineSegment.b0ch":                                      true,
+	"ACLineSegment.bch":                                       true,
+	"ACLineSegment.g0ch":                                      true,
+	"ACLineSegment.gch":                                       true,
+	"ACLineSegment.r":                                         true,
+	"ACLineSegment.r0":                                        true,
+	"ACLineSegment.shortCircuitEndTemperature":                true,
+	"ACLineSegment.x":                                         true,
+	"ACLineSegment.x0":                                        true,
+	"AnalogValue.value":                                       true,
+	"BasePower.basePower":                                     true,
+	"BaseVoltage.nominalVoltage":                              true,
+	"BatteryUnit.ratedE":                                      true,
+	"BatteryUnit.storedE":                                     true,
+	"BusbarSection.ipMax":                                     true,
+	"Conductor.length":                                        true,
+	"ControlArea.netInterchange":                              true,
+	"CurrentLimit.value":                                      true,
+	"CurveData.xvalue":                                        true,
+	"CurveData.y1value":                                       true,
+	"CurveData.y2value":                                       true,
+	"DiscreteControlLimit.value":                              true,
+	"EnergyConsumer.p":                                        true,
+	"EnergyConsumer.q":                                        true,
+	"EquivalentInjection.p":                                   true,
+	"EquivalentInjection.q":                                   true,
+	"ExternalNetworkInjection.maxP":                           true,
+	"ExternalNetworkInjection.minP":                           true,
+	"ExternalNetworkInjection.p":                              true,
+	"ExternalNetworkInjection.q":                              true,
+	"Fuse.nominalCurrent":                                     true,
+	"GeneratingUnit.maxOperatingP":                            true,
+	"GeneratingUnit.minOperatingP":                            true,
+	"GeneratingUnit.ratedNetMaxP":                             true,
+	"HydroGeneratingUnit.hydroUnitWaterCost":                  true,
+	"LinearShuntCompensator.bPerSection":                      true,
+	"LinearShuntCompensator.gPerSection":                      true,
+	"LoadResponseCharacteristic.pConstantCurrent":             true,
+	"LoadResponseCharacteristic.pConstantImpedance":           true,
+	"LoadResponseCharacteristic.pConstantPower":               true,
+	"NonlinearShuntCompensatorPoint.b":                        true,
+	"NonlinearShuntCompensatorPoint.g":                        true,
+	"OperationalLimitType.acceptableDuration":                 true,
+	"PerLengthSequenceImpedance.r":                            true,
+	"PerLengthSequenceImpedance.r0":                           true,
+	"PerLengthSequenceImpedance.x":                            true,
+	"PerLengthSequenceImpedance.x0":                           true,
+	"PhaseTapChangerAsymmetrical.windingConnectionAngle":      true,
+	"PhaseTapChangerLinear.stepPhaseShiftIncrement":           true,
+	"PhaseTapChangerLinear.xStepMax":                          true,
+	"PhaseTapChangerLinear.xStepMin":                          true,
+	"PhaseTapChangerNonLinear.voltageStepIncrement":           true,
+	"PhaseTapChangerTablePoint.angle":                         true,
+	"PowerElectronicsConnection.p":                            true,
+	"PowerElectronicsConnection.q":                            true,
+	"PowerElectronicsConnection.ratedS":                       true,
+	"PowerElectronicsUnit.maxP":                               true,
+	"PowerElectronicsUnit.minP":                               true,
+	"PowerTransformer.beforeShCircuitHighestOperatingCurrent": true,
+	"PowerTransformer.beforeShCircuitHighestOperatingVoltage": true,
+	"PowerTransformer.beforeShortCircuitAnglePf":              true,
+	"PowerTransformer.highSideMinOperatingU":                  true,
+	"PowerTransformerEnd.b":                                   true,
+	"PowerTransformerEnd.b0":                                  true,
+	"PowerTransformerEnd.g":                                   true,
+	"PowerTransformerEnd.g0":                                  true,
+	"PowerTransformerEnd.r":                                   true,
+	"PowerTransformerEnd.r0":                                  true,
+	"PowerTransformerEnd.ratedS":                              true,
+	"PowerTransformerEnd.ratedU":                              true,
+	"PowerTransformerEnd.x":                                   true,
+	"PowerTransformerEnd.x0":                                  true,
+	"RatioTapChanger.stepVoltageIncrement":                    true,
+	"RegulatingControl.maxAllowedTargetValue":                 true,
+	"RegulatingControl.minAllowedTargetValue":                 true,
+	"RegulatingControl.targetDeadband":                        true,
+	"RegulatingControl.targetValue":                           true,
+	"RotatingMachine.p":                                       true,
+	"RotatingMachine.q":                                       true,
+	"RotatingMachine.ratedS":                                  true,
+	"SeriesCompensator.r":                                     true,
+	"SeriesCompensator.x":                                     true,
+	"StaticVarCompensator.capacitiveRating":                   true,
+	"StaticVarCompensator.inductiveRating":                    true,
+	"StaticVarCompensator.voltageSetPoint":                    true,
+	"SvPowerFlow.p":                                           true,
+	"SvPowerFlow.q":                                           true,
+	"SvShuntCompensatorSections.sections":                     true,
+	"SvVoltage.angle":                                         true,
+	"SvVoltage.v":                                             true,
+	"Switch.ratedCurrent":                                     true,
+	"TapChanger.neutralU":                                     true,
+	"TapChangerTablePoint.ratio":                              true,
+	"TimeSchedule.recurrencePeriod":                           true,
+	"TransformerEnd.rground":                                  true,
+	"TransformerEnd.xground":                                  true,
+	"VoltageLimit.value":                                      true,
+}
+
+// renderAttrValue renders one attributes/measuring/transmission value for
+// key k: a string value under a numericAttrKeys key that parses cleanly as
+// a float64 is rendered as a bare HJSON number (see numericAttrKeys' doc
+// comment); a string value that is exactly "true"/"false" is rendered as
+// a bare HJSON boolean regardless of key (added 2026-07-21 — unlike a
+// numeric-looking string, a CIM/Sachdaten value that is EXACTLY the
+// literal "true" or "false" is always a genuine boolean flag, never an
+// opaque ID/free-text value that would be corrupted by this rewrite, so
+// no key-based curated whitelist is needed here); everything else falls
+// back to quoteValue unchanged.
+func renderAttrValue(k string, v interface{}) string {
+	if numericAttrKeys[k] {
+		if s, ok := v.(string); ok {
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				return strconv.FormatFloat(f, 'g', -1, 64)
+			}
+		}
+	}
+	if s, ok := v.(string); ok && (s == "true" || s == "false") {
+		return s
+	}
+	return quoteValue(v)
+}
+
 // attrUnits is a small, deliberately non-exhaustive, curated table of
 // well-known CIM attribute units (mirrors the kwToMWKeys precedent in
 // internal/importer/hjson2/resolve.go: a seed list, extended as more units
 // are confirmed) — keyed by the FULL raw "Class.attribute" CIM key (not
 // the possibly-stripped display key written to hjson2) so a unit is never
 // misattributed just because two unrelated classes happen to share a
-// short attribute name. Rendered as a trailing "// unit" comment; the
+// short attribute name. Rendered as a trailing "# unit" comment; the
 // comment is display-only and never round-trips back on import (it's
 // re-derived here from the same, restored full CIM key every time).
 var attrUnits = map[string]string{
@@ -244,8 +452,23 @@ var attrUnits = map[string]string{
 // splitAttrKey splits a raw CIM attribute key at its first "." into
 // (class prefix, attribute name), reporting ok == false for a key with no
 // dot at all (should not normally occur for CIM keys, but handled
-// defensively).
+// defensively) — and also for any key already carrying a "cim:" prefix
+// (see internal/impl/common/container.go's LineRefs: an untrusted raw
+// CGMES "Line" grouping reference kept as opaque Sachdaten, e.g.
+// "cim:ACLineSegment.Line" or "cim:Line.IdentifiedObject.mRID"). Such a
+// key must never be simplified: stripping only its "cim:Line." portion
+// would still leave a bare "IdentifiedObject.mRID"/"IdentifiedObject.name"
+// that collides, on reimport, with the object's own real
+// IdentifiedObject.mRID/name — silently attributing the foreign Line
+// object's mRID/name to the ACLineSegment itself. Found 2026-07-21 via the
+// ReliCapGrid_Espheim round-trip (denormalizeAttrKey has no way to tell
+// the two apart once the "cim:" marker is stripped away). Keeping the
+// whole "cim:..." key untouched (never entering the collision-based
+// stripping path) is the safe fix on both the export and import side.
 func splitAttrKey(k string) (prefix, name string, ok bool) {
+	if strings.HasPrefix(k, "cim:") {
+		return "", k, false
+	}
 	i := strings.IndexByte(k, '.')
 	if i < 0 {
 		return "", k, false
@@ -278,6 +501,23 @@ func writeAttributesBlock(b *strings.Builder, attrs map[string]interface{}, dept
 // importer only ever sees one already-stripped file, not this local
 // collision check's input).
 func writeNamedBlock(b *strings.Builder, label string, attrs map[string]interface{}, depth int) {
+	if len(attrs) == 0 {
+		return
+	}
+	// Drop any key/value pair that is exactly its documented default
+	// (see isDefaultOmitted/writeDefaultOmissionNote) before doing
+	// anything else, so an attrs map that becomes empty after this
+	// filtering renders no block at all, exactly like an originally-empty
+	// map. Always works off a fresh copy so the caller's own map is never
+	// mutated.
+	visible := make(map[string]interface{}, len(attrs))
+	for k, v := range attrs {
+		if isDefaultOmitted(k, v) {
+			continue
+		}
+		visible[k] = v
+	}
+	attrs = visible
 	if len(attrs) == 0 {
 		return
 	}
@@ -324,9 +564,9 @@ func writeNamedBlock(b *strings.Builder, label string, attrs map[string]interfac
 		} else if _, name, hasDot := splitAttrKey(k); hasDot && !collides[name] {
 			renderKey = name
 		}
-		line := fmt.Sprintf("%s: %s", quoteKey(renderKey), quoteValue(attrs[k]))
+		line := fmt.Sprintf("%s: %s", quoteKey(renderKey), renderAttrValue(k, attrs[k]))
 		if unit, ok := attrUnits[k]; ok {
-			line += " // " + unit
+			line += " # " + unit
 		}
 		fmt.Fprintf(b, "%s\n", line)
 	}

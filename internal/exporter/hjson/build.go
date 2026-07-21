@@ -218,6 +218,9 @@ func buildAttributes(s *Snapshot, ownerID string, skipClass bool) map[string]int
 		if a.Key == common.AttributeKeySatellite {
 			continue // rendered separately, see buildSatellites
 		}
+		if a.Key == common.AttributeKeyBusbarNode {
+			continue // hjson2-only internal bookkeeping (see that key's doc comment), never a visible Sachdaten value
+		}
 		key := string(a.Key)
 		val := a.Value
 		if kwToMWKeys[key] {

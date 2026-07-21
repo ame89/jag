@@ -78,17 +78,51 @@ func (m *ModelStore) AllEdges(afterID string, limit int) ([]coremodel.Edge, erro
 }
 
 // AllAttributes pages through every Attribute in (owner_id, key, seq)
-// order — same decoding as GetByOwnerIDs.
+// order — same decoding as GetByOwnerIDs. See
+// internal/sqlite/model_export.go's AllAttributes doc comment for the
+// 2026-07-21 owner-straddling-page-boundary bugfix this mirrors: a page
+// is never allowed to end mid-owner, so a trailing owner's remaining
+// rows are fetched via a follow-up query instead of being silently
+// dropped by the next call's owner_id cursor.
 func (m *ModelStore) AllAttributes(afterOwnerID string, limit int) ([]coremodel.Attribute, error) {
 	rows, err := m.db.Query(
-		rebind(`SELECT owner_id, key, value FROM model_attribute WHERE owner_id > ? ORDER BY owner_id, key, seq LIMIT ?`),
+		rebind(`SELECT owner_id, key, seq, value FROM model_attribute WHERE owner_id > ? ORDER BY owner_id, key, seq LIMIT ?`),
 		afterOwnerID, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: paging attributes: %w", err)
 	}
-	defer rows.Close()
-	return scanAttributeRows(rows)
+	result, lastKey, lastSeq, err := scanAttributeRowsWithCursor(rows)
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	for len(result) > 0 && len(result) >= limit {
+		lastOwner := result[len(result)-1].OwnerID
+		moreRows, err := m.db.Query(
+			rebind(`SELECT owner_id, key, seq, value FROM model_attribute WHERE owner_id = ? AND (key, seq) > (?, ?) ORDER BY key, seq LIMIT ?`),
+			lastOwner, lastKey, lastSeq, limit,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: paging attributes (owner continuation): %w", err)
+		}
+		more, newLastKey, newLastSeq, err := scanAttributeRowsWithCursor(moreRows)
+		moreRows.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(more) == 0 {
+			break
+		}
+		result = append(result, more...)
+		lastKey, lastSeq = newLastKey, newLastSeq
+		if len(more) < limit {
+			break
+		}
+	}
+
+	return result, nil
 }
 
 // AllGeometry pages through every Geometry in owner-ID order.
@@ -116,6 +150,37 @@ func (m *ModelStore) AllGeometry(afterOwnerID string, limit int) ([]coremodel.Ge
 		return nil, fmt.Errorf("postgres: iterating geometry rows: %w", err)
 	}
 	return result, nil
+}
+
+// scanAttributeRowsWithCursor decodes rows produced by a "SELECT owner_id,
+// key, seq, value FROM model_attribute ..." query (like scanAttributeRows,
+// but also tracking the last row's key/seq so AllAttributes' owner-
+// continuation query above can resume exactly where this page left off).
+func scanAttributeRowsWithCursor(rows *sql.Rows) ([]coremodel.Attribute, string, int, error) {
+	var result []coremodel.Attribute
+	var lastKey string
+	var lastSeq int
+	for rows.Next() {
+		var ownerID, key, rawValue string
+		var seq int
+		if err := rows.Scan(&ownerID, &key, &seq, &rawValue); err != nil {
+			return nil, "", 0, fmt.Errorf("postgres: scanning attribute row: %w", err)
+		}
+		var value any
+		if err := json.Unmarshal([]byte(rawValue), &value); err != nil {
+			return nil, "", 0, fmt.Errorf("postgres: decoding attribute value for %s.%s: %w", ownerID, key, err)
+		}
+		result = append(result, coremodel.Attribute{
+			OwnerID: ownerID,
+			Key:     coremodel.AttributeKey(key),
+			Value:   value,
+		})
+		lastKey, lastSeq = key, seq
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", 0, fmt.Errorf("postgres: iterating attribute rows: %w", err)
+	}
+	return result, lastKey, lastSeq, nil
 }
 
 // scanAttributeRows decodes rows produced by a "SELECT owner_id, key,

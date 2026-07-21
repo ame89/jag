@@ -147,8 +147,12 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("reading exported %s: %v", houseFile, err)
 	}
 	content := string(raw)
+	// maxP is rendered as a bare HJSON number, not a quoted string — see
+	// write.go's numericAttrKeys ("PowerElectronicsUnit.maxP" is a known
+	// numeric CIM attribute, curated 2026-07-21 as part of hjson2's
+	// compaction pass).
 	if !contains(content, `satellites: [`) || !contains(content, `class: "Wallbox"`) ||
-		!contains(content, `name: "STEU-24"`) || !contains(content, `maxP: "8000"`) {
+		!contains(content, `name: "STEU-24"`) || !contains(content, `maxP: 8000`) {
 		t.Errorf("exported %s does not contain the expected satellite object; got:\n%s", houseFile, content)
 	}
 

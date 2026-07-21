@@ -233,8 +233,30 @@ func denormalizeAttrKey(k, ownClass string) string {
 		return "IdentifiedObject.name"
 	}
 	if !strings.Contains(k, ".") {
-		if cls, ok := UniqueAttrClass[k]; ok {
-			return cls + "." + k
+		// State-Variable (SV-profile) satellite classes (SvStatus,
+		// SvSwitch, SvTapStep, SvVoltage, ...) always carry their own
+		// base-class attributes under their own concrete class name — a
+		// bare "open"/"inService" on such a satellite means
+		// "SvSwitch.open"/"SvStatus.inService", never
+		// "Switch.open"/"Equipment.inService". ownClass already IS the
+		// exact right class in that case, so skip the UniqueAttrClass
+		// table entirely for Sv* owners and fall straight through to
+		// "<ownClass>.<key>". This is what makes it safe for
+		// UniqueAttrClass to map "open"->"Switch" and
+		// "inService"->"Equipment" despite SvSwitch.open/SvStatus.inService
+		// also occurring in real data (see uniqueattrs.go) — the two
+		// contexts are disambiguated by ownClass, not by attribute name
+		// alone. Found 2026-07-21 while root-causing a busbar/circuit
+		// topology divergence in the ReliCapGrid_Espheim round-trip:
+		// without this guard, "open" couldn't be added to UniqueAttrClass,
+		// so a Switch's own "open" survived only as "Switch.normalOpen"
+		// after reimport (its live SSH-profile open/closed state was
+		// silently lost, falling back to the design-time default), which
+		// materially changed BuildCircuits' zero-ohm reduction results.
+		if !strings.HasPrefix(ownClass, "Sv") {
+			if cls, ok := UniqueAttrClass[k]; ok {
+				return cls + "." + k
+			}
 		}
 		return ownClass + "." + k
 	}
@@ -324,9 +346,25 @@ func (e *r) addSatellites(ownerID string, satellites []Satellite) {
 // entry is a single-terminal source/sink (Terminal 2 = GND is implied
 // automatically by BuildNodesAndEdges, per the auto-GND-wiring decision —
 // no Terminal is synthesized for it here). Two entries are an ordinary
-// Zweipol. Anything else is a parse-time error.
+// Zweipol. Zero entries means the Equipment has no electrical
+// representation at all (e.g. a multi-winding/3+-winding PowerTransformer,
+// which terminals.go's classifyAll rejects as an Anomaly — >2 Terminals —
+// rather than a hard import failure, see Konzept.md's Transformer
+// section): the exporter (build.go's buildEquipment) then has no Edge to
+// render a connects list from and simply omits it. Tolerating 0 here
+// instead of erroring keeps hjson2 symmetric with that existing,
+// pre-hjson2 Anomaly behavior — the Equipment round-trips as an
+// Attribute/Satellite-only object with no Terminal, exactly as it already
+// existed before export, rather than crashing the reimport over a case
+// the raw importer itself already accepts. Anything above 2 is still a
+// parse-time error, since that shape (3+ explicit connects) can only come
+// from a corrupt/hand-edited .hjson file, never from hjson2's own
+// exporter.
 func (e *r) addTerminals(equipmentID string, connects []string) {
-	if len(connects) < 1 || len(connects) > 2 {
+	if len(connects) == 0 {
+		return
+	}
+	if len(connects) > 2 {
 		e.errs = append(e.errs, model.StagingError{
 			Version: e.version, SourceFile: e.fi.Path,
 			Message: fmt.Sprintf("%s: connects must have 1 or 2 entries, got %d", equipmentID, len(connects)),
@@ -353,6 +391,8 @@ func emitFile(version uint64, fi FileInfo, f *File) ([]model.StagingRecord, []mo
 		e.emitACLine(f)
 	case TopLevelHouse:
 		e.emitHouse(f)
+	case TopLevelBoundary:
+		e.emitBoundary(f)
 	}
 	return e.recs, e.errs
 }
@@ -397,33 +437,59 @@ func (e *r) emitStation(f *File) {
 	e.addGeometry(subID, "Substation", f.Geometry)
 
 	for _, bb := range f.Busbars {
-		vlID := e.resolve(bb.ID)
+		// bb.ID is the shortened form of the Busbar's one real physical
+		// electrical Node (see hjson2/build.go's buildBusbarSections —
+		// e.g. "@CN3", the actual CIM ConnectivityNode ID, shortened),
+		// NOT an arbitrary synthetic name. Resolving it therefore yields
+		// exactly the same global node ID any external Kabel/ACLine file
+		// would use to reference this same busbar (via the ordinary
+		// shortenID fallback — see resolveConnectTarget), with no
+		// import-side alias/rewrite table needed for the two to agree.
+		nodeID := e.resolve(bb.ID)
+		// vlID (the VoltageLevel object) must be a distinct string from
+		// nodeID (the ConnectivityNode/Node) — "-VL" keeps them from
+		// colliding as two different CIM objects sharing one ID.
+		vlID := nodeID + "-VL"
 		e.add(vlID, "VoltageLevel", "VoltageLevel.Substation", subID, true, 0)
 		e.add(vlID, "VoltageLevel", "IdentifiedObject.name", bb.ID, false, 0)
 		for _, sec := range bb.Sections {
-			// secID must match exactly what a connecting Equipment's own
-			// connects entry resolves to (e.g. "BB-1-1", see
-			// hjson2/build.go's buildBusbarSections) — NOT just sec.ID
-			// ("1") alone, which would collide across different Busbars
-			// and wouldn't match any connects token. Every Section of one
-			// Busbar becomes its own BusbarSection Equipment, each with
-			// its own self-referencing Terminal/Node exactly like a real
-			// multi-section busbar imported from CIM/CGMES/NSC — Phase
-			// 2's existing MergeBusbarSectionNodes (internal/impl/common/
-			// busbarmerge.go) then merges all of one busbar container's
-			// BusbarSection nodes into a single canonical electrical
-			// node, giving every Section the same real node with no
-			// import-side special-casing needed here.
+			// secID is the Section's own Equipment ID, used only for its
+			// Attributes/Satellites/Geometry — a Section is a purely
+			// logical/organizational slot, never a distinct electrical
+			// point (a Busbar Container is, physically, exactly one
+			// Node — see MergeBusbarSectionNodes's doc comment). Its
+			// Terminal's ConnectivityNode is therefore wired directly to
+			// the Busbar's one shared nodeID, not to secID itself — this
+			// makes every Section reconverge on the same real Node from
+			// the start, with no post-hoc merge step needed here.
 			secID := e.resolve(bb.ID + "-" + sec.ID)
 			e.add(secID, "BusbarSection", "Equipment.EquipmentContainer", vlID, true, 0)
-			e.addEntityAttributes(secID, "BusbarSection", sec.Attributes)
+			// A Section's own Attributes take precedence; any key hoisted
+			// onto the Busbar (see build.go's hoistCommonSectionName,
+			// currently only ever "IdentifiedObject.name") only fills in
+			// where the Section itself doesn't already have that key —
+			// this is what makes the export-side hoist round-trip safe.
+			secAttrs := sec.Attributes
+			if len(bb.Attributes) > 0 {
+				merged := make(map[string]interface{}, len(bb.Attributes)+len(secAttrs))
+				for k, v := range bb.Attributes {
+					merged[k] = v
+				}
+				for k, v := range secAttrs {
+					merged[k] = v
+				}
+				secAttrs = merged
+			}
+			e.addEntityAttributes(secID, "BusbarSection", secAttrs)
 			e.addSatellites(secID, sec.Satellites)
 			e.addGeometry(secID, "BusbarSection", sec.Geometry)
-			// BusbarSection is its own Node (nodeRoleClasses, see
-			// terminals.go): one self-referencing Terminal.
+			// BusbarSection is its own Node-role Equipment (nodeRoleClasses,
+			// see terminals.go), but its Terminal points at the Busbar's
+			// shared nodeID rather than self-referencing secID — every
+			// Section of one Busbar shares the very same node.
 			termID := secID + "-T1"
 			e.add(termID, "Terminal", "Terminal.ConductingEquipment", secID, true, 0)
-			e.add(termID, "Terminal", "Terminal.ConnectivityNode", secID, true, 0)
+			e.add(termID, "Terminal", "Terminal.ConnectivityNode", nodeID, true, 0)
 			e.add(termID, "Terminal", "ACDCTerminal.sequenceNumber", "1", false, 0)
 		}
 	}
@@ -431,7 +497,20 @@ func (e *r) emitStation(f *File) {
 	for _, bay := range f.Bays {
 		bayID := e.resolve(bay.ID)
 		e.add(bayID, "Feeder", "Feeder.NormalEnergizingSubstation", subID, true, 0)
-		e.add(bayID, "Feeder", "IdentifiedObject.name", bay.ID, false, 0)
+		// Prefer the Bay container's own captured "name" Sachdaten
+		// (bay.Attributes, added 2026-07-21) over defaulting to the
+		// Bay's own ID — see Bay.Attributes' doc comment in types.go.
+		// Uses the literal "name" key (== impl/common.AttributeKeyName)
+		// rather than importing impl/common here, to avoid an import
+		// cycle (impl/common's tests import importer/phase1, which
+		// imports importer/hjson2).
+		name := bay.ID
+		if v, ok := bay.Attributes["name"]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				name = s
+			}
+		}
+		e.add(bayID, "Feeder", "IdentifiedObject.name", name, false, 0)
 		for _, eq := range bay.Equipment {
 			e.emitEquipment(eq, bayID)
 		}
@@ -459,6 +538,12 @@ func (e *r) emitStation(f *File) {
 // emitEquipment emits one piece of Equipment attached to containerID
 // (a Bay/Feeder ID for station-internal equipment, or a House ID for
 // standalone consumer/producer equipment).
+// emitEquipment stages one Equipment entry. containerID is the owning
+// container's ID, or "" for a genuinely containerless equipment (see
+// emitBoundary) — in that case no "Equipment.EquipmentContainer"
+// reference is emitted at all, matching Konzept.md's decision that some
+// equipment (boundary EquivalentInjection) legitimately has no Container
+// membership rather than falling back to some synthetic container.
 func (e *r) emitEquipment(eq Equipment, containerID string) {
 	if eq.Class == "" {
 		e.errs = append(e.errs, model.StagingError{
@@ -468,7 +553,9 @@ func (e *r) emitEquipment(eq Equipment, containerID string) {
 		return
 	}
 	eqID := e.resolve(eq.ID)
-	e.add(eqID, eq.Class, "Equipment.EquipmentContainer", containerID, true, 0)
+	if containerID != "" {
+		e.add(eqID, eq.Class, "Equipment.EquipmentContainer", containerID, true, 0)
+	}
 	e.addEntityAttributes(eqID, eq.Class, eq.Attributes)
 	e.addSatellites(eqID, eq.Satellites)
 	e.addMeterSchedules(eqID, eq)
@@ -490,15 +577,39 @@ func (e *r) emitEquipment(eq Equipment, containerID string) {
 func (e *r) addMeterSchedules(eqID string, eq Equipment) {
 	var sats []Satellite
 	if eq.Measuring != nil {
-		sats = append(sats, Satellite{Class: "TimeSchedule", Attributes: eq.Measuring})
+		sats = append(sats, Satellite{Class: "TimeSchedule", Attributes: withFallbackScheduleName(eq.Measuring, eq.Attributes)})
 	}
 	if eq.Transmission != nil {
-		sats = append(sats, Satellite{Class: "TimeSchedule", Attributes: eq.Transmission})
+		sats = append(sats, Satellite{Class: "TimeSchedule", Attributes: withFallbackScheduleName(eq.Transmission, eq.Attributes)})
 	}
 	if len(sats) == 0 {
 		return
 	}
 	e.addSatellites(eqID, sats)
+}
+
+// withFallbackScheduleName is dropRedundantScheduleName's import-side
+// counterpart (see hjson2 exporter's build.go): a measuring/transmission
+// TimeSchedule map missing its own "name" (the exporter's stripped alias
+// for "IdentifiedObject.name" — see this package's denormalizeAttrKey)
+// inherits the owning Equipment's own "name" instead, reconstructing the
+// exact value the exporter dropped. Returns schedule unchanged (same map,
+// no copy) when it already has its own name or the owner has none —
+// avoiding an allocation on the overwhelmingly common no-op path.
+func withFallbackScheduleName(schedule, ownerAttrs map[string]interface{}) map[string]interface{} {
+	if _, ok := schedule["name"]; ok {
+		return schedule
+	}
+	name, ok := ownerAttrs["name"]
+	if !ok {
+		return schedule
+	}
+	merged := make(map[string]interface{}, len(schedule)+1)
+	for k, v := range schedule {
+		merged[k] = v
+	}
+	merged["name"] = name
+	return merged
 }
 
 // addDiscreteControlLimits is extractDiscreteControlLimits' import-side
@@ -568,6 +679,17 @@ func (e *r) emitHouse(f *File) {
 	e.addGeometry(houseID, "Building", f.Geometry)
 	for _, eq := range f.Equipment {
 		e.emitEquipment(eq, houseID)
+	}
+}
+
+// emitBoundary handles a Grenzknoten/Boundary file: a flat list of
+// Equipment with no owning container at all (containerID = "", see
+// emitEquipment's doc comment). No container record (Building/Substation)
+// is emitted here — unlike emitHouse/emitStation, a Boundary file
+// describes no container object, only free-standing equipment.
+func (e *r) emitBoundary(f *File) {
+	for _, eq := range f.Equipment {
+		e.emitEquipment(eq, "")
 	}
 }
 
