@@ -6,7 +6,7 @@
 // /internal/impl.
 package staging
 
-import "gitlab.com/openk-nsc/jag/internal/importer/model"
+import "github.com/ame89/jag/internal/importer/model"
 
 // Store is the bulk-oriented storage abstraction for Phase 1 staging data.
 // Only batch operations are exposed — Phase 1 never processes single

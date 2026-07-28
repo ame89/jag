@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
-	"gitlab.com/openk-nsc/jag/internal/xmlsax"
+	"github.com/ame89/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/xmlsax"
 )
 
 var profileSuffixPattern = regexp.MustCompile(`_([A-Z]{2,3})(?:_v[\d.]+)?(?:_\d+)?\.xml$`)

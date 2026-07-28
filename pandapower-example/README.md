@@ -101,7 +101,7 @@ CGMES-Kodierung des IEEE-118-Systems (Übertragungsnetz-Ebene, nicht MS/NS).
 ## 2. Ausführung
 
 ```powershell
-cd pandapower
+cd pandapower-example
 python extract_cim_to_csv.py     # erzeugt data/*.csv aus den CIM-Rohdaten
 python run_powerflow.py          # Lastfluss, Ergebnisse auf der Konsole
 python plot_network.py           # docs/network_diagram.png

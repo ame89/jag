@@ -3,7 +3,7 @@ package sqlite
 import (
 	"testing"
 
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/importer/model"
 )
 
 func TestNextVersionIncrementsAndNeverReused(t *testing.T) {

@@ -5,9 +5,9 @@ import (
 	"sort"
 	"testing"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/importer/phase1"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // nopSink discards Attribute/Geometry batches — this test only checks

@@ -31,7 +31,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"gitlab.com/openk-nsc/jag/internal/jag2nsc"
+	"github.com/ame89/jag/internal/jag2nsc"
 )
 
 var logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))

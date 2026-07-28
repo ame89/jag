@@ -13,11 +13,11 @@ import (
 	"errors"
 	"fmt"
 
-	"gitlab.com/openk-nsc/jag/internal/core/staging"
-	"gitlab.com/openk-nsc/jag/internal/importer/batch"
-	"gitlab.com/openk-nsc/jag/internal/importer/cgmes"
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
-	"gitlab.com/openk-nsc/jag/internal/importer/nsc"
+	"github.com/ame89/jag/internal/core/staging"
+	"github.com/ame89/jag/internal/importer/batch"
+	"github.com/ame89/jag/internal/importer/cgmes"
+	"github.com/ame89/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/importer/nsc"
 )
 
 // Result summarizes one Phase 1 run.

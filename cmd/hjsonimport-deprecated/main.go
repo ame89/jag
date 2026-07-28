@@ -1,10 +1,15 @@
-// Command hjsonimport2 is hjsonimport's counterpart for the newer, more
-// compact hjson2 export/import dialect (see internal/exporter/hjson2 and
-// internal/importer/hjson2): it parses a directory tree of *.hjson files
-// produced by cmd/hjsonexport2 into the staging store, runs it through the
-// existing Pass A/B Phase 2/3 pipeline unchanged, and persists the result
-// via ModelStore — mirroring cmd/hjsonimport's structure for the older
-// Fachmodell HJSON dialect.
+// Command hjsonimport-deprecated is the reference CLI for the deprecated
+// v1 Fachmodell HJSON Phase 1 dialect (see
+// internal/importer/hjson-deprecated's doc comment and Konzept.md's "HJSON
+// Fachmodell" history): it parses a directory tree of *.hjson files
+// (<root>/<Netzregion>/<ONS|KVS|Kabel|Haushalte>/<id>.hjson) into the
+// staging store, runs it through the existing Pass A/B Phase 2/3 pipeline
+// unchanged, and persists the result via ModelStore. Deprecated: hjson2
+// (cmd/hjsonimport, internal/importer/hjson) is the current, authoritative
+// HJSON Fachmodell dialect. NOTE: examples/hjson now contains hjson2
+// (pluralized-key) format data, not the v1 format this binary expects —
+// there is no dedicated v1 example directory; pass an explicit v1-format
+// root as the first argument.
 package main
 
 import (
@@ -13,10 +18,10 @@ import (
 	"strconv"
 	"time"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/impl/common"
-	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/impl/common"
+	"github.com/ame89/jag/internal/importer/phase1"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 const persistChunkSize = 1000
@@ -38,9 +43,9 @@ func chunkUpsert[T any](items []T, upsert func([]T) error) error {
 // persists straight into ModelStore and only keeps small running counts
 // for the final summary, never a whole-model slice.
 type countingSink struct {
-	model     *sqlite.ModelStore
-	attrCount int
-	geomCount int
+	model      *sqlite.ModelStore
+	attrCount  int
+	geomCount  int
 }
 
 func (s *countingSink) WriteAttributes(batch []coremodel.Attribute) error {
@@ -60,12 +65,12 @@ func (s *countingSink) WriteGeometries(batch []coremodel.Geometry) error {
 }
 
 func main() {
-	root := "examples/hjson2"
+	root := "examples/hjson"
 	if len(os.Args) > 1 {
 		root = os.Args[1]
 	}
 
-	dbPath := "hjsonimport2.db"
+	dbPath := "hjsonimport-deprecated.db"
 	if v := os.Getenv("JAG_DB_PATH"); v != "" {
 		dbPath = v
 	}
@@ -129,7 +134,7 @@ func main() {
 	flags := store.Flags()
 
 	phase1Start := time.Now()
-	result, err := phase1.RunHJSON2Files(store, root)
+	result, err := phase1.RunHJSONDeprecatedFiles(store, root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "phase1: %v\n", err)
 		os.Exit(1)

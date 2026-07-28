@@ -1,6 +1,6 @@
 package common
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // Reserved Sachdaten keys for the human-readable name/label of any
 // Equipment or Container. These used to be dedicated struct fields on

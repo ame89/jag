@@ -1,10 +1,11 @@
-// Command hjsonimport is the reference CLI for the Fachmodell HJSON Phase 1
-// dialect (see internal/importer/hjson's doc comment and Konzept.md's
-// "HJSON Fachmodell" section): it parses a directory tree of *.hjson files
-// (<root>/<Netzregion>/<ONS|KVS|Kabel|Haushalte>/<id>.hjson) into the
-// staging store, runs it through the existing Pass A/B Phase 2/3 pipeline
-// unchanged, and persists the result via ModelStore — mirroring
-// cmd/phase2check's structure for the CGMES/NSC dialects.
+// Command hjsonimport is the reference CLI for the current, authoritative
+// HJSON Fachmodell dialect (see internal/importer/hjson's doc comment):
+// it parses a directory tree of *.hjson files produced by cmd/hjsonexport
+// into the staging store, runs it through the existing Pass A/B Phase 2/3
+// pipeline unchanged, and persists the result via ModelStore. The older,
+// deprecated dialect lives on as cmd/hjsonimport-deprecated/
+// cmd/hjsonexport-deprecated (internal/importer/hjson-deprecated,
+// internal/exporter/hjson-deprecated).
 package main
 
 import (
@@ -13,10 +14,10 @@ import (
 	"strconv"
 	"time"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/impl/common"
-	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/impl/common"
+	"github.com/ame89/jag/internal/importer/phase1"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 const persistChunkSize = 1000
@@ -38,9 +39,9 @@ func chunkUpsert[T any](items []T, upsert func([]T) error) error {
 // persists straight into ModelStore and only keeps small running counts
 // for the final summary, never a whole-model slice.
 type countingSink struct {
-	model      *sqlite.ModelStore
-	attrCount  int
-	geomCount  int
+	model     *sqlite.ModelStore
+	attrCount int
+	geomCount int
 }
 
 func (s *countingSink) WriteAttributes(batch []coremodel.Attribute) error {

@@ -1,4 +1,4 @@
-package hjson2_test
+package hjsondeprecated_test
 
 // End-to-end regression tests for the HJSON Fachmodell exporter/importer
 // pair (internal/exporter/hjson + internal/importer/hjson), added
@@ -24,12 +24,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	exporthjson "gitlab.com/openk-nsc/jag/internal/exporter/hjson2"
-	"gitlab.com/openk-nsc/jag/internal/impl/common"
-	importhjson "gitlab.com/openk-nsc/jag/internal/importer/hjson2"
-	importmodel "gitlab.com/openk-nsc/jag/internal/importer/model"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	exporthjson "github.com/ame89/jag/internal/exporter/hjson-deprecated"
+	"github.com/ame89/jag/internal/impl/common"
+	importhjson "github.com/ame89/jag/internal/importer/hjson-deprecated"
+	importmodel "github.com/ame89/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // byOwnerKey groups a flat []model.StagingRecord's literal attribute rows
@@ -147,12 +147,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("reading exported %s: %v", houseFile, err)
 	}
 	content := string(raw)
-	// maxP is rendered as a bare HJSON number, not a quoted string — see
-	// write.go's numericAttrKeys ("PowerElectronicsUnit.maxP" is a known
-	// numeric CIM attribute, curated 2026-07-21 as part of hjson2's
-	// compaction pass).
 	if !contains(content, `satellites: [`) || !contains(content, `class: "Wallbox"`) ||
-		!contains(content, `name: "STEU-24"`) || !contains(content, `maxP: 8000`) {
+		!contains(content, `"IdentifiedObject.name": "STEU-24"`) || !contains(content, `"PowerElectronicsUnit.maxP": "8000"`) {
 		t.Errorf("exported %s does not contain the expected satellite object; got:\n%s", houseFile, content)
 	}
 
@@ -190,17 +186,16 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 
 	// Equipment-local IDs ("PEC1"/"FU1", as originally stored in
-	// ModelStore) are NOT prefixed with their file's own container ID
-	// ("S1-"/"H1-"), so shortenID (build.go) leaves them unchanged on
-	// export — no "@" marker is added, since only an actually-stripped
-	// "<rootID>-" prefix is treated as a local name (see Konzept.md's
-	// 2026-07-20 ID-scoping revision: a name is local iff written with a
-	// leading "@" in the .hjson file; anything else is already a global
-	// ID and round-trips verbatim). "PEC1" therefore stays "PEC1", "FU1"
-	// stays "FU1" — unlike the pre-2026-07-20 heuristic (any
-	// non-container-prefixed name got auto-reprefixed with its file's
-	// container ID on import), which this test used to pin.
-	pec1ID, fu1ID := "PEC1", "FU1"
+	// ModelStore) are NOT already prefixed with their file's own
+	// container ID, so resolveID's ID-prefixing rule (see resolve.go's
+	// doc comment: "a name already starting with... another known
+	// container's ID is used verbatim; anything else... gets the file's
+	// own container ID prepended") re-prefixes them on re-import —
+	// "PEC1" round-trips as "H1-PEC1", "FU1" as "S1-FU1". This is the
+	// same, already-documented behavior real CIM mRIDs get too (verified
+	// manually earlier this session against the real NSC dataset, e.g.
+	// "PEC-24" -> "H-20-PEC-24"), not something introduced by this test.
+	pec1ID, fu1ID := "H1-PEC1", "S1-FU1"
 
 	// PEC1's own name is a plain single value (no more cross-satellite
 	// merging, bugs 2/3's root cause).

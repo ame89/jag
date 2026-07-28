@@ -4,7 +4,7 @@
 // here (see Impl.md, Ports & Adapters).
 package geometry
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // Store persists coremodel.Geometry values, at most one per owner
 // (OwnerID+OwnerKind). There is no inherited/derived Geometry stored here —

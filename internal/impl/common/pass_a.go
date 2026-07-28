@@ -14,9 +14,9 @@ package common
 import (
 	"fmt"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/core/staging"
-	importmodel "gitlab.com/openk-nsc/jag/internal/importer/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/core/staging"
+	importmodel "github.com/ame89/jag/internal/importer/model"
 )
 
 // BatchContainersResult is everything ResolveBatchContainers produces for

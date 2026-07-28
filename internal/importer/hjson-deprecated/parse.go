@@ -1,4 +1,4 @@
-package hjson
+package hjsondeprecated
 
 import (
 	"fmt"

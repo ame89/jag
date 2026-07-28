@@ -44,7 +44,7 @@ import (
 	"sort"
 	"strings"
 
-	"gitlab.com/openk-nsc/jag/internal/progress"
+	"github.com/ame89/jag/internal/progress"
 )
 
 // progressLogger is used by BuildTopology to report per-phase progress (record counts,

@@ -11,7 +11,7 @@ import (
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver, registers as "sqlite"
 
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/importer/model"
 )
 
 // stagingSchema creates the Phase 1 staging tables if they don't exist yet.

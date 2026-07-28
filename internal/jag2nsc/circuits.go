@@ -35,9 +35,9 @@ import (
 	"sort"
 	"strings"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/impl/common"
-	"gitlab.com/openk-nsc/jag/internal/postgres"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/impl/common"
+	"github.com/ame89/jag/internal/postgres"
 )
 
 //go:embed circuit_tables.sql

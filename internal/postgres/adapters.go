@@ -1,6 +1,6 @@
 package postgres
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // ModelStore hosts container/equipment/geometry/electrical/physical
 // persistence all on one struct, so its method names had to be

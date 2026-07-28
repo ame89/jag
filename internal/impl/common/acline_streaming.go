@@ -48,8 +48,8 @@ import (
 	"sort"
 	"sync"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/core/staging"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/core/staging"
 )
 
 // DefaultPassBWorkers is the default worker-pool size for Pass B's

@@ -4,9 +4,9 @@ import (
 	"sort"
 	"testing"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // capturingSink collects every Attribute batch handed to it, for test

@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/core/staging"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/core/staging"
 )
 
 // InvariantViolation describes one Phase 3 invariant failure. Rule

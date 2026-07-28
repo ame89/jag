@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
 )
 
 // TestModelStore_ContainerHierarchyRoundTrip verifies UpsertContainers,

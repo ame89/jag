@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"sort"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/core/staging"
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
-	"gitlab.com/openk-nsc/jag/internal/progress"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/core/staging"
+	"github.com/ame89/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/progress"
 )
 
 // structuralClasses are never walked into as a satellite — they are handled

@@ -9,8 +9,8 @@ package common
 import (
 	"sort"
 
-	"gitlab.com/openk-nsc/jag/internal/core/staging"
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/core/staging"
+	"github.com/ame89/jag/internal/importer/model"
 )
 
 // getByIDsIndexed bulk-fetches all records for the given IDs (deduplicated)

@@ -1,21 +1,23 @@
-// Command hjsonexport reads a persisted model out of a ModelStore SQLite
-// file and writes it as a Fachmodell HJSON directory tree via the current,
-// authoritative hjson exporter (see internal/exporter/hjson's doc
-// comment), symmetric to cmd/hjsonimport. The older, deprecated dialect
-// lives on as cmd/hjsonexport-deprecated (internal/exporter/hjson-deprecated).
+// Command hjsonexport-deprecated reads a persisted model out of a
+// ModelStore SQLite file and writes it as a Fachmodell HJSON directory
+// tree using the deprecated v1 dialect (see
+// internal/exporter/hjson-deprecated's doc comment), symmetric to
+// cmd/hjsonimport-deprecated. Deprecated: hjson2 (cmd/hjsonexport,
+// internal/exporter/hjson) is the current, authoritative HJSON Fachmodell
+// dialect.
 package main
 
 import (
 	"fmt"
 	"os"
 
-	exporthjson "github.com/ame89/jag/internal/exporter/hjson"
+	exporthjson "github.com/ame89/jag/internal/exporter/hjson-deprecated"
 	"github.com/ame89/jag/internal/sqlite"
 )
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: hjsonexport <db-path> <output-root> [default-netzregion]")
+		fmt.Fprintln(os.Stderr, "usage: hjsonexport-deprecated <db-path> <output-root> [default-netzregion]")
 		os.Exit(1)
 	}
 	dbPath := os.Args[1]

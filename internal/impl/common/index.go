@@ -6,7 +6,7 @@
 // distinct from literal values.
 package common
 
-import "gitlab.com/openk-nsc/jag/internal/importer/model"
+import "github.com/ame89/jag/internal/importer/model"
 
 // AttrValue is one resolved attribute value: either a literal (IsReference
 // false) or the ID of another object this attribute points to (IsReference

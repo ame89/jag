@@ -3,8 +3,8 @@ package hjson
 import (
 	"fmt"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // pageLimit bounds each ModelStore.AllX call — see internal/sqlite/
@@ -21,13 +21,13 @@ const pageLimit = 5000
 // paginated cursors instead, if/when export needs to scale to much larger
 // models.
 type Snapshot struct {
-	Containers          map[string]coremodel.Container
+	Containers           map[string]coremodel.Container
 	ChildrenByParent     map[string][]coremodel.Container
 	Equipment            map[string]coremodel.Equipment
 	EquipmentByContainer map[string][]coremodel.Equipment
 	Edges                map[string]coremodel.Edge // keyed by EquipmentID
 	AttributesByOwner    map[string][]coremodel.Attribute
-	GeometryByOwner       map[string]coremodel.Geometry
+	GeometryByOwner      map[string]coremodel.Geometry
 }
 
 // Load reads the entire model out of store into a Snapshot.

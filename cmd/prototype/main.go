@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"gitlab.com/openk-nsc/jag/internal/importer/cgmes"
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/importer/cgmes"
+	"github.com/ame89/jag/internal/importer/model"
 )
 
 func main() {

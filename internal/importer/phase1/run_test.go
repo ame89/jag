@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // TestRunCGMESFilesContinuesPastMalformedFile verifies Phase 1's "collect

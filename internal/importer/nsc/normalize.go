@@ -66,8 +66,8 @@ import (
 	"fmt"
 	"sort"
 
-	"gitlab.com/openk-nsc/jag/internal/importer/cgmes"
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
+	"github.com/ame89/jag/internal/importer/cgmes"
+	"github.com/ame89/jag/internal/importer/model"
 )
 
 // DuplicateIDError is returned by StreamFile when an object ID appears

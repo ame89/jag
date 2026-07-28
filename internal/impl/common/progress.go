@@ -4,7 +4,7 @@ import (
 	"io"
 	"log/slog"
 
-	"gitlab.com/openk-nsc/jag/internal/progress"
+	"github.com/ame89/jag/internal/progress"
 )
 
 // logger is used by the Build*/Resolve*/Check* functions in this package to

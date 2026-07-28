@@ -21,4 +21,4 @@
 //     than the page limit could in theory be split across two pages. A
 //     generously large limit is used to make this practically irrelevant
 //     for the dataset sizes this exporter currently targets.
-package hjson2
+package hjsondeprecated

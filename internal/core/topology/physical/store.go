@@ -9,7 +9,7 @@
 // in — there is no standalone "Node store" concept elsewhere in Konzept.md.
 package physical
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // Store persists coremodel.Node and coremodel.Edge values (the physical
 // topology graph). The electrical topology (Zero-Ohm-reduced view) is a

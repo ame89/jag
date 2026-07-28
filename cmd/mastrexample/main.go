@@ -11,7 +11,7 @@ import (
 	"log"
 	"strings"
 
-	"gitlab.com/openk-nsc/jag/internal/mastr"
+	"github.com/ame89/jag/internal/mastr"
 )
 
 func main() {

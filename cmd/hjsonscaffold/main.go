@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"gitlab.com/openk-nsc/jag/internal/scaffold/cim"
+	"github.com/ame89/jag/internal/scaffold/cim"
 )
 
 func main() {

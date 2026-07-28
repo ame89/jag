@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
 )
 
 // jsonEntry mirrors one catalog JSON seed file's array element: an ID plus

@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"os"
 
-	implcatalog "gitlab.com/openk-nsc/jag/internal/impl/catalog"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	implcatalog "github.com/ame89/jag/internal/impl/catalog"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 func main() {

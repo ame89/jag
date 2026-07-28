@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/importer/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/importer/model"
 )
 
 // testDSN returns the PostgreSQL DSN to run these tests against, read from

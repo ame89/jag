@@ -10,7 +10,7 @@
 // model size.
 package common
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // Sink receives Attribute/Geometry rows in bounded batches. Implementations
 // MUST be safe for concurrent calls from multiple goroutines —

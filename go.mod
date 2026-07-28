@@ -1,4 +1,4 @@
-module gitlab.com/openk-nsc/jag
+module github.com/ame89/jag
 
 go 1.26.4
 

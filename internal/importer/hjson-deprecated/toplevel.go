@@ -1,4 +1,4 @@
-package hjson
+package hjsondeprecated
 
 import (
 	"fmt"
@@ -20,27 +20,16 @@ const (
 	TopLevelACLine
 	// TopLevelHouse is a "Haushalte" directory file (House).
 	TopLevelHouse
-	// TopLevelBoundary is a "Grenzknoten" directory file: equipment with
-	// no Container/Equipment membership at all (e.g. a CIM
-	// EquivalentInjection attached only to a boundary "Line" object that
-	// may not even be imported itself — see Konzept.md's
-	// resolveBoundaryEquivalents doc comment). Added 2026-07-21 so these
-	// otherwise-invisible-to-hjson2 equipment round-trip through export/
-	// import too, matching Konzept.md's decision that JAG genuinely
-	// leaves them containerless rather than inventing a synthetic parent
-	// container for them.
-	TopLevelBoundary
 )
 
 // dirNameToType maps the documented directory names (Konzept.md) to their
 // TopLevelType. "interregional" cables live directly under
 // "interregional/Kabel" (see FileInfo.Netzregion below).
 var dirNameToType = map[string]TopLevelType{
-	"ONS":         TopLevelSubstation,
-	"KVS":         TopLevelDistributionBox,
-	"Kabel":       TopLevelACLine,
-	"Haushalte":   TopLevelHouse,
-	"Grenzknoten": TopLevelBoundary,
+	"ONS":       TopLevelSubstation,
+	"KVS":       TopLevelDistributionBox,
+	"Kabel":     TopLevelACLine,
+	"Haushalte": TopLevelHouse,
 }
 
 // FileInfo describes one classified Fachmodell file location: which
@@ -70,7 +59,7 @@ func ClassifyPath(root, path string) (FileInfo, error) {
 	netzregion, dir, file := parts[0], parts[1], parts[2]
 	typ, ok := dirNameToType[dir]
 	if !ok {
-		return FileInfo{}, fmt.Errorf("%s: unknown top-level directory %q (expected ONS, KVS, Kabel, Haushalte or Grenzknoten)", path, dir)
+		return FileInfo{}, fmt.Errorf("%s: unknown top-level directory %q (expected ONS, KVS, Kabel or Haushalte)", path, dir)
 	}
 	if netzregion == "interregional" && typ != TopLevelACLine {
 		return FileInfo{}, fmt.Errorf("%s: only Kabel files are allowed under interregional/", path)

@@ -1,6 +1,6 @@
 package main
 
-import "gitlab.com/openk-nsc/jag/internal/importer/model"
+import "github.com/ame89/jag/internal/importer/model"
 
 type attrKey struct{ id, attr string }
 

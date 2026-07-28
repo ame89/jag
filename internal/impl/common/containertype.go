@@ -3,7 +3,7 @@ package common
 import (
 	"strings"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
 )
 
 // Container type enum — moved here from core/model per the "generic core"

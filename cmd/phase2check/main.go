@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/core/staging"
-	"gitlab.com/openk-nsc/jag/internal/impl/common"
-	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
-	"gitlab.com/openk-nsc/jag/internal/postgres"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/core/staging"
+	"github.com/ame89/jag/internal/impl/common"
+	"github.com/ame89/jag/internal/importer/phase1"
+	"github.com/ame89/jag/internal/postgres"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // modelWriter is the subset of *sqlite.ModelStore's/*postgres.ModelStore's

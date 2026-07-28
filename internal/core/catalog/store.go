@@ -3,7 +3,7 @@
 // no domain/business logic lives here (see Impl.md, Ports & Adapters).
 package catalog
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // Store persists coremodel.CatalogEntry values. Catalog entries are not
 // versioned (see coremodel.CatalogEntry's doc comment) — Upsert overwrites

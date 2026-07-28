@@ -1,4 +1,4 @@
-package hjson2_test
+package hjson_test
 
 // TestBusbarRoundTripAgainstRealDatasets is a dedicated regression test
 // for the hjson2 Busbar/BusbarSection redesign (see spec/Konzept.md's
@@ -25,11 +25,11 @@ import (
 	"sort"
 	"testing"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	exporthjson "gitlab.com/openk-nsc/jag/internal/exporter/hjson2"
-	"gitlab.com/openk-nsc/jag/internal/impl/common"
-	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	exporthjson "github.com/ame89/jag/internal/exporter/hjson"
+	"github.com/ame89/jag/internal/impl/common"
+	"github.com/ame89/jag/internal/importer/phase1"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // modelSink persists Attribute/Geometry batches straight into a ModelStore
@@ -80,10 +80,10 @@ func runPassAB(t *testing.T, files []string, isNSC bool) *sqlite.StagingStore {
 	return store
 }
 
-// runHJSON2ImportPassAB mirrors runPassAB but imports a previously
-// hjson2-exported directory tree (via phase1.RunHJSON2Files) instead of
-// raw CIM/CGMES/NSC files, exactly like cmd/hjsonimport2.
-func runHJSON2ImportPassAB(t *testing.T, root string) *sqlite.StagingStore {
+// runHJSONImportPassAB mirrors runPassAB but imports a previously
+// hjson2-exported directory tree (via phase1.RunHJSONFiles) instead of
+// raw CIM/CGMES/NSC files, exactly like cmd/hjsonimport.
+func runHJSONImportPassAB(t *testing.T, root string) *sqlite.StagingStore {
 	t.Helper()
 
 	store, err := sqlite.Open(":memory:")
@@ -91,14 +91,14 @@ func runHJSON2ImportPassAB(t *testing.T, root string) *sqlite.StagingStore {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
 
-	result, err := phase1.RunHJSON2Files(store, root)
+	result, err := phase1.RunHJSONFiles(store, root)
 	if err != nil {
 		store.Close()
-		t.Fatalf("phase1.RunHJSON2Files: %v", err)
+		t.Fatalf("phase1.RunHJSONFiles: %v", err)
 	}
 	if len(result.Errors) != 0 {
 		store.Close()
-		t.Fatalf("phase1.RunHJSON2Files reported %d errors: %+v", len(result.Errors), result.Errors)
+		t.Fatalf("phase1.RunHJSONFiles reported %d errors: %+v", len(result.Errors), result.Errors)
 	}
 
 	runPassABOnStore(t, store, result.Version)
@@ -107,7 +107,7 @@ func runHJSON2ImportPassAB(t *testing.T, root string) *sqlite.StagingStore {
 
 // runPassABOnStore runs Pass A then Pass B against an already-phase1'd
 // store/version, persisting every batch into the store's own ModelStore
-// (mirroring cmd/phase2check/cmd/hjsonimport2's production wiring).
+// (mirroring cmd/phase2check/cmd/hjsonimport's production wiring).
 func runPassABOnStore(t *testing.T, store *sqlite.StagingStore, version uint64) {
 	t.Helper()
 
@@ -327,7 +327,7 @@ func TestBusbarRoundTripAgainstRealDatasets(t *testing.T) {
 				t.Fatalf("hjson2 Write: %v", err)
 			}
 
-			reStore := runHJSON2ImportPassAB(t, dir)
+			reStore := runHJSONImportPassAB(t, dir)
 			defer reStore.Close()
 			reNodes, reEdges, reCircuits, reSizes := circuitsOf(t, reStore)
 

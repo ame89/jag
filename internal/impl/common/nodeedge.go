@@ -31,7 +31,7 @@ package common
 import (
 	"sort"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
 )
 
 // GNDNodeID is the well-known, singleton ID of the virtual ground/earth

@@ -1,6 +1,6 @@
 package osm
 
-import "gitlab.com/openk-nsc/jag/internal/geo"
+import "github.com/ame89/jag/internal/geo"
 
 // Coordinate is a WGS84 geo-coordinate. Aliased from internal/geo so callers
 // that also need geo.DistanceMeters (e.g. between a geocoded address and a

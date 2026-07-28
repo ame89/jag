@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"strings"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
 )
 
 // modelSchema creates the final-model tables (Equipment, Node, Edge,

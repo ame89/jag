@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitlab.com/openk-nsc/jag/internal/importer/cgmes"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	"github.com/ame89/jag/internal/importer/cgmes"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 // TestWriterStreamsIntoSQLite verifies the full Phase 1 pipeline end to

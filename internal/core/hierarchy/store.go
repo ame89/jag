@@ -5,7 +5,7 @@
 // business logic and live in /internal/impl, not here.
 package hierarchy
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // Store persists coremodel.Container values. Historisation was dropped
 // entirely (see Konzept.md) — Upsert overwrites an existing container with

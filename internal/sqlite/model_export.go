@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
 )
 
 // This file adds small, cursor-paginated "read the whole model" bulk

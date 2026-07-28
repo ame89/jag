@@ -27,12 +27,12 @@ package usecase
 import (
 	"fmt"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/internal/core/model"
 
-	"gitlab.com/openk-nsc/jag/internal/core/geometry"
-	"gitlab.com/openk-nsc/jag/internal/core/hierarchy"
-	"gitlab.com/openk-nsc/jag/internal/core/topology/electrical"
-	"gitlab.com/openk-nsc/jag/internal/core/topology/physical"
+	"github.com/ame89/jag/internal/core/geometry"
+	"github.com/ame89/jag/internal/core/hierarchy"
+	"github.com/ame89/jag/internal/core/topology/electrical"
+	"github.com/ame89/jag/internal/core/topology/physical"
 )
 
 // Service bundles the persisted-model stores needed to answer the usecases

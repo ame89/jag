@@ -10,7 +10,7 @@
 // interface here).
 package technical
 
-import coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
+import coremodel "github.com/ame89/jag/internal/core/model"
 
 // Store persists coremodel.Attribute values (Sachdaten), keyed by OwnerID
 // (usually an EquipmentID, but also used for Container-owned Sachdaten).

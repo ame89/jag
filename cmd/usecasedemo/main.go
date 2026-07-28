@@ -17,11 +17,11 @@ import (
 	"path/filepath"
 	"sort"
 
-	coremodel "gitlab.com/openk-nsc/jag/internal/core/model"
-	"gitlab.com/openk-nsc/jag/internal/impl/common"
-	"gitlab.com/openk-nsc/jag/internal/impl/usecase"
-	"gitlab.com/openk-nsc/jag/internal/importer/phase1"
-	"gitlab.com/openk-nsc/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/internal/core/model"
+	"github.com/ame89/jag/internal/impl/common"
+	"github.com/ame89/jag/internal/impl/usecase"
+	"github.com/ame89/jag/internal/importer/phase1"
+	"github.com/ame89/jag/internal/sqlite"
 )
 
 func fatalf(format string, args ...any) {
