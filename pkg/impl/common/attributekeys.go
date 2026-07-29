@@ -73,4 +73,48 @@ const (
 	// skip it exactly like AttributeKeySatellite — it is bookkeeping, not
 	// a Sachdaten value a user should ever see in an exported file.
 	AttributeKeyBusbarNode coremodel.AttributeKey = "busbar_node_id"
+
+	// AttributeKeyRegion is the Netzregion Sachdaten key (see Konzept.md's
+	// Netzregion decision: free text, case-insensitive, [a-zA-Z0-9_/-],
+	// max 64 chars). Populated automatically from CIM's
+	// Substation.Region -> SubGeographicalRegion.Region ->
+	// GeographicalRegion.IdentifiedObject.name chain when present (see
+	// pass_a.go's ResolveBatchContainers), and read back by the HJSON
+	// Fachmodell exporter (pkg/exporter/hjson's regionOf) to decide a
+	// container's export directory — this is the single shared key both
+	// sides agree on, so CIM-derived and hand-authored region values are
+	// indistinguishable once persisted.
+	AttributeKeyRegion coremodel.AttributeKey = "region"
+
+	// AttributeKeySubRegion is the optional, finer-grained Subnetzregion
+	// Sachdaten key (CIM's SubGeographicalRegion.name), one level below
+	// AttributeKeyRegion. Populated automatically from CIM's
+	// Substation.Region -> SubGeographicalRegion.IdentifiedObject.name
+	// (see pass_a.go's ResolveBatchContainers) and read back by the
+	// HJSON Fachmodell exporter to add an optional
+	// <Netzregion>/<Subnetzregion>/ nesting level to a container's export
+	// path (see pkg/exporter/hjson's subregionOf/dirPathOf). Unlike
+	// AttributeKeyRegion there is no default fallback — an absent
+	// Subnetzregion simply means no extra nesting level is used.
+	AttributeKeySubRegion coremodel.AttributeKey = "subregion"
+
+	// AttributeKeySubRegionPath is an HJSON-only (never CIM-derived)
+	// Sachdaten key holding an arbitrarily deep, "/"-joined chain of
+	// directory levels below AttributeKeyRegion (e.g. "West/12345/
+	// Musterstadt/Musterortsteil" for a large Netzregion hand-organized
+	// by PLZ/Ort/Ortsteil once it has too many Haushalte to keep flat).
+	// CIM itself only ever has one SubGeographicalRegion level (see
+	// AttributeKeySubRegion), so this key is never populated by
+	// pass_a.go/CIM import — it exists purely so a HJSON Fachmodell
+	// export/reimport/re-export round-trip can preserve deeper
+	// hand-authored directory nesting that ClassifyPath already
+	// tolerates on import (pkg/importer/hjson's FileInfo.SubNetzregion
+	// supports arbitrary depth) but which AttributeKeySubRegion alone
+	// (a single segment) cannot carry. When present, the HJSON exporter
+	// prefers it over AttributeKeySubRegion for building a container's
+	// export directory (see pkg/exporter/hjson's resolvedSubregion/
+	// dirPathOf) — it is a strict superset, since a single-segment path
+	// and a plain AttributeKeySubRegion value are otherwise
+	// indistinguishable in the exported directory layout.
+	AttributeKeySubRegionPath coremodel.AttributeKey = "subregion_path"
 )

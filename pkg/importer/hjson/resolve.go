@@ -2,6 +2,7 @@ package hjson
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -173,6 +174,82 @@ func (e *r) add(id, class, attr, value string, isRef bool, seq int) {
 }
 
 func (e *r) resolve(name string) string { return resolveID(e.fi.ContainerID, name) }
+
+// applyRegionPrecedence implements the region/subregion Netzregion
+// precedence rule (Konzept.md's Netzregion decision, 2026-07-30/31): CIM's
+// GeographicalRegion/SubGeographicalRegion chain (extracted into the
+// "region"/"subregion" Sachdaten attributes by
+// internal/impl/common/pass_a.go, and thus, after one export/import
+// round-trip, also present as an explicit attribute in a Fachmodell
+// file's own f.Attributes) takes precedence over the file's own directory
+// path if both are present and disagree — but the mismatch is still
+// logged as a warning, since it means a future export would land under a
+// different directory than the file's current location. If the file has
+// no explicit "region"/"subregion" attribute at all, the path-derived
+// value (fi.Netzregion/fi.SubNetzregion) is used to populate it, closing
+// the previously-existing asymmetry where FileInfo.Netzregion was parsed
+// but silently discarded. Mutates and returns attrs (never nil, so
+// addAttributes always sees a non-nil map to range over if either value
+// ends up populated).
+//
+// fi.SubNetzregion may itself be a "/"-joined multi-segment chain (see
+// ClassifyPath's arbitrary-depth support, e.g. PLZ/Ort/Ortsteil directory
+// nesting). Per explicit user decision (2026-07-30): the extra
+// "subregion_path" attribute (AttributeKeySubRegionPath) is only ever
+// populated from the path when there are genuinely 2+ subregion levels —
+// a plain single-level path (<Region>/<Subregion>/<Dir>/...) keeps using
+// the existing, leaner "subregion" attribute exactly as before, saving
+// the redundant extra key for the overwhelmingly common case. A file that
+// explicitly carries its own "subregion_path" attribute is always
+// respected regardless of its current on-disk depth (mismatch still only
+// logged, never silently overridden), since a hand-authored override may
+// deliberately target a deeper export location than the file's current
+// path.
+//
+// Only called for container types whose own ID is already known at Phase
+// 1 import time (Substation/Building, via emitStation/emitHouse) — a
+// Kabel/ACLine file's container is only synthesized later by Pass B's
+// buildACLineChains (see emitACLine's doc comment), so it has no
+// container-level attribute channel to carry an explicit override yet;
+// for ACLine, both region and Subnetzregion therefore remain purely
+// path-derived (and, for region, defaultNetzregion-falling-back), exactly
+// as before this rule was introduced.
+func (e *r) applyRegionPrecedence(attrs map[string]interface{}) map[string]interface{} {
+	if attrs == nil {
+		attrs = map[string]interface{}{}
+	}
+	apply := func(key, pathValue, label string) {
+		if explicit, ok := attrs[key]; ok {
+			if s, ok2 := explicit.(string); ok2 && s != "" {
+				if pathValue != "" && s != pathValue {
+					log.Printf("hjson import %s: explicit %q attribute %q differs from the path-derived %s %q — keeping the file's explicit value (a future export would use a different directory than this file's current location)",
+						e.fi.Path, key, s, label, pathValue)
+				}
+				return
+			}
+		}
+		if pathValue != "" {
+			attrs[key] = pathValue
+		}
+	}
+	apply("region", e.fi.Netzregion, "Netzregion")
+	if strings.Contains(e.fi.SubNetzregion, "/") {
+		// 2+ subregion levels on disk: only the richer "subregion_path"
+		// key gets a path-derived fallback value; "subregion" is left
+		// alone (still respects an explicit single-level override, if
+		// any, but never gets a multi-segment value stuffed into it).
+		apply("subregion_path", e.fi.SubNetzregion, "Subnetzregion-Pfad (mehrstufig)")
+	} else {
+		// 0 or 1 subregion levels: the common case keeps using the
+		// existing, leaner "subregion" key. "subregion_path" is still
+		// checked (pathValue "" so never path-derived here) purely so an
+		// explicit hand-authored override isn't silently dropped from
+		// attrs before addAttributes sees it.
+		apply("subregion", e.fi.SubNetzregion, "Subnetzregion")
+		apply("subregion_path", "", "Subnetzregion-Pfad (mehrstufig)")
+	}
+	return attrs
+}
 
 // addGeometry synthesizes the minimal CIM GL-profile shape
 // (PowerSystemResource.Location -> Location -> PositionPoint) BuildGeometry
@@ -452,7 +529,7 @@ func (e *r) emitStation(f *File) {
 	// this addAttributes call is the counterpart import-side half of that
 	// fix, giving these attributes somewhere to land as ordinary
 	// StagingRecords owned by subID.
-	e.addAttributes(subID, "Substation", f.Attributes)
+	e.addAttributes(subID, "Substation", e.applyRegionPrecedence(f.Attributes))
 	e.addGeometry(subID, "Substation", f.Geometry)
 
 	for _, bb := range f.Busbars {
@@ -694,7 +771,7 @@ func (e *r) emitHouse(f *File) {
 	e.add(houseID, "Building", "IdentifiedObject.name", houseID, false, 0)
 	// See emitStation's matching comment — same container-level Sachdaten
 	// fix applies to House files.
-	e.addAttributes(houseID, "Building", f.Attributes)
+	e.addAttributes(houseID, "Building", e.applyRegionPrecedence(f.Attributes))
 	e.addGeometry(houseID, "Building", f.Geometry)
 	for _, eq := range f.Equipment {
 		e.emitEquipment(eq, houseID)

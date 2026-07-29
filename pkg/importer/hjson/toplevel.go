@@ -48,15 +48,38 @@ var dirNameToType = map[string]TopLevelType{
 // cable directory), which top-level container type it declares, and the
 // (yet unprefixed) container ID taken from its filename.
 type FileInfo struct {
-	Path        string
-	Netzregion  string
-	Type        TopLevelType
-	ContainerID string
+	Path       string
+	Netzregion string
+	// SubNetzregion is the optional region-nesting chain between
+	// Netzregion and the top-level Dir segment
+	// (<root>/<Netzregion>/<SubNetzregion...>/<ONS|KVS|...>/<id>.hjson),
+	// rendered as a single "/"-joined string (e.g. "West/Ost/Sued") if
+	// more than one intermediate directory is present. Empty if the file
+	// lives directly under its Netzregion (the original, still-supported
+	// 3-segment layout). CIM import only ever produces at most one such
+	// level (CIM's SubGeographicalRegion has no further nesting of its
+	// own — see pass_a.go), but arbitrary additional levels are accepted
+	// on import for hand-authored/organizational directory structures,
+	// since the container ID (filename) is globally unique and Phase 1
+	// import walks the whole tree regardless of nesting depth (see
+	// FindFiles) — the directory layout itself is purely for human
+	// navigability, never load-bearing for correctness. Never set for
+	// "interregional" cables — see ClassifyPath.
+	SubNetzregion string
+	Type          TopLevelType
+	ContainerID   string
 }
 
 // ClassifyPath infers a FileInfo from a Fachmodell file's path relative to
-// the import root, following <root>/<Netzregion>/<ONS|KVS|Kabel|Haushalte>/<id>.hjson
-// (or <root>/interregional/Kabel/<id>.hjson).
+// the import root, following
+// <root>/<Netzregion>/<SubNetzregion...>/<ONS|KVS|Kabel|Haushalte>/<id>.hjson
+// (or <root>/interregional/Kabel/<id>.hjson). The SubNetzregion chain may
+// be zero, one, or arbitrarily many directory levels deep — classification
+// never counts segments up front; it only requires that the LAST segment
+// is a ".hjson" filename and the SECOND-TO-LAST segment is one of the
+// known top-level directory names (dirNameToType). Everything between the
+// first segment (Netzregion) and that Dir segment is the SubNetzregion
+// chain, joined back together with "/".
 func ClassifyPath(root, path string) (FileInfo, error) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
@@ -64,16 +87,24 @@ func ClassifyPath(root, path string) (FileInfo, error) {
 	}
 	rel = filepath.ToSlash(rel)
 	parts := strings.Split(rel, "/")
-	if len(parts) != 3 {
-		return FileInfo{}, fmt.Errorf("%s: expected <Netzregion>/<ONS|KVS|Kabel|Haushalte>/<id>.hjson, got %q", path, rel)
+	if len(parts) < 3 {
+		return FileInfo{}, fmt.Errorf("%s: expected <Netzregion>[/<Subnetzregion>/...]/<ONS|KVS|Kabel|Haushalte>/<id>.hjson, got %q", path, rel)
 	}
-	netzregion, dir, file := parts[0], parts[1], parts[2]
+	netzregion := parts[0]
+	dir := parts[len(parts)-2]
+	file := parts[len(parts)-1]
+	subregion := strings.Join(parts[1:len(parts)-2], "/")
 	typ, ok := dirNameToType[dir]
 	if !ok {
 		return FileInfo{}, fmt.Errorf("%s: unknown top-level directory %q (expected ONS, KVS, Kabel, Haushalte or Grenzknoten)", path, dir)
 	}
-	if netzregion == "interregional" && typ != TopLevelACLine {
-		return FileInfo{}, fmt.Errorf("%s: only Kabel files are allowed under interregional/", path)
+	if netzregion == "interregional" {
+		if typ != TopLevelACLine {
+			return FileInfo{}, fmt.Errorf("%s: only Kabel files are allowed under interregional/", path)
+		}
+		if subregion != "" {
+			return FileInfo{}, fmt.Errorf("%s: interregional/ does not support a Subnetzregion segment", path)
+		}
 	}
 	if !strings.HasSuffix(file, ".hjson") {
 		return FileInfo{}, fmt.Errorf("%s: expected a .hjson file", path)
@@ -86,5 +117,5 @@ func ClassifyPath(root, path string) (FileInfo, error) {
 	// records, etc.) to forward slashes, regardless of host OS — Windows'
 	// os.Open/os.ReadFile accept "/"-separated paths just fine, so this
 	// doesn't break actual file access. See copilot-instructions.md.
-	return FileInfo{Path: filepath.ToSlash(path), Netzregion: netzregion, Type: typ, ContainerID: id}, nil
+	return FileInfo{Path: filepath.ToSlash(path), Netzregion: netzregion, SubNetzregion: subregion, Type: typ, ContainerID: id}, nil
 }

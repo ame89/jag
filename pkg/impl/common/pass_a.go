@@ -116,11 +116,83 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 	}
 	psrIdx := BuildObjectIndex(flattenRecords(psrRecs))
 
+	// Resolve each Substation's geographic region — CIM's
+	// Substation.Region -> SubGeographicalRegion.Region ->
+	// GeographicalRegion.IdentifiedObject.name chain — into the shared
+	// AttributeKeyRegion Sachdaten key (see attributekeys.go's doc
+	// comment). Same batch-local, single-hop-per-level lookup pattern as
+	// the PSRType resolution above: only the small set of actually-
+	// referenced SubGeographicalRegion/GeographicalRegion objects is
+	// fetched, never a whole-class scan. GeographicalRegion/
+	// SubGeographicalRegion are deliberately excluded from the generic
+	// satellite walk (sachdaten.go's structuralClasses — they are
+	// shared many-to-one hubs that would otherwise bridge unrelated
+	// Equipment together), so this is the only place this chain is ever
+	// resolved.
+	subGeoOf := map[string]string{} // Substation ID -> SubGeographicalRegion ID
+	var subGeoIDs []string
+	for _, id := range subIDs {
+		if sg := ownIdx.Ref(id, "Substation.Region"); sg != "" {
+			subGeoOf[id] = sg
+			subGeoIDs = append(subGeoIDs, sg)
+		}
+	}
+	subGeoRecs, err := getByIDsIndexed(store, version, subGeoIDs)
+	if err != nil {
+		return nil, fmt.Errorf("common: fetching %d SubGeographicalRegion records: %w", len(subGeoIDs), err)
+	}
+	subGeoIdx := BuildObjectIndex(flattenRecords(subGeoRecs))
+
+	geoOf := map[string]string{} // SubGeographicalRegion ID -> GeographicalRegion ID
+	var geoIDs []string
+	for _, sg := range subGeoIDs {
+		if g := subGeoIdx.Ref(sg, "SubGeographicalRegion.Region"); g != "" {
+			geoOf[sg] = g
+			geoIDs = append(geoIDs, g)
+		}
+	}
+	geoRecs, err := getByIDsIndexed(store, version, geoIDs)
+	if err != nil {
+		return nil, fmt.Errorf("common: fetching %d GeographicalRegion records: %w", len(geoIDs), err)
+	}
+	geoIdx := BuildObjectIndex(flattenRecords(geoRecs))
+
+	// regionOf resolves the fully-chained GeographicalRegion name for a
+	// Substation ID, or "" if any link of the chain is absent.
+	regionOf := func(subID string) string {
+		sg, ok := subGeoOf[subID]
+		if !ok {
+			return ""
+		}
+		g, ok := geoOf[sg]
+		if !ok {
+			return ""
+		}
+		return geoIdx.Attr(g, "IdentifiedObject.name")
+	}
+
+	// subRegionOf resolves the SubGeographicalRegion's own name for a
+	// Substation ID (one level finer-grained than regionOf), or "" if
+	// Substation.Region is absent.
+	subRegionOf := func(subID string) string {
+		sg, ok := subGeoOf[subID]
+		if !ok {
+			return ""
+		}
+		return subGeoIdx.Attr(sg, "IdentifiedObject.name")
+	}
+
 	subSet := map[string]bool{}
 	for _, id := range subIDs {
 		subSet[id] = true
 		res.Containers = append(res.Containers, coremodel.Container{ID: id, Type: classifyStationType(ownIdx, psrIdx, id)})
 		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: ownIdx.NameOf(id)})
+		if region := regionOf(id); region != "" {
+			res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyRegion, Value: region})
+		}
+		if subregion := subRegionOf(id); subregion != "" {
+			res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeySubRegion, Value: subregion})
+		}
 	}
 	houseSet := map[string]bool{}
 	for _, id := range houseIDs {

@@ -12,8 +12,9 @@ import (
 	importhjson "github.com/ame89/jag/pkg/importer/hjson"
 )
 
-// Write writes every FileOutput to <root>/<Netzregion>/<Dir>/<ID>.hjson,
-// creating directories as needed.
+// Write writes every FileOutput to
+// <root>/<Netzregion>/[<Subnetzregion>/]<Dir>/<ID>.hjson, creating
+// directories as needed.
 //
 // Deliberately hand-formatted, always-multi-line, always-quoted-key/value
 // output (not hjson-go's own Marshal): see internal/importer/hjson's doc
@@ -25,7 +26,15 @@ import (
 // back by ParseFile.
 func Write(root string, outputs []FileOutput) error {
 	for _, o := range outputs {
-		dir := filepath.Join(root, sanitizeSegment(o.Netzregion), o.Dir)
+		segs := []string{root, sanitizeSegment(o.Netzregion)}
+		for _, part := range strings.Split(o.SubNetzregion, "/") {
+			if part == "" {
+				continue
+			}
+			segs = append(segs, sanitizeSegment(part))
+		}
+		segs = append(segs, o.Dir)
+		dir := filepath.Join(segs...)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("hjson export: creating %s: %w", dir, err)
 		}

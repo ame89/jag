@@ -36,9 +36,14 @@ var kwToMWKeys = map[string]bool{
 // with whatever the importer accepts).
 type FileOutput struct {
 	Netzregion string
-	Dir        string // "ONS", "KVS", "Kabel", "Haushalte"
-	ID         string // container ID, becomes the filename (before .hjson)
-	File       importhjson.File
+	// SubNetzregion is the optional second-level Netzregion path segment
+	// (see importhjson.FileInfo.SubNetzregion / AttributeKeySubRegion's
+	// doc comment). Empty means the file exports directly under its
+	// Netzregion, matching the original 3-segment layout.
+	SubNetzregion string
+	Dir           string // "ONS", "KVS", "Kabel", "Haushalte"
+	ID            string // container ID, becomes the filename (before .hjson)
+	File          importhjson.File
 }
 
 // dirForType maps a container type to its Fachmodell top-level directory
@@ -93,14 +98,15 @@ func Build(s *Snapshot, defaultNetzregion string) ([]FileOutput, error) {
 		sort.Slice(stationACLines[k], func(i, j int) bool { return stationACLines[k][i].ID < stationACLines[k][j].ID })
 	}
 
-	nodeKabelFile, nodeStationFile := buildCrossFileRefs(s, acLineOwner, defaultNetzregion)
+	nodeKabelFile, nodeStationFile := buildCrossFileRefs(s, acLineOwner, nodeEquipment, defaultNetzregion)
 
 	var outputs []FileOutput
 	for _, root := range roots {
 		if _, owned := acLineOwner[root.ID]; owned {
 			continue // folded into its owning station's file instead of its own Kabel file — see classifyInternalACLines
 		}
-		region := regionOf(s, root.ID, defaultNetzregion)
+		region, subregion := regionSubregionFor(s, root.ID, root.Type, nodeEquipment, defaultNetzregion)
+		fromDirPath := dirPathOf(region, subregion, dirForType[root.Type])
 		f := importhjson.File{}
 		// Container-level Sachdaten (currently just AttributeKeyName,
 		// the Substation/Building's own name — see ResolveBatchContainers'
@@ -119,14 +125,14 @@ func Build(s *Snapshot, defaultNetzregion string) ([]FileOutput, error) {
 		fileID := root.ID
 		switch root.Type {
 		case common.ContainerTypeSubstation, common.ContainerTypeDistributionBox:
-			buildStation(s, root.ID, &f, stationACLines[root.ID], region, nodeKabelFile)
+			buildStation(s, root.ID, &f, stationACLines[root.ID], fromDirPath, nodeKabelFile)
 		case common.ContainerTypeHouse:
 			for _, eq := range s.EquipmentByContainer[root.ID] {
-				f.Equipment = append(f.Equipment, buildEquipment(s, root.ID, eq.ID, region, nodeKabelFile))
+				f.Equipment = append(f.Equipment, buildEquipment(s, root.ID, eq.ID, fromDirPath, nodeKabelFile))
 			}
 		case common.ContainerTypeACLine:
 			for _, eq := range s.EquipmentByContainer[root.ID] {
-				f.Segments = append(f.Segments, buildSegment(s, root.ID, eq.ID, region, nodeStationFile))
+				f.Segments = append(f.Segments, buildSegment(s, root.ID, eq.ID, fromDirPath, nodeStationFile))
 			}
 			// The "acline:" prefix (see acline_streaming.go's
 			// buildACLineComponentResult) is an internal disambiguation
@@ -139,10 +145,11 @@ func Build(s *Snapshot, defaultNetzregion string) ([]FileOutput, error) {
 		}
 
 		outputs = append(outputs, FileOutput{
-			Netzregion: region,
-			Dir:        dirForType[root.Type],
-			ID:         fileID,
-			File:       f,
+			Netzregion:    region,
+			SubNetzregion: subregion,
+			Dir:           dirForType[root.Type],
+			ID:            fileID,
+			File:          f,
 		})
 	}
 
@@ -179,46 +186,56 @@ func buildBoundaryEquipment(s *Snapshot, defaultNetzregion string) []FileOutput 
 	}
 	sort.Strings(orphanIDs)
 
-	byRegion := map[string][]string{}
+	// regionKey bundles region+subregion so boundary equipment in
+	// different Subnetzregionen (even under the same Netzregion) land in
+	// separate Boundary.hjson files, matching every other top-level file.
+	type regionKey struct{ region, subregion string }
+	byRegion := map[regionKey][]string{}
 	for _, eqID := range orphanIDs {
-		region := regionOf(s, eqID, defaultNetzregion)
-		byRegion[region] = append(byRegion[region], eqID)
+		key := regionKey{regionOf(s, eqID, defaultNetzregion), resolvedSubregion(s, eqID)}
+		byRegion[key] = append(byRegion[key], eqID)
 	}
 
-	regions := make([]string, 0, len(byRegion))
-	for region := range byRegion {
-		regions = append(regions, region)
+	keys := make([]regionKey, 0, len(byRegion))
+	for key := range byRegion {
+		keys = append(keys, key)
 	}
-	sort.Strings(regions)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].region != keys[j].region {
+			return keys[i].region < keys[j].region
+		}
+		return keys[i].subregion < keys[j].subregion
+	})
 
 	var outputs []FileOutput
-	for _, region := range regions {
+	for _, key := range keys {
+		fromDirPath := dirPathOf(key.region, key.subregion, boundaryDir)
 		f := importhjson.File{}
-		for _, eqID := range byRegion[region] {
+		for _, eqID := range byRegion[key] {
 			// rootID = "" — boundary equipment IDs are raw CIM mRIDs with
 			// no shared station prefix to strip (see shortenID: an ID
 			// without the "<rootID>-" prefix is returned unchanged), and
 			// there is no cross-file node ref tracking for boundary
 			// equipment's own nodes (nil map).
-			f.Equipment = append(f.Equipment, buildEquipment(s, "", eqID, region, nil))
+			f.Equipment = append(f.Equipment, buildEquipment(s, "", eqID, fromDirPath, nil))
 		}
 		outputs = append(outputs, FileOutput{
-			Netzregion: region,
-			Dir:        boundaryDir,
-			ID:         "Boundary",
-			File:       f,
+			Netzregion:    key.region,
+			SubNetzregion: key.subregion,
+			Dir:           boundaryDir,
+			ID:            "Boundary",
+			File:          f,
 		})
 	}
 	return outputs
 }
 
-// fileRef names one exported file (Netzregion/Dir/ID, matching
-// FileOutput's own fields) — used only to compute the relative-path
-// cross-reference comments below (see relativeFileRef).
+// fileRef names one exported file (its full export directory path plus
+// filename, matching FileOutput's own fields) — used only to compute the
+// relative-path cross-reference comments below (see relativeFileRef).
 type fileRef struct {
-	Region string
-	Dir    string
-	ID     string // fileID, exactly as used for that file's own filename
+	DirPath string // e.g. "Nord/ONS" or, with a Subnetzregion, "Nord/West/ONS"
+	ID      string // fileID, exactly as used for that file's own filename
 }
 
 // buildCrossFileRefs scans every Equipment's Edge once and, for every
@@ -240,7 +257,7 @@ type fileRef struct {
 // station-internal or purely Kabel-internal node is absent from both,
 // which is exactly the desired "no comment" behavior at render time (see
 // write.go's writeEquipment/writeSegment).
-func buildCrossFileRefs(s *Snapshot, acLineOwner map[string]string, defaultNetzregion string) (nodeKabelRefs, nodeStationRefs map[string][]fileRef) {
+func buildCrossFileRefs(s *Snapshot, acLineOwner map[string]string, nodeEquipment map[string][]string, defaultNetzregion string) (nodeKabelRefs, nodeStationRefs map[string][]fileRef) {
 	nodeKabelRefs = map[string][]fileRef{}
 	nodeStationRefs = map[string][]fileRef{}
 	refCache := map[string]fileRef{}
@@ -274,7 +291,9 @@ func buildCrossFileRefs(s *Snapshot, acLineOwner map[string]string, defaultNetzr
 			if effType == common.ContainerTypeACLine {
 				id = strings.TrimPrefix(effRoot, "acline:")
 			}
-			ref = fileRef{Region: regionOf(s, effRoot, defaultNetzregion), Dir: dirForType[effType], ID: id}
+			region, subregion := regionSubregionFor(s, effRoot, effType, nodeEquipment, defaultNetzregion)
+			dirPath := dirPathOf(region, subregion, dirForType[effType])
+			ref = fileRef{DirPath: dirPath, ID: id}
 			refCache[effRoot] = ref
 		}
 		for _, n := range []string{edge.Terminal1NodeID, edge.Terminal2NodeID} {
@@ -299,11 +318,8 @@ func buildCrossFileRefs(s *Snapshot, acLineOwner map[string]string, defaultNetzr
 	sortFileRefs := func(m map[string][]fileRef) {
 		for n := range m {
 			sort.Slice(m[n], func(i, j int) bool {
-				if m[n][i].Region != m[n][j].Region {
-					return m[n][i].Region < m[n][j].Region
-				}
-				if m[n][i].Dir != m[n][j].Dir {
-					return m[n][i].Dir < m[n][j].Dir
+				if m[n][i].DirPath != m[n][j].DirPath {
+					return m[n][i].DirPath < m[n][j].DirPath
 				}
 				return m[n][i].ID < m[n][j].ID
 			})
@@ -314,32 +330,43 @@ func buildCrossFileRefs(s *Snapshot, acLineOwner map[string]string, defaultNetzr
 	return nodeKabelRefs, nodeStationRefs
 }
 
-// relativeFileRef renders r as a path relative to a file located at
-// <fromRegion>/<anything>/<file>.hjson (see FileOutput.Netzregion/Dir/ID):
-// "../<Dir>/<ID>.hjson" if r is in the same Netzregion, or
-// "../../<Region>/<Dir>/<ID>.hjson" if it's in a different one — added
-// 2026-07-21 on user request so a cross-reference comment can be followed
-// directly from a text editor/file browser instead of just naming a bare
-// file/dir pair.
-func relativeFileRef(fromRegion string, r fileRef) string {
+// relativeFileRef renders r as a path relative to a file located directly
+// under fromDirPath (see FileOutput.Netzregion/SubNetzregion/Dir and
+// dirPathOf) by walking up to the deepest shared ancestor directory and
+// back down into r's own directory — a straightforward generalization of
+// the original fixed "one Netzregion level" logic (added 2026-07-21) that
+// now also handles the optional Subnetzregion nesting level without
+// special-casing it: "../<Dir>/<ID>.hjson" if r shares the same
+// Netzregion+Subnetzregion, "../../<Subnetzregion-or-Dir>/.../<ID>.hjson"
+// otherwise, however many levels actually differ.
+func relativeFileRef(fromDirPath string, r fileRef) string {
 	name := sanitizeSegment(r.ID) + ".hjson"
-	if fromRegion == r.Region {
-		return "../" + r.Dir + "/" + name
+	fromParts := strings.Split(fromDirPath, "/")
+	toParts := strings.Split(r.DirPath, "/")
+	common := 0
+	for common < len(fromParts) && common < len(toParts) && fromParts[common] == toParts[common] {
+		common++
 	}
-	return "../../" + sanitizeSegment(r.Region) + "/" + r.Dir + "/" + name
+	parts := make([]string, 0, len(fromParts)-common+len(toParts)-common+1)
+	for i := 0; i < len(fromParts)-common; i++ {
+		parts = append(parts, "..")
+	}
+	parts = append(parts, toParts[common:]...)
+	parts = append(parts, name)
+	return strings.Join(parts, "/")
 }
 
 // formatFileRefs joins every ref in refs (see buildCrossFileRefs) into one
 // comma-separated comment string of relative paths (see relativeFileRef),
 // or "" if refs is empty (the overwhelmingly common case: most nodes
 // don't cross a file boundary at all).
-func formatFileRefs(fromRegion string, refs []fileRef) string {
+func formatFileRefs(fromDirPath string, refs []fileRef) string {
 	if len(refs) == 0 {
 		return ""
 	}
 	parts := make([]string, 0, len(refs))
 	for _, r := range refs {
-		parts = append(parts, relativeFileRef(fromRegion, r))
+		parts = append(parts, relativeFileRef(fromDirPath, r))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -484,7 +511,7 @@ func classifyInternalACLines(s *Snapshot, roots []coremodel.Container, nodeEquip
 // the file sees "connects: [@BB-1-1]" instead of an opaque "CN3". Any
 // equipment NOT wired to a busbar node keeps its ordinary (shortened)
 // node ID unchanged.
-func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines []coremodel.Container, region string, nodeKabelRefs map[string][]fileRef) {
+func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines []coremodel.Container, fromDirPath string, nodeKabelRefs map[string][]fileRef) {
 	rootEqs := append([]coremodel.Equipment(nil), s.EquipmentByContainer[rootID]...)
 	sort.Slice(rootEqs, func(i, j int) bool { return rootEqs[i].ID < rootEqs[j].ID })
 
@@ -505,7 +532,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines 
 	buildBusbarSections(s, rootID, rootEqs, bayContainers, ownedACLines, busbarContainers, f)
 
 	for _, eq := range rootEqs {
-		f.Equipment = append(f.Equipment, buildEquipment(s, rootID, eq.ID, region, nodeKabelRefs))
+		f.Equipment = append(f.Equipment, buildEquipment(s, rootID, eq.ID, fromDirPath, nodeKabelRefs))
 	}
 
 	for _, child := range bayContainers {
@@ -519,7 +546,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines 
 		eqs := append([]coremodel.Equipment(nil), s.EquipmentByContainer[child.ID]...)
 		sort.Slice(eqs, func(i, j int) bool { return eqs[i].ID < eqs[j].ID })
 		for _, eq := range eqs {
-			bay.Equipment = append(bay.Equipment, buildEquipment(s, rootID, eq.ID, region, nodeKabelRefs))
+			bay.Equipment = append(bay.Equipment, buildEquipment(s, rootID, eq.ID, fromDirPath, nodeKabelRefs))
 		}
 		f.Bays = append(f.Bays, bay)
 	}
@@ -535,7 +562,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines 
 		eqs := append([]coremodel.Equipment(nil), s.EquipmentByContainer[ac.ID]...)
 		sort.Slice(eqs, func(i, j int) bool { return eqs[i].ID < eqs[j].ID })
 		for _, eq := range eqs {
-			f.Segments = append(f.Segments, buildSegment(s, rootID, eq.ID, region, nodeKabelRefs))
+			f.Segments = append(f.Segments, buildSegment(s, rootID, eq.ID, fromDirPath, nodeKabelRefs))
 		}
 	}
 }
@@ -732,7 +759,7 @@ func hoistCommonSectionName(bb *importhjson.Busbar) {
 // buildBusbarSections' doc comment: the Busbar's own ID already IS that
 // node's shortened form, so the ordinary shortenID fallback in
 // resolveConnectTarget already renders it correctly.
-func buildEquipment(s *Snapshot, rootID, eqID string, region string, nodeKabelRefs map[string][]fileRef) importhjson.Equipment {
+func buildEquipment(s *Snapshot, rootID, eqID string, fromDirPath string, nodeKabelRefs map[string][]fileRef) importhjson.Equipment {
 	eq := importhjson.Equipment{ID: shortenID(rootID, eqID)}
 	attrs := s.AttributesByOwner[eqID]
 	for _, a := range attrs {
@@ -742,12 +769,12 @@ func buildEquipment(s *Snapshot, rootID, eqID string, region string, nodeKabelRe
 		}
 	}
 	if edge, ok := s.Edges[eqID]; ok {
-		n1, ref1 := resolveConnectTarget(rootID, edge.Terminal1NodeID, region, nodeKabelRefs)
+		n1, ref1 := resolveConnectTarget(rootID, edge.Terminal1NodeID, fromDirPath, nodeKabelRefs)
 		if edge.Terminal2NodeID == gndToken {
 			eq.Connects = []string{n1}
 			eq.ConnectRefs = []string{ref1}
 		} else {
-			n2, ref2 := resolveConnectTarget(rootID, edge.Terminal2NodeID, region, nodeKabelRefs)
+			n2, ref2 := resolveConnectTarget(rootID, edge.Terminal2NodeID, fromDirPath, nodeKabelRefs)
 			eq.Connects = []string{n1, n2}
 			eq.ConnectRefs = []string{ref1, ref2}
 		}
@@ -768,8 +795,8 @@ func buildEquipment(s *Snapshot, rootID, eqID string, region string, nodeKabelRe
 // buildBusbarSections). The second return value is a relative-path
 // cross-reference comment (see buildCrossFileRefs/formatFileRefs), or ""
 // if nodeID isn't also touched by a file in xref.
-func resolveConnectTarget(rootID, nodeID string, region string, xref map[string][]fileRef) (string, string) {
-	ref := formatFileRefs(region, xref[nodeID])
+func resolveConnectTarget(rootID, nodeID string, fromDirPath string, xref map[string][]fileRef) (string, string) {
+	ref := formatFileRefs(fromDirPath, xref[nodeID])
 	return shortenID(rootID, nodeID), ref
 }
 
@@ -890,11 +917,11 @@ func dropRedundantScheduleName(schedule, ownerAttrs map[string]interface{}) {
 // nodeKabelRefs for a station-internal folded segment (naming an
 // external Kabel file, in the rare case such a jumper also happens to
 // touch one — see buildStation's own call site).
-func buildSegment(s *Snapshot, rootID, eqID string, region string, xref map[string][]fileRef) importhjson.Segment {
+func buildSegment(s *Snapshot, rootID, eqID string, fromDirPath string, xref map[string][]fileRef) importhjson.Segment {
 	seg := importhjson.Segment{ID: shortenID(rootID, eqID)}
 	if edge, ok := s.Edges[eqID]; ok {
-		seg.From, seg.FromRef = resolveConnectTarget(rootID, edge.Terminal1NodeID, region, xref)
-		seg.To, seg.ToRef = resolveConnectTarget(rootID, edge.Terminal2NodeID, region, xref)
+		seg.From, seg.FromRef = resolveConnectTarget(rootID, edge.Terminal1NodeID, fromDirPath, xref)
+		seg.To, seg.ToRef = resolveConnectTarget(rootID, edge.Terminal2NodeID, fromDirPath, xref)
 	}
 	// Like BusbarSectionEntry, Segment has no dedicated Class field — its
 	// class is always implicitly ACLineSegment — so skip re-surfacing the
@@ -1126,17 +1153,218 @@ func parseAttrFloat(v interface{}) (float64, bool) {
 	return f, err == nil
 }
 
+// regionSubregionFor resolves a top-level container's own export
+// region/subregion. Ordinary containers (Substation/DistributionBox/
+// House) simply read their own "region"/"subregion" Sachdaten (see
+// regionOf/subregionOf) — resolved from CIM Substation.Region/
+// SubGeographicalRegion in pass_a.go. A freestanding ACLine/Kabel root
+// never gets those attributes itself (ACLineSegment/Line carries no
+// resolved Netzregion in JAG's model, see Konzept.md's open point on
+// CIM Line.Region), so it instead borrows the region/subregion of a
+// Substation/DistributionBox/House it connects to (see stationRegionFor).
+func regionSubregionFor(s *Snapshot, rootID string, rootType coremodel.ContainerType, nodeEquipment map[string][]string, defaultNetzregion string) (region, subregion string) {
+	if rootType == common.ContainerTypeACLine {
+		return stationRegionFor(s, rootID, nodeEquipment, defaultNetzregion)
+	}
+	return regionOf(s, rootID, defaultNetzregion), resolvedSubregion(s, rootID)
+}
+
+// stationRegionFor derives a freestanding ACLine/Kabel container's export
+// region/subregion from the Substation/DistributionBox/House it connects
+// to at its endpoint nodes, instead of resolving CIM Line.Region
+// separately (a cable's own region trivially matches wherever it starts/
+// ends). Per explicit user decision (2026-07-31/2026-07-30): every
+// connected endpoint sharing the most-common region is considered, and
+// the resulting subregion is the LONGEST COMMON PREFIX of their
+// (possibly multi-level, see resolvedSubregion/AttributeKeySubRegionPath)
+// subregion paths — e.g. a cable spanning two different Ortsteile of the
+// same Ort collapses to just that Ort ("<Region>/<Ort>/Kabel"), never
+// arbitrarily under just one of the two Ortsteile; a cable whose
+// endpoints don't even share a subregion collapses further to a plain
+// "<Region>/Kabel". If the cable touches no Substation/DistributionBox/
+// House at all (e.g. runs entirely between two other Kabel/boundary
+// points), defaultNetzregion is used with no subregion. Deterministic
+// even when connected endpoints disagree on region entirely (rare,
+// inconsistent source data): the region shared by the most endpoints
+// wins, ties broken lexicographically.
+func stationRegionFor(s *Snapshot, rootID string, nodeEquipment map[string][]string, defaultNetzregion string) (region, subregion string) {
+	type candidate struct {
+		region string
+		segs   []string // resolvedSubregion split into path segments, possibly empty
+	}
+	seenRoot := map[string]bool{}
+	var candidates []candidate
+	for _, eq := range s.EquipmentByContainer[rootID] {
+		edge, ok := s.Edges[eq.ID]
+		if !ok {
+			continue
+		}
+		for _, n := range []string{edge.Terminal1NodeID, edge.Terminal2NodeID} {
+			if n == "" || n == gndToken {
+				continue
+			}
+			for _, otherEqID := range nodeEquipment[n] {
+				otherEq, ok := s.Equipment[otherEqID]
+				if !ok {
+					continue
+				}
+				otherRoot := containerRootOf(s, otherEq.ContainerID)
+				if otherRoot == "" || otherRoot == rootID || seenRoot[otherRoot] {
+					continue
+				}
+				rc, ok := s.Containers[otherRoot]
+				if !ok || rc.Type == common.ContainerTypeACLine {
+					continue // another cable endpoint, not a station/house — skip
+				}
+				seenRoot[otherRoot] = true
+				r := regionOf(s, otherRoot, "")
+				if r == "" {
+					continue
+				}
+				var segs []string
+				for _, part := range strings.Split(resolvedSubregion(s, otherRoot), "/") {
+					if part != "" {
+						segs = append(segs, part)
+					}
+				}
+				candidates = append(candidates, candidate{r, segs})
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return defaultNetzregion, ""
+	}
+
+	byRegion := map[string][]candidate{}
+	for _, c := range candidates {
+		byRegion[c.region] = append(byRegion[c.region], c)
+	}
+	regions := make([]string, 0, len(byRegion))
+	for r := range byRegion {
+		regions = append(regions, r)
+	}
+	sort.Slice(regions, func(i, j int) bool {
+		if len(byRegion[regions[i]]) != len(byRegion[regions[j]]) {
+			return len(byRegion[regions[i]]) > len(byRegion[regions[j]])
+		}
+		return regions[i] < regions[j]
+	})
+	chosenRegion := regions[0]
+
+	group := byRegion[chosenRegion]
+	var commonSegs []string
+	for i, c := range group {
+		if i == 0 {
+			commonSegs = append([]string(nil), c.segs...)
+			continue
+		}
+		commonSegs = commonSegPrefix(commonSegs, c.segs)
+		if len(commonSegs) == 0 {
+			break
+		}
+	}
+	return chosenRegion, strings.Join(commonSegs, "/")
+}
+
+// commonSegPrefix returns the longest shared prefix of a and b, comparing
+// segment by segment (not character by character) — used by
+// stationRegionFor to collapse two connected endpoints' subregion paths
+// down to their common ancestor directory (e.g. two Ortsteile of the same
+// Ort share the "<Region>/<Ort>" prefix but not the Ortsteil segment
+// itself).
+func commonSegPrefix(a, b []string) []string {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return a[:i]
+}
+
 // regionOf looks up ownerID's "region" Sachdaten attribute, falling back
 // to defaultNetzregion if absent (see this package's doc comment).
 func regionOf(s *Snapshot, ownerID, defaultNetzregion string) string {
 	for _, a := range s.AttributesByOwner[ownerID] {
-		if string(a.Key) == "region" {
+		if a.Key == common.AttributeKeyRegion {
 			if str, ok := a.Value.(string); ok && str != "" {
 				return str
 			}
 		}
 	}
 	return defaultNetzregion
+}
+
+// subregionOf looks up ownerID's "subregion" Sachdaten attribute (see
+// AttributeKeySubRegion's doc comment — CIM's SubGeographicalRegion,
+// optional second-level Netzregion path segment). Returns "" if absent,
+// unlike regionOf there is no default fallback: an absent subregion simply
+// means the container is exported directly under its Netzregion, with no
+// extra nesting level (see dirPathOf).
+func subregionOf(s *Snapshot, ownerID string) string {
+	for _, a := range s.AttributesByOwner[ownerID] {
+		if a.Key == common.AttributeKeySubRegion {
+			if str, ok := a.Value.(string); ok && str != "" {
+				return str
+			}
+		}
+	}
+	return ""
+}
+
+// subregionPathOf looks up ownerID's "subregion_path" Sachdaten attribute
+// (see AttributeKeySubRegionPath's doc comment) — an optional, HJSON-only,
+// arbitrarily deep "/"-joined directory chain (e.g. PLZ/Ort/Ortsteil for a
+// hand-organized large Netzregion) that a plain "subregion" attribute
+// (always a single segment) cannot carry. Returns "" if absent.
+func subregionPathOf(s *Snapshot, ownerID string) string {
+	for _, a := range s.AttributesByOwner[ownerID] {
+		if a.Key == common.AttributeKeySubRegionPath {
+			if str, ok := a.Value.(string); ok && str != "" {
+				return str
+			}
+		}
+	}
+	return ""
+}
+
+// resolvedSubregion returns ownerID's effective subregion directory chain
+// for export placement: "subregion_path" if present (arbitrary depth,
+// already "/"-joined), otherwise the plain single-level "subregion"
+// attribute, or "" if neither is set. subregion_path always wins because
+// it is a strict superset — a single-segment subregion_path and an
+// equivalent plain subregion attribute are otherwise indistinguishable in
+// the resulting export path anyway.
+func resolvedSubregion(s *Snapshot, ownerID string) string {
+	if p := subregionPathOf(s, ownerID); p != "" {
+		return p
+	}
+	return subregionOf(s, ownerID)
+}
+
+// dirPathOf renders the full slash-separated export directory path (root-
+// relative) for a container with the given region/subregion/top-level-dir,
+// e.g. "Nord/ONS" (no subregion), "Nord/West/ONS" (one subregion level),
+// or "Nord/West/12345/Musterstadt/ONS" (a multi-level "subregion_path" —
+// see resolvedSubregion) — see Write's
+// <root>/<Netzregion>/[<Subnetzregion...>/]<Dir>/<ID>.hjson layout.
+// subregion may itself be a "/"-joined multi-segment chain; every
+// resulting segment is sanitized individually (see sanitizeSegment),
+// except dir, which is always one of dirForType's/boundaryDir's fixed,
+// already-safe literals.
+func dirPathOf(region, subregion, dir string) string {
+	segs := make([]string, 0, 4)
+	segs = append(segs, sanitizeSegment(region))
+	for _, part := range strings.Split(subregion, "/") {
+		if part == "" {
+			continue
+		}
+		segs = append(segs, sanitizeSegment(part))
+	}
+	segs = append(segs, dir)
+	return strings.Join(segs, "/")
 }
 
 // shortenID strips a "<rootID>-" prefix if present and marks the result

@@ -9,18 +9,22 @@ import "testing"
 // directory-layout contract between the two packages.
 func TestClassifyPath_Success(t *testing.T) {
 	tests := []struct {
-		name       string
-		path       string
-		wantRegion string
-		wantType   TopLevelType
-		wantID     string
+		name          string
+		path          string
+		wantRegion    string
+		wantSubregion string
+		wantType      TopLevelType
+		wantID        string
 	}{
-		{"substation", "root/Nord/ONS/S-1.hjson", "Nord", TopLevelSubstation, "S-1"},
-		{"distribution-box", "root/Nord/KVS/K-1.hjson", "Nord", TopLevelDistributionBox, "K-1"},
-		{"acline", "root/Nord/Kabel/LIN-1.hjson", "Nord", TopLevelACLine, "LIN-1"},
-		{"house", "root/Nord/Haushalte/H-1.hjson", "Nord", TopLevelHouse, "H-1"},
-		{"boundary", "root/Nord/Grenzknoten/B-1.hjson", "Nord", TopLevelBoundary, "B-1"},
-		{"interregional-kabel", "root/interregional/Kabel/LIN-2.hjson", "interregional", TopLevelACLine, "LIN-2"},
+		{"substation", "root/Nord/ONS/S-1.hjson", "Nord", "", TopLevelSubstation, "S-1"},
+		{"distribution-box", "root/Nord/KVS/K-1.hjson", "Nord", "", TopLevelDistributionBox, "K-1"},
+		{"acline", "root/Nord/Kabel/LIN-1.hjson", "Nord", "", TopLevelACLine, "LIN-1"},
+		{"house", "root/Nord/Haushalte/H-1.hjson", "Nord", "", TopLevelHouse, "H-1"},
+		{"boundary", "root/Nord/Grenzknoten/B-1.hjson", "Nord", "", TopLevelBoundary, "B-1"},
+		{"interregional-kabel", "root/interregional/Kabel/LIN-2.hjson", "interregional", "", TopLevelACLine, "LIN-2"},
+		{"substation-with-subregion", "root/Nord/West/ONS/S-1.hjson", "Nord", "West", TopLevelSubstation, "S-1"},
+		{"acline-with-subregion", "root/Nord/West/Kabel/LIN-1.hjson", "Nord", "West", TopLevelACLine, "LIN-1"},
+		{"substation-with-deep-subregion", "root/Nord/West/Ost/Sued/ONS/S-1.hjson", "Nord", "West/Ost/Sued", TopLevelSubstation, "S-1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -30,6 +34,9 @@ func TestClassifyPath_Success(t *testing.T) {
 			}
 			if fi.Netzregion != tt.wantRegion {
 				t.Errorf("Netzregion = %q, want %q", fi.Netzregion, tt.wantRegion)
+			}
+			if fi.SubNetzregion != tt.wantSubregion {
+				t.Errorf("SubNetzregion = %q, want %q", fi.SubNetzregion, tt.wantSubregion)
 			}
 			if fi.Type != tt.wantType {
 				t.Errorf("Type = %v, want %v", fi.Type, tt.wantType)
@@ -51,9 +58,11 @@ func TestClassifyPath_Errors(t *testing.T) {
 		path string
 	}{
 		{"too few segments", "root/Nord/S-1.hjson"},
-		{"too many segments", "root/Nord/ONS/Extra/S-1.hjson"},
 		{"unknown top-level directory", "root/Nord/Trafo/S-1.hjson"},
+		{"unknown subregion top-level directory", "root/Nord/West/Trafo/S-1.hjson"},
+		{"unknown deep-subregion top-level directory", "root/Nord/West/Ost/Trafo/S-1.hjson"},
 		{"interregional with non-Kabel type", "root/interregional/ONS/S-1.hjson"},
+		{"interregional with subregion", "root/interregional/West/Kabel/LIN-1.hjson"},
 		{"not a .hjson file", "root/Nord/ONS/S-1.txt"},
 		{"empty container ID", "root/Nord/ONS/.hjson"},
 	}
