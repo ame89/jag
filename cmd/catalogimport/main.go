@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"os"
 
-	implcatalog "github.com/ame89/jag/internal/impl/catalog"
-	"github.com/ame89/jag/internal/sqlite"
+	implcatalog "github.com/ame89/jag/pkg/impl/catalog"
+	"github.com/ame89/jag/pkg/sqlite"
 )
 
 func main() {

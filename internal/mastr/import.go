@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ame89/jag/internal/xmlsax"
+	"github.com/ame89/jag/pkg/xmlsax"
 )
 
 // datasetNamePattern strips an optional numeric "_<N>" chunk suffix before

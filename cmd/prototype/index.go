@@ -1,6 +1,6 @@
 package main
 
-import "github.com/ame89/jag/internal/importer/model"
+import "github.com/ame89/jag/pkg/importer/model"
 
 type attrKey struct{ id, attr string }
 

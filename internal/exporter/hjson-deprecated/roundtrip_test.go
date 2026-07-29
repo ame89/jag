@@ -24,12 +24,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	coremodel "github.com/ame89/jag/internal/core/model"
+	coremodel "github.com/ame89/jag/pkg/core/model"
 	exporthjson "github.com/ame89/jag/internal/exporter/hjson-deprecated"
-	"github.com/ame89/jag/internal/impl/common"
+	"github.com/ame89/jag/pkg/impl/common"
 	importhjson "github.com/ame89/jag/internal/importer/hjson-deprecated"
-	importmodel "github.com/ame89/jag/internal/importer/model"
-	"github.com/ame89/jag/internal/sqlite"
+	importmodel "github.com/ame89/jag/pkg/importer/model"
+	"github.com/ame89/jag/pkg/sqlite"
 )
 
 // byOwnerKey groups a flat []model.StagingRecord's literal attribute rows

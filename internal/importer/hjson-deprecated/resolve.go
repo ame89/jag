@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ame89/jag/internal/importer/model"
+	"github.com/ame89/jag/pkg/importer/model"
 )
 
 // gndToken is the reserved literal used in connects/from/to to mean the

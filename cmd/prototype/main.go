@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/ame89/jag/internal/importer/cgmes"
-	"github.com/ame89/jag/internal/importer/model"
+	"github.com/ame89/jag/pkg/importer/cgmes"
+	"github.com/ame89/jag/pkg/importer/model"
 )
 
 func main() {

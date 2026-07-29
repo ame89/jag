@@ -12,7 +12,7 @@ import (
 	"os"
 
 	exporthjson "github.com/ame89/jag/internal/exporter/hjson-deprecated"
-	"github.com/ame89/jag/internal/sqlite"
+	"github.com/ame89/jag/pkg/sqlite"
 )
 
 func main() {

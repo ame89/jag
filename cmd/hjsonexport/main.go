@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"os"
 
-	exporthjson "github.com/ame89/jag/internal/exporter/hjson"
-	"github.com/ame89/jag/internal/sqlite"
+	exporthjson "github.com/ame89/jag/pkg/exporter/hjson"
+	"github.com/ame89/jag/pkg/sqlite"
 )
 
 func main() {

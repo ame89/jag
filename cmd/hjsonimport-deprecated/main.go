@@ -18,10 +18,10 @@ import (
 	"strconv"
 	"time"
 
-	coremodel "github.com/ame89/jag/internal/core/model"
-	"github.com/ame89/jag/internal/impl/common"
-	"github.com/ame89/jag/internal/importer/phase1"
-	"github.com/ame89/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/pkg/core/model"
+	"github.com/ame89/jag/pkg/impl/common"
+	"github.com/ame89/jag/pkg/importer/phase1"
+	"github.com/ame89/jag/pkg/sqlite"
 )
 
 const persistChunkSize = 1000

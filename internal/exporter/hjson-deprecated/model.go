@@ -3,8 +3,8 @@ package hjsondeprecated
 import (
 	"fmt"
 
-	coremodel "github.com/ame89/jag/internal/core/model"
-	"github.com/ame89/jag/internal/sqlite"
+	coremodel "github.com/ame89/jag/pkg/core/model"
+	"github.com/ame89/jag/pkg/sqlite"
 )
 
 // pageLimit bounds each ModelStore.AllX call — see internal/sqlite/

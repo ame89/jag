@@ -44,7 +44,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ame89/jag/internal/progress"
+	"github.com/ame89/jag/pkg/progress"
 )
 
 // progressLogger is used by BuildTopology to report per-phase progress (record counts,
