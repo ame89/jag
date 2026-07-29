@@ -77,6 +77,101 @@ func (m *ModelStore) AllEdges(afterID string, limit int) ([]coremodel.Edge, erro
 	return result, nil
 }
 
+// AllNodes pages through every Node in ID order — added alongside
+// AllContainers/AllEquipment/AllEdges/AllAttributes/AllGeometry above for
+// cmd/sqlite2postgres and cmd/postgres2sqlite, which need to enumerate
+// the whole model_node table (not just look up specific IDs like
+// GetNodesByIDs).
+func (m *ModelStore) AllNodes(afterID string, limit int) ([]coremodel.Node, error) {
+	rows, err := m.db.Query(
+		rebind(`SELECT id, kind FROM model_node WHERE id > ? ORDER BY id LIMIT ?`),
+		afterID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: paging nodes: %w", err)
+	}
+	defer rows.Close()
+
+	var result []coremodel.Node
+	for rows.Next() {
+		var n coremodel.Node
+		var kind string
+		if err := rows.Scan(&n.EquipmentID, &kind); err != nil {
+			return nil, fmt.Errorf("postgres: scanning node row: %w", err)
+		}
+		n.Kind = coremodel.NodeKind(kind)
+		result = append(result, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: iterating node rows: %w", err)
+	}
+	return result, nil
+}
+
+// AllElectricalGroups pages through every model_electrical_group row in
+// owner_id order, added alongside the other AllX methods for
+// cmd/sqlite2postgres and cmd/postgres2sqlite. Never lets a page end
+// mid-owner (same rationale as AllAttributes' owner-continuation fix
+// above) so a caller building an owner->node->group map for
+// UpsertElectricalGroups never sees a partial owner's rows.
+func (m *ModelStore) AllElectricalGroups(afterOwnerID string, limit int) ([]coremodel.ElectricalGroupRow, error) {
+	rows, err := m.db.Query(
+		rebind(`SELECT node_id, owner_id, group_id FROM model_electrical_group WHERE owner_id > ? ORDER BY owner_id, node_id LIMIT ?`),
+		afterOwnerID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: paging electrical groups: %w", err)
+	}
+	result, err := scanElectricalGroupRows(rows)
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	for len(result) > 0 && len(result) >= limit {
+		lastOwner := result[len(result)-1].OwnerID
+		lastNode := result[len(result)-1].NodeID
+		moreRows, err := m.db.Query(
+			rebind(`SELECT node_id, owner_id, group_id FROM model_electrical_group WHERE owner_id = ? AND node_id > ? ORDER BY node_id LIMIT ?`),
+			lastOwner, lastNode, limit,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: paging electrical groups (owner continuation): %w", err)
+		}
+		more, err := scanElectricalGroupRows(moreRows)
+		moreRows.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(more) == 0 {
+			break
+		}
+		result = append(result, more...)
+		if len(more) < limit {
+			break
+		}
+	}
+
+	return result, nil
+}
+
+// scanElectricalGroupRows decodes rows produced by a "SELECT node_id,
+// owner_id, group_id FROM model_electrical_group ..." query.
+func scanElectricalGroupRows(rows *sql.Rows) ([]coremodel.ElectricalGroupRow, error) {
+	var result []coremodel.ElectricalGroupRow
+	for rows.Next() {
+		var r coremodel.ElectricalGroupRow
+		if err := rows.Scan(&r.NodeID, &r.OwnerID, &r.GroupID); err != nil {
+			return nil, fmt.Errorf("postgres: scanning electrical group row: %w", err)
+		}
+		result = append(result, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: iterating electrical group rows: %w", err)
+	}
+	return result, nil
+}
+
 // AllAttributes pages through every Attribute in (owner_id, key, seq)
 // order — same decoding as GetByOwnerIDs. See
 // internal/sqlite/model_export.go's AllAttributes doc comment for the

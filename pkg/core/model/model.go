@@ -118,6 +118,20 @@ type Attribute struct {
 	Value   any
 }
 
+// ElectricalGroupRow is one row of the model_electrical_group table: a
+// Node's electrical-topology group id as computed by one specific owner
+// (a station root Container id for Pass A, or the fixed Pass B sentinel
+// owner id — see impl/common/pass_b.go). Exists as a plain row type (not
+// just the owner->node->group map UpsertElectricalGroups/electrical.Store
+// take) for bulk "read every row" export use cases (e.g. a
+// SQLite->PostgreSQL migration tool) that need to enumerate the whole
+// table rather than look up specific owners/nodes.
+type ElectricalGroupRow struct {
+	NodeID  string
+	OwnerID string
+	GroupID string
+}
+
 // CatalogEntry is a ParameterCatalog entry. It reuses the Attribute
 // mechanism/global enum for its own fields (with a documented,
 // non-enforced per-kind schema mapping — see Konzept.md). Catalog entries
