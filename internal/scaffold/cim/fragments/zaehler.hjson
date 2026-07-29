@@ -1,0 +1,11 @@
+{
+  id: "@Zaehler-1"
+  class: Meter
+  connects: [
+    "@Hausanschluss"
+  ]
+  attributes: {
+    name: "Zähler Hausanschluss" // IdentifiedObject.name
+    measurementLocationIdentifier: "DE0000000000000000000000000000001" // Meter.measurementLocationIdentifier
+  }
+}

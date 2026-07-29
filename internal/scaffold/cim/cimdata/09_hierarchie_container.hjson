@@ -10,10 +10,40 @@
       terminals: 0
       attributes: [
         {
+          key: IdentifiedObject.mRID
+          type: string
+          required: true
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
           key: IdentifiedObject.name
           type: string
           required: true
           description: "Menschlich lesbarer Name der Station."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: IdentifiedObject.shortName
+          type: string
+          required: false
+          description: "Kurzbezeichnung (z.B. Stationskürzel)."
+        }
+        {
+          key: PowerSystemResource.Location
+          type: "Referenz -> Location"
+          required: false
+          description: "Geografische Position der Station (WGS84 über Location/PositionPoint)."
+        }
+        {
+          key: PowerSystemResource.PSRType
+          type: "Referenz -> PSRType"
+          required: false
+          description: "Klassifikation (z.B. \"TransformerStation\"=ONS vs. \"DistributionBox\"=KVS in manchen NSC-Beispielen — bei JAG noch nicht für die ONS/KVS-Unterscheidung ausgewertet, siehe Konzept.md)."
         }
         {
           key: Substation.Region
@@ -58,6 +88,18 @@
           required: true
           description: "Nennspannungsebene."
         }
+        {
+          key: VoltageLevel.highVoltageLimit
+          type: "float (kV)"
+          required: false
+          description: "Oberer zulässiger Spannungsgrenzwert dieser Ebene, in kV."
+        }
+        {
+          key: VoltageLevel.lowVoltageLimit
+          type: "float (kV)"
+          required: false
+          description: "Unterer zulässiger Spannungsgrenzwert dieser Ebene, in kV."
+        }
       ]
     }
     Bay: {
@@ -66,10 +108,22 @@
       terminals: 0
       attributes: [
         {
+          key: IdentifiedObject.mRID
+          type: string
+          required: false
+          description: "Eindeutige, global stabile ID des Objekts."
+        }
+        {
           key: IdentifiedObject.name
           type: string
           required: true
           description: "Menschlich lesbarer Name des Felds."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
         }
         {
           key: Bay.VoltageLevel
@@ -150,7 +204,7 @@
       ]
     }
     Building: {
-      description: "NSC-spezifische Klasse für ein Gebäude (z.B. Wohnhaus mit Hausanschluss) — JAG-Containertyp \"house\"."
+      description: "NSC-spezifische Klasse für ein Gebäude (z.B. Wohnhaus mit Hausanschluss) — JAG-Containertyp \"house\". Hinweis: in den Beispieldatensätzen trägt Building nur name+Location; MaLo/MeLo (siehe Idee.md Glossar) sind KEIN fest benannter Sachdaten-Key in der aktuellen Implementierung — falls benötigt, als frei gewählter Attribute-Key ergänzen (siehe Konzept.md: Sachdaten-Keys aus einem gemeinsamen, noch offenen globalen Enum)."
       group: "Hierarchie/Container"
       terminals: 0
       attributes: [
@@ -159,6 +213,12 @@
           type: string
           required: false
           description: "Menschlich lesbarer Name/Adresse."
+        }
+        {
+          key: PowerSystemResource.Location
+          type: "Referenz -> Location"
+          required: false
+          description: "Geografische Position des Hauses (WGS84)."
         }
       ]
     }

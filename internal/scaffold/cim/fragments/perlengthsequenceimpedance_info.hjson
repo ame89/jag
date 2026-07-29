@@ -1,0 +1,9 @@
+// Katalog-Alternative zu direkten r/x/r0/x0-Werten je Segment (NSC-Dialekt): ein Kabeltyp
+// kann stattdessen einmal als PerLengthSequenceImpedance definiert und von mehreren
+// Segmenten referenziert werden (ACLineSegment.PerLengthImpedance), z.B.:
+//
+// PerLengthSequenceImpedance "NAYY 4x150":
+//   r:  0.206  // PerLengthSequenceImpedance.r,  Ω/km
+//   x:  0.08   // PerLengthSequenceImpedance.x,  Ω/km
+//   r0: 0.824  // PerLengthSequenceImpedance.r0, Ω/km
+//   x0: 0.32   // PerLengthSequenceImpedance.x0, Ω/km

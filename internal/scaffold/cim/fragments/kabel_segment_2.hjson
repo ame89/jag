@@ -1,0 +1,15 @@
+{
+  id: "@Abschnitt-2"
+  // dieselbe Durchgangsmuffe wie oben — verlängert dieselbe Strecke, z.B. bei einem
+  // Kabeltyp-/Querschnittswechsel (siehe Konzept.md, ACLine-Grenze ist rein topologisch,
+  // nicht parameterabhängig).
+  from: "@M-1"
+  to: TODO_KNOTEN_STATION_B // globale ID: der Knoten am anderen Streckenende
+  attributes: {
+    mRID: "Kabel-1-Abschnitt-2" // IdentifiedObject.mRID
+    name: "NAYY 4x95 Musterstraße 3-5" // IdentifiedObject.name
+    length: 30.0 // Conductor.length
+    r: 0.32 // ACLineSegment.r
+    x: 0.083 // ACLineSegment.x
+  }
+}

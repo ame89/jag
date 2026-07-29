@@ -1,0 +1,16 @@
+{
+  id: "@Sicherung-1"
+  class: Fuse
+  connects: [
+    "@SS-1-1"
+    TODO_KNOTEN_KABEL_ODER_HAUS_1 // globale ID, siehe die weiterführende Kabel-/Haushalte-Datei
+  ]
+  attributes: {
+    mRID: "Sicherung-1" // IdentifiedObject.mRID
+    name: "Sicherung Abgang 1" // IdentifiedObject.name
+    description: "NH-Sicherung 63A" // IdentifiedObject.description
+    normalOpen: false // Switch.normalOpen — nicht ausgelöst (Nullohm-Verbindung)
+    ratedCurrent: 63.0 // Switch.ratedCurrent
+    nominalCurrent: 63.0 // Fuse.nominalCurrent
+  }
+}

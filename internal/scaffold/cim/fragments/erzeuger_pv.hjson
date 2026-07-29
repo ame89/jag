@@ -1,0 +1,24 @@
+{
+  id: "@PV-Anschluss-1"
+  class: PowerElectronicsConnection
+  connects: [
+    "@Hausanschluss" // i.d.R. derselbe Hausanschlusspunkt wie der Verbraucher
+  ]
+  attributes: {
+    name: "PV-Netzanschluss" // IdentifiedObject.name
+    p: -0.008 // PowerElectronicsConnection.p — negativ = Einspeisung, hier 8 kW PV-Leistung
+    q: 0.0 // PowerElectronicsConnection.q
+  }
+  // Die eigentliche Erzeugungseinheit hängt als Satellit an diesem Netzanschlusspunkt
+  // (siehe internal/importer/hjson.Satellite).
+  satellites: [
+    {
+      class: PhotoVoltaicUnit
+      attributes: {
+        name: "PV-Anlage Dach Süd" // IdentifiedObject.name
+        maxP: 0.008 // PowerElectronicsUnit.maxP — 8 kWp
+        minP: 0.0 // PowerElectronicsUnit.minP
+      }
+    }
+  ]
+}

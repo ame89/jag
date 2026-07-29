@@ -21,10 +21,40 @@
           description: "Zugehöriger Container (falls vorhanden)."
         }
         {
-          key: Meter.UsagePoint
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene."
+        }
+        {
+          key: EndDevice.UsagePoint
           type: "Referenz -> UsagePoint"
           required: false
-          description: "Zugehöriger Zählpunkt (MeLo)."
+          description: "Zugehöriger Zählpunkt (MeLo). Achtung: CIM-Attribut heißt EndDevice.UsagePoint, NICHT Meter.UsagePoint."
+        }
+        {
+          key: Meter.measurementLocationIdentifier
+          type: string
+          required: false
+          description: "MeLo-artige Mess-Lokations-ID."
+        }
+        {
+          key: Meter.MeasuringSchedule
+          type: "Referenz -> TimeSchedule"
+          required: false
+          description: "Zeitplan für die Messwerterfassung (Anhängsel, siehe TimeSchedule)."
+        }
+        {
+          key: Meter.TransmissionSchedule
+          type: "Referenz -> TimeSchedule"
+          required: false
+          description: "Zeitplan für die Messwertübertragung (Anhängsel, siehe TimeSchedule)."
         }
       ]
     }

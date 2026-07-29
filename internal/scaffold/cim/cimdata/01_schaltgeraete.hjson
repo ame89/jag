@@ -106,6 +106,18 @@
           description: "Menschlich lesbarer Name."
         }
         {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: IdentifiedObject.shortName
+          type: string
+          required: false
+          description: "Kurzbezeichnung."
+        }
+        {
           key: Equipment.EquipmentContainer
           type: "Referenz -> Bay/Feeder/Substation"
           required: true
@@ -122,6 +134,12 @@
           type: bool
           required: false
           description: "Ist-Betriebszustand."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
         }
         {
           key: ConductingEquipment.BaseVoltage
@@ -185,6 +203,18 @@
           description: "Zugehöriges Feld/Station."
         }
         {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.inService
+          type: bool
+          required: false
+          description: "Ist-Betriebszustand."
+        }
+        {
           key: ConductingEquipment.BaseVoltage
           type: "Referenz -> BaseVoltage"
           required: false
@@ -197,10 +227,22 @@
           description: "Normalschaltzustand (offen/geschlossen)."
         }
         {
+          key: Switch.open
+          type: bool
+          required: false
+          description: "Tatsächlicher Schaltzustand."
+        }
+        {
           key: Switch.retained
           type: bool
           required: false
           description: "Topologie-Reduktions-Flag."
+        }
+        {
+          key: Switch.locked
+          type: bool
+          required: false
+          description: "Mechanisch verriegelt."
         }
         {
           key: Switch.ratedCurrent
@@ -246,6 +288,12 @@
           description: "Aggregations-Flag."
         }
         {
+          key: Equipment.inService
+          type: bool
+          required: false
+          description: "Ist-Betriebszustand."
+        }
+        {
           key: Equipment.normallyInService
           type: bool
           required: false
@@ -258,10 +306,22 @@
           description: "Normalschaltzustand (ausgelöst/nicht ausgelöst)."
         }
         {
+          key: Switch.open
+          type: bool
+          required: false
+          description: "Tatsächlicher Schaltzustand (ausgelöst)."
+        }
+        {
           key: Switch.retained
           type: bool
           required: false
           description: "Topologie-Reduktions-Flag."
+        }
+        {
+          key: Switch.locked
+          type: bool
+          required: false
+          description: "Mechanisch verriegelt."
         }
         {
           key: Switch.ratedCurrent

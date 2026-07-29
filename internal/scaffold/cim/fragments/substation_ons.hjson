@@ -1,0 +1,7 @@
+attributes: {
+  mRID: "ONS-1" // IdentifiedObject.mRID
+  name: "ONS-1 Musterstraße" // IdentifiedObject.name
+  description: "Ortsnetzstation Musterstraße, Baujahr 2018" // IdentifiedObject.description
+  station_kind: "Ortsnetzstation"
+  region: "Nord"
+}

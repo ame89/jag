@@ -1,0 +1,9 @@
+attributes: {
+  mRID: "KVS-1" // IdentifiedObject.mRID
+  name: "KVS-1 Musterstraße" // IdentifiedObject.name
+  description: "Kabelverteilschrank Musterstraße" // IdentifiedObject.description
+  // station_kind ist freier Text (kein hart erzwungenes Enum) — Hauptsache ist die
+  // Ablage im KVS/-Verzeichnis, die einen KVS von einer ONS unterscheidet.
+  station_kind: "Kabelverteilschrank"
+  region: "Nord"
+}

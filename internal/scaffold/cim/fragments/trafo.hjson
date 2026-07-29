@@ -1,0 +1,41 @@
+{
+  id: "@Trafo-1"
+  class: PowerTransformer
+  connects: [
+    "@K-Trafo-Primaer" // Terminal 1: Oberspannungsseite (OS)
+    "@SS-1-1" // Terminal 2: Unterspannungsseite (US), landet direkt auf der Sammelschiene
+  ]
+  attributes: {
+    mRID: "ONS-1-Trafo-1" // IdentifiedObject.mRID
+    name: "Transformator 1" // IdentifiedObject.name
+    description: "800 kVA Verteiltransformator" // IdentifiedObject.description
+  }
+  // Wicklungsseitige Werte (OS/US-Nennspannung, Kurzschlussdaten) sind KEIN eigener Knoten/
+  // Terminal (siehe Konzept.md, Transformer-Entscheidung), sondern Sachdaten der beiden
+  // PowerTransformerEnd-Anhängsel dieses Trafos — je Wicklungsseite ein Satellite-Objekt,
+  // unterschieden über endNumber (TransformerEnd.endNumber, 1 = OS, 2 = US):
+  satellites: [
+    {
+      class: PowerTransformerEnd
+      attributes: {
+        name: "Trafo-1 Wicklung OS" // IdentifiedObject.name
+        endNumber: 1 // TransformerEnd.endNumber — 1 = Oberspannungsseite (OS)
+        ratedU: 20.0 // PowerTransformerEnd.ratedU — 20 kV Mittelspannungsseite
+        ratedS: 0.8 // PowerTransformerEnd.ratedS — 800 kVA = 0.8 MVA
+        r: 1.5 // PowerTransformerEnd.r — Kurzschlusswiderstand in Ω
+        x: 6.0 // PowerTransformerEnd.x — Kurzschlussreaktanz in Ω
+      }
+    }
+    {
+      class: PowerTransformerEnd
+      attributes: {
+        name: "Trafo-1 Wicklung US" // IdentifiedObject.name
+        endNumber: 2 // TransformerEnd.endNumber — 2 = Unterspannungsseite (US)
+        ratedU: 0.4 // PowerTransformerEnd.ratedU — 400 V Niederspannungsseite
+        ratedS: 0.8 // PowerTransformerEnd.ratedS — dieselbe Nennleistung wie Wicklung OS
+        r: 0.006 // PowerTransformerEnd.r
+        x: 0.012 // PowerTransformerEnd.x
+      }
+    }
+  ]
+}

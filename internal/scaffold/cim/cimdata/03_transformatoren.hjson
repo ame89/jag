@@ -37,6 +37,12 @@
           description: "Freitext-Beschreibung."
         }
         {
+          key: IdentifiedObject.shortName
+          type: string
+          required: false
+          description: "Kurzbezeichnung."
+        }
+        {
           key: Equipment.EquipmentContainer
           type: "Referenz -> Bay/Feeder/Substation"
           required: true
@@ -47,6 +53,18 @@
           type: bool
           required: false
           description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: ConductingEquipment.BaseVoltage
+          type: "Referenz -> BaseVoltage"
+          required: false
+          description: "Spannungsebene (i.d.R. redundant zu den beiden Wicklungsenden-Spannungen, aber teils zusätzlich am Trafo selbst gesetzt)."
         }
         {
           key: Equipment.OperationalLimitSet
@@ -228,6 +246,12 @@
           type: int
           required: false
           description: "Schaltgruppen-Uhrzeigerzahl (0-11)."
+        }
+        {
+          key: PowerTransformerEnd.maxApparentPowerFactor
+          type: float
+          required: false
+          description: "Maximal zulässiger Scheinleistungsfaktor dieser Seite (Kurzschlussberechnung)."
         }
       ]
     }

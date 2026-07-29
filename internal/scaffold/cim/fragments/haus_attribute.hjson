@@ -1,0 +1,3 @@
+attributes: {
+  name: "Musterstraße 1, 12345 Musterstadt" // IdentifiedObject.name
+}

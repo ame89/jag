@@ -1,0 +1,6 @@
+{
+  id: "1" // Sektionsnummer, keine echte CIM-ID (siehe internal/importer/hjson.BusbarSectionEntry)
+  attributes: {
+    name: "Sammelschiene 1, Abschnitt 1" // IdentifiedObject.name
+  }
+}

@@ -6,7 +6,8 @@
 // WindGeneratingUnit, SolarGeneratingUnit, GeneratingUnit, FossilFuel,
 // PhotoVoltaicUnit, BatteryUnit, ExternalNetworkInjection,
 // EquivalentInjection, ReactiveCapabilityCurve (Katalog), CurveData
-// (Katalog), EnergyConsumer, ConformLoad, Heatpump, AirConditioningUnit.
+// (Katalog), EnergyConsumer, ConformLoad, Heatpump, AirConditioningUnit,
+// Wallbox.
 // ❌ Anhängsel: LoadResponseCharacteristic.
 {
   classes: {
@@ -32,6 +33,12 @@
           type: "Referenz -> Bay/Feeder/Building"
           required: true
           description: "Zugehöriges Feld/Haus."
+        }
+        {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag."
         }
         {
           key: Equipment.normallyInService
@@ -175,10 +182,22 @@
           description: "Zugehöriges Haus."
         }
         {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
           key: PowerElectronicsUnit.PowerElectronicsConnection
           type: "Referenz -> PowerElectronicsConnection"
           required: true
           description: "Zugehöriger Netzanschlusspunkt."
+        }
+        {
+          key: PowerElectronicsUnit.marketParticipantLocationIdentifier
+          type: string
+          required: false
+          description: "MaLo-artige Markt-Lokations-ID."
         }
         {
           key: PowerElectronicsUnit.maxP
@@ -191,6 +210,61 @@
           type: "float (MW)"
           required: false
           description: "Minimale Wirkleistungsaufnahme in MW."
+        }
+        {
+          key: PowerElectronicsUnit.technicalResourceIdentifier
+          type: string
+          required: false
+          description: "Technische Anlagen-ID."
+        }
+      ]
+    }
+    Wallbox: {
+      description: "Ladestation für Elektrofahrzeuge (Wallbox) — technisch prosumer-fähig (bidirektionales Laden/V2G), in der Praxis aber meist als steuerbarer Verbraucher behandelt (unidirektionales Laden ist der Regelfall, siehe Idee.md Glossar); strukturell Teil der PowerElectronicsUnit-Familie."
+      group: Anschlussnutzer
+      terminals: 0
+      attributes: [
+        {
+          key: IdentifiedObject.name
+          type: string
+          required: false
+          description: "Menschlich lesbarer Name."
+        }
+        {
+          key: Equipment.EquipmentContainer
+          type: "Referenz -> Building"
+          required: false
+          description: "Zugehöriges Haus."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
+        }
+        {
+          key: PowerElectronicsUnit.PowerElectronicsConnection
+          type: "Referenz -> PowerElectronicsConnection"
+          required: true
+          description: "Zugehöriger Netzanschlusspunkt (Steuerbox-Anschluss, steuVA)."
+        }
+        {
+          key: PowerElectronicsUnit.maxP
+          type: "float (MW)"
+          required: false
+          description: "Maximale Ladeleistung in MW."
+        }
+        {
+          key: PowerElectronicsUnit.minP
+          type: "float (MW)"
+          required: false
+          description: "Minimale Ladeleistung in MW."
+        }
+        {
+          key: PowerElectronicsUnit.technicalResourceIdentifier
+          type: string
+          required: false
+          description: "Technische Anlagen-ID."
         }
       ]
     }

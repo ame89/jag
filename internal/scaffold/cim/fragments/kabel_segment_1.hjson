@@ -1,0 +1,16 @@
+{
+  id: "@Abschnitt-1"
+  from: TODO_KNOTEN_STATION_A // globale ID: der Knoten in der Substation/KVS/House-Datei am einen Streckenende
+  to: "@M-1" // lokal: Durchgangsmuffe, mit @Abschnitt-2 geteilt
+  attributes: {
+    mRID: "Kabel-1-Abschnitt-1" // IdentifiedObject.mRID
+    name: "NAYY 4x150 Musterstraße 1-3" // IdentifiedObject.name
+    length: 45.0 // Conductor.length — Streckenlänge, Einheit je nach Projektkonvention (m oder km)
+    r: 0.206 // ACLineSegment.r
+    x: 0.08 // ACLineSegment.x
+  }
+  geometry: [
+    { lat: 0.0, lon: 0.0 } // TODO: Streckenpunkte in Reihenfolge, erster = from-Ende
+    { lat: 0.0, lon: 0.0 } // TODO: letzter Punkt = to-Ende (Durchgangsmuffe @M-1)
+  ]
+}

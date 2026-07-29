@@ -33,10 +33,28 @@
           description: "Zugehöriges Feld bzw. direkt die Station (NSC-Dialekt überspringt VoltageLevel)."
         }
         {
+          key: Equipment.aggregate
+          type: bool
+          required: false
+          description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.inService
+          type: bool
+          required: false
+          description: "Ist-Betriebszustand."
+        }
+        {
           key: Equipment.normallyInService
           type: bool
           required: false
           description: "Normalbetriebszustand."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
         }
         {
           key: BusbarSection.ipMax

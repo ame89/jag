@@ -26,6 +26,12 @@
           description: "Freitext-Beschreibung."
         }
         {
+          key: IdentifiedObject.energyIdentCodeEic
+          type: string
+          required: false
+          description: "European Identification Code (EIC), falls für diesen Abschnitt vergeben."
+        }
+        {
           key: ConductingEquipment.BaseVoltage
           type: "Referenz -> BaseVoltage"
           required: false
@@ -42,6 +48,18 @@
           type: bool
           required: false
           description: "Aggregations-Flag."
+        }
+        {
+          key: Equipment.inService
+          type: bool
+          required: false
+          description: "Ist-Betriebszustand."
+        }
+        {
+          key: Equipment.normallyInService
+          type: bool
+          required: false
+          description: "Normalbetriebszustand."
         }
         {
           key: Equipment.OperationalLimitSet
@@ -121,6 +139,12 @@
           required: false
           description: "Geografischer Verlauf (Referenz auf Location/PositionPoint-Kette)."
         }
+        {
+          key: PowerSystemResource.AssetDatasheet
+          type: "Referenz -> Datasheet"
+          required: false
+          description: "Verweis auf ein Typenblatt/Datenblatt des verlegten Kabeltyps (Katalog/Asset-Metadatum)."
+        }
       ]
     }
     Line: {
@@ -158,6 +182,18 @@
           type: string
           required: false
           description: "Menschlich lesbarer Name."
+        }
+        {
+          key: IdentifiedObject.description
+          type: string
+          required: false
+          description: "Freitext-Beschreibung."
+        }
+        {
+          key: IdentifiedObject.shortName
+          type: string
+          required: false
+          description: "Kurzbezeichnung."
         }
         {
           key: Equipment.EquipmentContainer

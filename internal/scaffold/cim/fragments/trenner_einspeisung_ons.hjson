@@ -1,0 +1,13 @@
+{
+  id: "@Trenner-Einspeisung"
+  class: Disconnector
+  connects: [
+    TODO_KNOTEN_MS_EXTERN // globale ID, siehe die einspeisende Kabel-Datei
+    "@K-Trafo-Primaer"
+  ]
+  attributes: {
+    mRID: "ONS-1-Trenner-1" // IdentifiedObject.mRID
+    name: "Trenner Einspeisung" // IdentifiedObject.name
+    normalOpen: false // Switch.normalOpen — im Normalbetrieb geschlossen (Nullohm-Verbindung)
+  }
+}

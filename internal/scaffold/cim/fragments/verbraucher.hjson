@@ -1,0 +1,13 @@
+{
+  id: "@Verbraucher-1"
+  class: EnergyConsumer
+  connects: [
+    "@Hausanschluss" // Terminal 2 (Richtung Erde/GND) wird bei Single-Terminal-Equipment implizit ergänzt
+  ]
+  attributes: {
+    mRID: "Haus-1-Verbraucher-1" // IdentifiedObject.mRID
+    name: "Hausanschluss Verbraucher" // IdentifiedObject.name
+    p: 0.005 // EnergyConsumer.p — 5 kW Bezugsleistung
+    q: 0.001 // EnergyConsumer.q — 1 kvar Blindleistung
+  }
+}
