@@ -11,7 +11,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/ame89/jag/internal/mastr"
+	"github.com/ame89/jag/pkg/mastr"
 )
 
 func main() {

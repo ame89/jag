@@ -26,7 +26,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/ame89/jag/internal/mastr"
+	"github.com/ame89/jag/pkg/mastr"
 )
 
 func main() {
