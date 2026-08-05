@@ -159,7 +159,24 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 
 	// regionOf resolves the fully-chained GeographicalRegion name for a
 	// Substation ID, or "" if any link of the chain is absent.
+	//
+	// 2026-08-05 fix: checks ownIdx's own literal "region" attribute
+	// FIRST — this is how internal/importer/hjson's emitStation/emitHouse
+	// stages a Fachmodell file's own "region" Sachdaten value (derived,
+	// per that package's applyRegionPrecedence, from either an explicit
+	// attribute or the file's own directory path/Netzregion — see
+	// Konzept.md's Netzregion decision). Real CIM/CGMES data never
+	// carries a bare "region" attribute (only the dotted
+	// "Class.attribute" CIM keys checked below), so this can never
+	// misfire against genuine CIM input; without it, an HJSON-authored
+	// Substation/Building's region silently reverted to "" (falling back
+	// to defaultNetzregion on the next export) since this function used
+	// to look at the CIM GeographicalRegion chain exclusively, which a
+	// reimported HJSON file has no reason to carry.
 	regionOf := func(subID string) string {
+		if region := ownIdx.Attr(subID, string(AttributeKeyRegion)); region != "" {
+			return region
+		}
 		sg, ok := subGeoOf[subID]
 		if !ok {
 			return ""
@@ -173,8 +190,12 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 
 	// subRegionOf resolves the SubGeographicalRegion's own name for a
 	// Substation ID (one level finer-grained than regionOf), or "" if
-	// Substation.Region is absent.
+	// Substation.Region is absent. Same literal-"subregion"-first
+	// override as regionOf above, and for the same reason.
 	subRegionOf := func(subID string) string {
+		if subregion := ownIdx.Attr(subID, string(AttributeKeySubRegion)); subregion != "" {
+			return subregion
+		}
 		sg, ok := subGeoOf[subID]
 		if !ok {
 			return ""
@@ -182,11 +203,27 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 		return subGeoIdx.Attr(sg, "IdentifiedObject.name")
 	}
 
+	// containerNameOf prefers a literal "name" attribute (see regionOf's
+	// doc comment above for the identical rationale — this is how
+	// internal/importer/hjson's addAttributes stages a Fachmodell file's
+	// own "name" Sachdaten value) over ownIdx.NameOf's
+	// "IdentifiedObject.name" lookup, which emitStation always sets to a
+	// fallback of the container's own ID whether or not the file carried
+	// an explicit name. Without this override, a reimported HJSON
+	// Substation/Building's real name was always silently replaced by its
+	// ID.
+	containerNameOf := func(id string) string {
+		if name := ownIdx.Attr(id, "name"); name != "" {
+			return name
+		}
+		return ownIdx.NameOf(id)
+	}
+
 	subSet := map[string]bool{}
 	for _, id := range subIDs {
 		subSet[id] = true
 		res.Containers = append(res.Containers, coremodel.Container{ID: id, Type: classifyStationType(ownIdx, psrIdx, id)})
-		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: ownIdx.NameOf(id)})
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: containerNameOf(id)})
 		if region := regionOf(id); region != "" {
 			res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyRegion, Value: region})
 		}
@@ -198,7 +235,7 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 	for _, id := range houseIDs {
 		houseSet[id] = true
 		res.Containers = append(res.Containers, coremodel.Container{ID: id, Type: ContainerTypeHouse})
-		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: ownIdx.NameOf(id)})
+		res.Attributes = append(res.Attributes, coremodel.Attribute{OwnerID: id, Key: AttributeKeyName, Value: containerNameOf(id)})
 	}
 
 	// Step 1: reverse lookup from the batch's own Substation IDs.

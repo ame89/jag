@@ -607,25 +607,6 @@ func buildBusbarSections(
 		return
 	}
 
-	// branches: the station's own root-level equipment (including any
-	// station-internal ACLineSegment folded into this file — see
-	// classifyInternalACLines/buildStation) plus one further entry per
-	// Bay. Only used below to find every piece of Equipment actually
-	// wired to a busbar's now-directly-known Node, regardless of which
-	// Bay (or the root) it lives in.
-	type branch struct {
-		key string
-		eqs []coremodel.Equipment
-	}
-	rootBranchEqs := append([]coremodel.Equipment(nil), rootEqs...)
-	for _, ac := range ownedACLines {
-		rootBranchEqs = append(rootBranchEqs, s.EquipmentByContainer[ac.ID]...)
-	}
-	branches := []branch{{key: "__root__", eqs: rootBranchEqs}}
-	for _, bay := range bayContainers {
-		branches = append(branches, branch{key: bay.ID, eqs: s.EquipmentByContainer[bay.ID]})
-	}
-
 	// busbarNodeOf looks up eqID's AttributeKeyBusbarNode value (see that
 	// key's doc comment) — the exact canonical Node ID a BusbarSection
 	// Equipment was merged into during Pass A, no guessing involved.
@@ -642,13 +623,30 @@ func buildBusbarSections(
 
 	for _, bbContainer := range busbarContainers {
 		// Original BusbarSection Equipment objects for this busbar
-		// container — both the source of the container's real Node (via
-		// AttributeKeyBusbarNode) and a best-effort source of per-section
-		// Attributes/Satellites/Geometry (see below: there is no reliable
-		// way to know which original BusbarSection corresponded to which
-		// connecting Equipment, so original sections are paired
-		// index-wise, in ID order, with the connecting Equipment found
-		// below).
+		// container — the source of both the container's real Node (via
+		// AttributeKeyBusbarNode) AND the Sections themselves.
+		//
+		// 2026-08-05 change: this used to instead enumerate every piece
+		// of Equipment station-wide actually wired to the busbar's Node
+		// (any Bay/root-level branch, not just this container's own
+		// children) and emit one Section per *connecting* Equipment,
+		// index-paired best-effort with these origSections for their
+		// Attributes/Satellites/Geometry. That inflated the Section
+		// count far beyond the original CIM BusbarSection count whenever
+		// several Equipment (cables, transformers, switches, ...)
+		// happened to connect directly to one busbar Node with only a
+		// single real BusbarSection object (confirmed via a MiniGrid
+		// CGMES3 export/reimport round-trip: 11 real BusbarSection
+		// equipment across 10 busbars became 39 synthetic Sections).
+		// It's unnecessary: a connecting Equipment's own connects/From/To
+		// entry is resolved directly against the busbar's shortened Node
+		// ID by resolveConnectTarget/shortenID, never against a Section
+		// — Sections are purely informational (Attributes/Satellites/
+		// Geometry), see this type's doc comment in
+		// internal/importer/hjson/types.go. So this now emits exactly
+		// one Section per *original* BusbarSection Equipment, keeping
+		// the exported Section count equal to the real one, with no
+		// connects-resolution impact at all.
 		origSections := append([]coremodel.Equipment(nil), s.EquipmentByContainer[bbContainer.ID]...)
 		sort.Slice(origSections, func(i, j int) bool { return origSections[i].ID < origSections[j].ID })
 
@@ -669,33 +667,25 @@ func buildBusbarSections(
 
 		bb := importhjson.Busbar{ID: shortenID(rootID, node)}
 
-		// Find every piece of Equipment (station-wide) actually wired to
-		// this node, sorted by ID for determinism, and assign each its
-		// own Section (informational Attributes/Satellites/Geometry
-		// only — see this function's doc comment).
-		var connecting []coremodel.Equipment
-		for _, br := range branches {
-			for _, eq := range br.eqs {
-				edge, ok := s.Edges[eq.ID]
-				if !ok {
-					continue
-				}
-				if edge.Terminal1NodeID == node || edge.Terminal2NodeID == node {
-					connecting = append(connecting, eq)
-				}
-			}
-		}
-		sort.Slice(connecting, func(i, j int) bool { return connecting[i].ID < connecting[j].ID })
+		// Container-level geometry: Phase 2's BuildGeometry associates a
+		// busbar's Location with the busbar CONTAINER's own ID (see
+		// geometry.go's containerIDs param), not with any individual
+		// BusbarSection Equipment ID — so look it up via bbContainer.ID,
+		// not orig.ID. Fixed 2026-08-05 (pf_cim_beispiel_ortsnetz
+		// round-trip regression: busbar geometry silently vanished on
+		// reimport because ownerGeometryPoint(s, orig.ID) never matched
+		// any GeometryByOwner entry for a container-owned point). Every
+		// Section shares this same point, mirroring hoistCommonSectionName's
+		// "one physical busbar" reasoning for names.
+		bbGeom := ownerGeometryPoint(s, bbContainer.ID)
 
-		for i := range connecting {
+		for i, orig := range origSections {
 			sectionShortID := strconv.Itoa(i + 1)
-
-			sec := importhjson.BusbarSectionEntry{ID: sectionShortID}
-			if i < len(origSections) {
-				orig := origSections[i].ID
-				sec.Attributes = buildAttributes(s, orig, true)
-				sec.Satellites = buildSatellites(s, orig)
-				sec.Geometry = firstGeometryPoint(buildGeometryPath(s, orig))
+			sec := importhjson.BusbarSectionEntry{
+				ID:         sectionShortID,
+				Attributes: buildAttributes(s, orig.ID, true),
+				Satellites: buildSatellites(s, orig.ID),
+				Geometry:   bbGeom,
 			}
 			bb.Sections = append(bb.Sections, sec)
 		}
@@ -781,7 +771,7 @@ func buildEquipment(s *Snapshot, rootID, eqID string, fromDirPath string, nodeKa
 	}
 	eq.Attributes = buildAttributes(s, eqID, true)
 	eq.Satellites = buildSatellites(s, eqID)
-	eq.Geometry = firstGeometryPoint(buildGeometryPath(s, eqID))
+	eq.Geometry = ownerGeometryPoint(s, eqID)
 	if eq.Class == "Meter" {
 		extractMeterSchedules(&eq)
 	}
@@ -1064,11 +1054,12 @@ func isGeometrySatelliteClass(class string) bool {
 // data is expected to have distinct sequence numbers). This is hjson2's
 // own, more user-friendly replacement for exporting each PositionPoint as
 // a separate raw "{class: \"PositionPoint\", attributes: {...}}" satellite
-// block (see build.go's isGeometrySatelliteClass): the caller renders the
-// result either as a single {lat, lon} object (Equipment/BusbarSectionEntry
-// — see firstGeometryPoint) or as the full ordered array (Segment/
-// ACLineSegment, which alone represents a route rather than a single
-// point).
+// block (see build.go's isGeometrySatelliteClass). Only Segment/
+// ACLineSegment (which represents a route, not a single point) uses this
+// directly — Equipment/BusbarSectionEntry point geometry uses
+// ownerGeometryPoint instead (see its doc comment for why: this function's
+// multi-hop satellite walk can over-reach to a different object's own
+// Location).
 func buildGeometryPath(s *Snapshot, ownerID string) []importhjson.GeometryPoint {
 	type point struct {
 		seq      int
@@ -1117,18 +1108,29 @@ func buildGeometryPath(s *Snapshot, ownerID string) []importhjson.GeometryPoint 
 	return out
 }
 
-// firstGeometryPoint returns points' first (lowest-sequenceNumber) entry,
-// or nil if empty — used wherever only a single point is wanted
-// (Equipment/BusbarSectionEntry), consistent with Konzept.md's Geometrie
-// decision that a Node/Equipment's own Geometry is always a single point,
-// never a path (only a Segment/ACLine's route is a path, see
-// buildGeometryPath's own doc comment).
-func firstGeometryPoint(points []importhjson.GeometryPoint) *importhjson.GeometryPoint {
-	if len(points) == 0 {
-		return nil
+// ownerGeometryPoint returns ownerID's own single-point Geometry as
+// determined by Phase 2 (internal/impl/common/geometry.go's BuildGeometry,
+// persisted in s.GeometryByOwner), or nil if Phase 2 found none.
+//
+// Equipment and BusbarSectionEntry geometry MUST be sourced from here, not
+// from buildGeometryPath's satellite-walk reconstruction: buildGeometryPath
+// finds any "PositionPoint" reachable via the generic, multi-hop Sachdaten
+// satellite walk (sachdaten.go), which can reach a PositionPoint belonging
+// to a genuinely different object several hops away (e.g. a Meter with no
+// own Location, reached via EndDevice.UsagePoint -> UsagePoint's own
+// UsagePointLocation -> PositionPoint) — broader than the direct/reverse
+// 2-hop PowerSystemResource.Location association BuildGeometry requires.
+// Using buildGeometryPath for point geometry therefore fabricated Geometry
+// for equipment Phase 2 correctly determined has none, which reappeared as
+// a spurious GEOM diff after an HJSON export/reimport round trip (observed
+// 2026-08 on examples/nsc's Meter equipment). Segment/ACLineSegment routes
+// still use buildGeometryPath directly since they need the full ordered
+// multi-point path, which single-owner Geometry storage doesn't capture.
+func ownerGeometryPoint(s *Snapshot, ownerID string) *importhjson.GeometryPoint {
+	if g, ok := s.GeometryByOwner[ownerID]; ok {
+		return &importhjson.GeometryPoint{Lat: g.Lat, Lon: g.Lon}
 	}
-	p := points[0]
-	return &p
+	return nil
 }
 
 // parseAttrInt/parseAttrFloat parse an hjson2-decoded satellite attribute

@@ -87,6 +87,16 @@ func BuildNodesAndEdges(resolved map[string]EquipmentTerminals, nodeOnlyIDs map[
 		})
 	}
 
+	// GND may also end up in nodeIDs via an explicit reference (e.g. a
+	// Segment/ACLineSegment or GroundDisconnector genuinely wired to GND,
+	// as opposed to the single-terminal-fallback path below) — always
+	// treat it as the one shared virtual node, never as an ordinary real
+	// node, regardless of how it was referenced.
+	if nodeIDs[GNDNodeID] {
+		needsGND = true
+		delete(nodeIDs, GNDNodeID)
+	}
+
 	var nodeIDList []string
 	for id := range nodeIDs {
 		nodeIDList = append(nodeIDList, id)

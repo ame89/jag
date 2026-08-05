@@ -102,15 +102,52 @@ func buildGeometryBatch(store staging.Store, version uint64, batch []string, own
 	}
 	locationOf := make(map[string]string, len(batch)) // ownerID -> locationID
 	var locationIDs []string
+	var missing []string // owners with no forward PowerSystemResource.Location
 	for _, ownerID := range batch {
+		found := false
 		for _, r := range byOwner[ownerID] {
 			if r.Attribute == "PowerSystemResource.Location" && r.IsReference {
 				locationOf[ownerID] = r.Value
 				locationIDs = append(locationIDs, r.Value)
+				found = true
 				break
 			}
 		}
+		if !found {
+			missing = append(missing, ownerID)
+		}
 	}
+
+	// Hop 1b (2026-08-05 fix): CIM's PowerSystemResource<->Location
+	// association is bidirectional — real CGMES data has been observed
+	// (MicroGrid_NL_BusCoupler's GL profile) modeling it the OTHER way
+	// round, as a "Location.PowerSystemResources" reference FROM the
+	// Location object TO the owner, instead of (or in addition to) the
+	// owner's own "PowerSystemResource.Location". Hop 1 above only ever
+	// found the forward direction, silently losing Geometry for any
+	// owner using only the inverse direction (confirmed missing entirely
+	// from BuildGeometry's output, yet still reachable — and therefore
+	// round-tripped back in — via internal/impl/common/sachdaten.go's
+	// bidirectional satellite walk, which is what first surfaced this gap
+	// as a spurious HJSON export/reimport diff). For owners still without
+	// a Location after hop 1, look up any Location referencing them in
+	// reverse.
+	if len(missing) > 0 {
+		reverseRefs, err := getReferencesToAnyIndexed(store, version, missing)
+		if err != nil {
+			return fmt.Errorf("common: fetching reverse Location references: %w", err)
+		}
+		for _, ownerID := range missing {
+			for _, r := range reverseRefs[ownerID] {
+				if r.Class == "Location" && r.Attribute == "Location.PowerSystemResources" {
+					locationOf[ownerID] = r.ID
+					locationIDs = append(locationIDs, r.ID)
+					break
+				}
+			}
+		}
+	}
+
 	if len(locationIDs) == 0 {
 		return nil
 	}

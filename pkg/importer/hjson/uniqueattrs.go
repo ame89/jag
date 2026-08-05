@@ -95,8 +95,18 @@ var UniqueAttrClass = map[string]string{
 	"connectionKind":                 "PowerTransformerEnd",
 	"maxApparentPowerFactor":         "PowerTransformerEnd",
 	"PowerTransformer":               "PowerTransformerEnd",
-	"ratedS":                         "PowerTransformerEnd",
-	"tculControlMode":                "RatioTapChanger",
+	// NOTE: "ratedS" is deliberately NOT mapped here (removed 2026-08-05),
+	// same category as the r0/x/x0 exclusion above — real CGMES data
+	// (examples/cgmes3/MiniGrid) also carries a bare "ratedS" directly on
+	// RotatingMachine/AsynchronousMachine (RotatingMachine.ratedS), not
+	// just PowerTransformerEnd.ratedS. With the entry present, any
+	// equipment's own-class "ratedS" (e.g. AsynchronousMachine.ratedS)
+	// was wrongly reconstructed as "PowerTransformerEnd.ratedS" on
+	// reimport — a wrong reconstruction, not just a missed
+	// simplification, found via a MiniGrid CGMES3 export/reimport
+	// round-trip diff. Removing it falls back to the safe
+	// "<ownClass>.ratedS" reconstruction for every class.
+	"tculControlMode": "RatioTapChanger",
 	"controlEnabled":                 "RegulatingCondEq",
 	"discrete":                       "RegulatingControl",
 	"enabled":                        "RegulatingControl",
