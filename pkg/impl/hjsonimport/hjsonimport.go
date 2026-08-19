@@ -26,6 +26,19 @@ type Options struct {
 	StationWorkers int
 	PassBWorkers   int
 	PassBBatchSize int
+	// KeepStaging skips the automatic staging_records/staging_errors
+	// cleanup that otherwise runs once the import completes without a
+	// fatal error (see common.FinalizeImport's doc comment) — set this if
+	// the resulting database will also be used with internal/jag2nsc's
+	// Postgres-only NSC_SUPPORT feature, which reads staging_records
+	// directly.
+	KeepStaging bool
+	// SkipVacuum skips the automatic VACUUM that otherwise runs by
+	// default once the import completes without a fatal error (see
+	// common.FinalizeImport's doc comment) — VACUUM reclaims freelist
+	// pages left behind by DeleteVersion/Pass A/B's delete-then-insert
+	// churn, but rewrites the entire database file.
+	SkipVacuum bool
 }
 
 // Summary is the aggregate result of one full import run, returned so
@@ -227,6 +240,16 @@ func Run(root, dbPath string, opts Options) (Summary, error) {
 	summary.Elapsed = time.Since(overallStart)
 
 	fmt.Printf("\nattributes: %d, geometries: %d\n", sink.attrCount, sink.geomCount)
+
+	// Pass A/B completed without a fatal error: clean up this version's
+	// ephemeral import-time bookkeeping (import_flag, and — unless
+	// opts.KeepStaging — staging_records/staging_errors) the same way
+	// cmd/phase2check does. See common.FinalizeImport's doc comment for
+	// why this cleanup is opt-out rather than unconditional.
+	if err := common.FinalizeImport(store, flags, result.Version, opts.KeepStaging, opts.SkipVacuum); err != nil {
+		return summary, err
+	}
+
 	fmt.Printf("total: %s\n", summary.Elapsed)
 
 	return summary, nil

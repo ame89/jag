@@ -19,11 +19,13 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver; also used directly by Vacuum
 
 	"github.com/ame89/jag/pkg/importer/model"
 )
@@ -612,6 +614,36 @@ func (s *StagingStore) DeleteVersion(version uint64) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("postgres: committing version deletion: %w", err)
+	}
+	return nil
+}
+
+// Vacuum implements staging.Store.Vacuum (see its doc comment for the
+// rationale). PostgreSQL's VACUUM cannot run as a prepared statement
+// (Postgres rejects utility commands like VACUUM/CREATE DATABASE under
+// the extended query protocol database/sql normally uses) and must run
+// outside any transaction block — so this bypasses database/sql's
+// Exec/Tx entirely, grabs the single underlying pgx connection via the
+// standard database/sql "Raw" escape hatch, and issues VACUUM directly
+// against it in "simple protocol" mode (the documented way to run such a
+// statement through pgx: parameters are inlined, no prepared-statement
+// caching involved, avoiding pgx's "cannot insert multiple commands into
+// a prepared statement" restriction entirely).
+func (s *StagingStore) Vacuum() error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: acquiring connection for VACUUM: %w", err)
+	}
+	defer conn.Close()
+
+	err = conn.Raw(func(driverConn any) error {
+		pgxConn := driverConn.(*stdlib.Conn).Conn()
+		_, err := pgxConn.Exec(ctx, `VACUUM`, pgx.QueryExecModeSimpleProtocol)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("postgres: running VACUUM: %w", err)
 	}
 	return nil
 }

@@ -592,6 +592,18 @@ func (s *StagingStore) DeleteVersion(version uint64) error {
 	return nil
 }
 
+// Vacuum implements staging.Store.Vacuum (see its doc comment for the
+// rationale). SQLite's VACUUM rebuilds the entire database file into a
+// fresh, minimal file with no free pages — it cannot run inside a
+// transaction and needs roughly as much free disk space as the database
+// currently occupies while it runs.
+func (s *StagingStore) Vacuum() error {
+	if _, err := s.db.Exec(`VACUUM`); err != nil {
+		return fmt.Errorf("sqlite: running VACUUM: %w", err)
+	}
+	return nil
+}
+
 // placeholders builds "?, ?, ..." for n placeholders.
 func placeholders(n int) string {
 	ph := make([]string, n)

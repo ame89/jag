@@ -246,6 +246,23 @@ func main() {
 	}
 	os.Remove(dbPath) // fresh run each time, avoid stale data from a previous invocation
 
+	// JAG_KEEP_STAGING=1 skips the automatic staging_records/staging_errors
+	// cleanup that otherwise runs after a successful import (see
+	// common.FinalizeImport's doc comment) — set this if the resulting
+	// database will also be used with internal/jag2nsc's Postgres-only
+	// NSC_SUPPORT feature (BuildTopology/BuildNetworkGroup/BuildCircuits),
+	// which reads staging_records directly and would otherwise silently
+	// produce empty/incomplete results once it's gone.
+	keepStaging := os.Getenv("JAG_KEEP_STAGING") == "1"
+	// JAG_SKIP_VACUUM=1 skips the automatic VACUUM that otherwise runs
+	// after a successful import by default (see common.FinalizeImport's
+	// doc comment) — VACUUM reclaims freelist pages left behind by
+	// DeleteVersion/Pass A/B's delete-then-insert churn (measured at
+	// ~76% of file size on the lasttest-200 fixture), but rewrites the
+	// entire database file, so very large databases may want to skip it
+	// for a given import and run it separately/later instead.
+	skipVacuum := os.Getenv("JAG_SKIP_VACUUM") == "1"
+
 	// JAG_CHUNK_SIZE controls the cursor-based batch size (staging.Store.
 	// GetByClass "limit" argument) used by every per-class scan below
 	// (BuildContainers, ResolveTerminals, the ConnectivityNode
@@ -553,10 +570,14 @@ func main() {
 		fmt.Printf("  [%s] %s: %s\n", v.Rule, v.ObjectID, v.Message)
 	}
 
-	// Flags are purely ephemeral import-time bookkeeping (see flags.go) —
-	// clear them now that the final completeness scans have run.
-	if err := flags.ClearFlags(result.Version); err != nil {
-		fmt.Fprintf(os.Stderr, "clearing import flags: %v\n", err)
+	// Flags (import_flag) and, unless JAG_KEEP_STAGING=1, the raw Phase 1
+	// staging_records/staging_errors rows are purely ephemeral import-time
+	// bookkeeping (see flags.go, staging.Store.DeleteVersion) — clean them
+	// up now that the final completeness scans have run. See
+	// common.FinalizeImport's doc comment for why staging cleanup is
+	// skippable (internal/jag2nsc's NSC_SUPPORT feature still needs it).
+	if err := common.FinalizeImport(store, flags, result.Version, keepStaging, skipVacuum); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 

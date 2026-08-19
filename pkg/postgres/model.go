@@ -58,19 +58,33 @@ CREATE TABLE IF NOT EXISTS model_edge (
     terminal2_node_id TEXT NOT NULL
 );
 
+-- entity_id is the (large, ever-growing) dictionary of every distinct
+-- Node/Edge/Container/Equipment TEXT ID ever seen — see pkg/sqlite/
+-- model.go's identical schema comment and entity_id.go for the full
+-- rationale (lazy get-or-create; scoped only to model_edge_endpoint/
+-- model_attribute_value/model_geometry, the three tables explicitly
+-- identified as the DB's biggest size drivers).
+CREATE TABLE IF NOT EXISTS entity_id (
+    id          BIGSERIAL PRIMARY KEY,
+    external_id TEXT NOT NULL UNIQUE
+);
+
 -- Bridge table for GetEdgesByNodeIDs, one row per Edge terminal (2 rows per
 -- Edge) — an indexed node_id lookup instead of a
 -- "terminal1_node_id IN (...) OR terminal2_node_id IN (...)" join, which
 -- can defeat index usage (see Idee.md's graph-traversal performance
--- guidance, explicitly decided before any code existed).
+-- guidance, explicitly decided before any code existed). node_id_key/
+-- edge_id_key reference entity_id(id) instead of storing the raw TEXT id
+-- (see entity_id.go) — this table has no external readers outside
+-- model.go, so no compatibility VIEW is needed.
 CREATE TABLE IF NOT EXISTS model_edge_endpoint (
-    node_id TEXT NOT NULL,
-    edge_id TEXT NOT NULL
+    node_id_key BIGINT NOT NULL REFERENCES entity_id(id),
+    edge_id_key BIGINT NOT NULL REFERENCES entity_id(id)
 );
 CREATE INDEX IF NOT EXISTS idx_model_edge_endpoint_by_node
-    ON model_edge_endpoint (node_id);
+    ON model_edge_endpoint (node_id_key);
 CREATE INDEX IF NOT EXISTS idx_model_edge_endpoint_by_edge
-    ON model_edge_endpoint (edge_id);
+    ON model_edge_endpoint (edge_id_key);
 
 CREATE TABLE IF NOT EXISTS model_container (
     id        TEXT PRIMARY KEY,
@@ -80,12 +94,26 @@ CREATE TABLE IF NOT EXISTS model_container (
 CREATE INDEX IF NOT EXISTS idx_model_container_by_parent
     ON model_container (parent_id);
 
-CREATE TABLE IF NOT EXISTS model_geometry (
-    owner_id   TEXT PRIMARY KEY,
-    owner_kind TEXT NOT NULL,
-    lat        DOUBLE PRECISION NOT NULL,
-    lon        DOUBLE PRECISION NOT NULL
+-- Physical storage keyed by entity_id (see entity_id.go) instead of the
+-- raw TEXT owner_id; the model_geometry VIEW below resolves owner_id_key
+-- back to the TEXT id so every existing reader keeps seeing the exact
+-- same (owner_id, owner_kind, lat, lon) shape without any change.
+CREATE TABLE IF NOT EXISTS model_geometry_value (
+    owner_id_key BIGINT PRIMARY KEY REFERENCES entity_id(id),
+    owner_kind   TEXT NOT NULL,
+    lat          DOUBLE PRECISION NOT NULL,
+    lon          DOUBLE PRECISION NOT NULL
 );
+
+-- Read-only compatibility view — see pkg/sqlite/model.go's identical view
+-- for the full rationale. Writes must go through model_geometry_value
+-- (via entityIDCache-resolved owner_id_key) instead. PostgreSQL has no
+-- "CREATE VIEW IF NOT EXISTS"; CREATE OR REPLACE VIEW is the idempotent
+-- equivalent (safe to run on every Open).
+CREATE OR REPLACE VIEW model_geometry AS
+SELECT e.external_id AS owner_id, g.owner_kind, g.lat, g.lon
+FROM model_geometry_value g
+JOIN entity_id e ON e.id = g.owner_id_key;
 
 -- attribute_key is the (small, slowly-growing, curated) dictionary of
 -- every distinct Sachdaten key name ever seen — see internal/sqlite/
@@ -98,30 +126,33 @@ CREATE TABLE IF NOT EXISTS attribute_key (
 
 -- seq disambiguates multi-value keys (see coremodel.Attribute's doc
 -- comment) — several rows can legitimately share the same owner_id+key_id.
--- Physical storage lives here (renamed from the old model_attribute); the
--- model_attribute VIEW below resolves key_id back to the key name so every
--- existing reader keeps seeing the exact same (owner_id, key, seq, value)
--- shape without any change.
+-- Physical storage lives here, keyed by entity_id (see entity_id.go)
+-- instead of the raw TEXT owner_id; the model_attribute VIEW below
+-- resolves both owner_id_key and key_id back to their TEXT/name form so
+-- every existing reader keeps seeing the exact same
+-- (owner_id, key, seq, value) shape without any change.
 CREATE TABLE IF NOT EXISTS model_attribute_value (
-    owner_id TEXT NOT NULL,
-    key_id   BIGINT NOT NULL REFERENCES attribute_key(id),
-    seq      INTEGER NOT NULL,
-    value    TEXT NOT NULL,
-    PRIMARY KEY (owner_id, key_id, seq)
+    owner_id_key BIGINT NOT NULL REFERENCES entity_id(id),
+    key_id       BIGINT NOT NULL REFERENCES attribute_key(id),
+    seq          INTEGER NOT NULL,
+    value        TEXT NOT NULL,
+    PRIMARY KEY (owner_id_key, key_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_model_attribute_value_by_owner
-    ON model_attribute_value (owner_id);
+    ON model_attribute_value (owner_id_key);
 
 -- Read-only compatibility view — see internal/sqlite/model.go's identical
 -- view for the full rationale. Writes must go through
--- model_attribute_value (via attributeKeyCache-resolved key_id) instead.
+-- model_attribute_value (via attributeKeyCache/entityIDCache-resolved
+-- key_id/owner_id_key) instead.
 -- PostgreSQL has no "CREATE VIEW IF NOT EXISTS"; CREATE OR REPLACE VIEW is
 -- the idempotent equivalent (safe to run on every Open, unlike a plain
 -- CREATE VIEW which would error on the second run).
 CREATE OR REPLACE VIEW model_attribute AS
-SELECT v.owner_id, k.name AS key, v.seq, v.value
+SELECT e.external_id AS owner_id, k.name AS key, v.seq, v.value
 FROM model_attribute_value v
-JOIN attribute_key k ON k.id = v.key_id;
+JOIN attribute_key k ON k.id = v.key_id
+JOIN entity_id e ON e.id = v.owner_id_key;
 
 -- owner_id disambiguates independent per-station (or Pass B) perspectives
 -- on the SAME raw node_id — see internal/sqlite/model.go's identical
@@ -173,6 +204,10 @@ type ModelStore struct {
 	keyCacheOnce sync.Once
 	keyCache     *attributeKeyCache
 	keyCacheErr  error
+
+	entityCacheOnce sync.Once
+	entityCache     *entityIDCache
+	entityCacheErr  error
 }
 
 // Model returns a ModelStore sharing this StagingStore's database
@@ -190,6 +225,16 @@ func (m *ModelStore) attributeKeys() (*attributeKeyCache, error) {
 		m.keyCache, m.keyCacheErr = loadAttributeKeyCache(m.db)
 	})
 	return m.keyCache, m.keyCacheErr
+}
+
+// entityIDs returns this ModelStore's entityIDCache, loading it from the
+// entity_id table on first use — same lazy rationale as attributeKeys()
+// above.
+func (m *ModelStore) entityIDs() (*entityIDCache, error) {
+	m.entityCacheOnce.Do(func() {
+		m.entityCache, m.entityCacheErr = loadEntityIDCache(m.db)
+	})
+	return m.entityCache, m.entityCacheErr
 }
 
 // --- Equipment ---------------------------------------------------------
@@ -553,24 +598,39 @@ func (m *ModelStore) UpsertGeometry(geometries []coremodel.Geometry) error {
 	if len(geometries) == 0 {
 		return nil
 	}
+	cache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertGeometryTx(tx, geometries)
+		return upsertGeometryTx(tx, geometries, cache)
 	})
 }
 
 // upsertGeometryTx is UpsertGeometry's chunked-insert body — see
-// upsertEquipmentTx's doc comment for why this is factored out.
-func upsertGeometryTx(tx *sql.Tx, geometries []coremodel.Geometry) error {
+// upsertEquipmentTx's doc comment for why this is factored out. cache
+// resolves each Geometry's OwnerID to its entity_id.id (see entity_id.go).
+func upsertGeometryTx(tx *sql.Tx, geometries []coremodel.Geometry, cache *entityIDCache) error {
 	if len(geometries) == 0 {
 		return nil
 	}
 	geometries = dedupeLast(geometries, func(g coremodel.Geometry) string { return g.OwnerID })
+
+	ownerIDs := make([]string, len(geometries))
+	for i, g := range geometries {
+		ownerIDs[i] = g.OwnerID
+	}
 	for start := 0; start < len(geometries); start += insertChunkSize {
 		end := min(start+insertChunkSize, len(geometries))
 		chunk := geometries[start:end]
 
+		ownerKeys, err := cache.resolveMany(tx, ownerIDs[start:end])
+		if err != nil {
+			return fmt.Errorf("postgres: resolving entity ids for geometry chunk: %w", err)
+		}
+
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO model_geometry (owner_id, owner_kind, lat, lon) VALUES ")
+		sb.WriteString("INSERT INTO model_geometry_value (owner_id_key, owner_kind, lat, lon) VALUES ")
 		args := make([]any, 0, len(chunk)*4)
 		for i, g := range chunk {
 			if i > 0 {
@@ -579,9 +639,9 @@ func upsertGeometryTx(tx *sql.Tx, geometries []coremodel.Geometry) error {
 			sb.WriteString("(")
 			sb.WriteString(placeholders(4))
 			sb.WriteString(")")
-			args = append(args, g.OwnerID, string(g.OwnerKind), g.Lat, g.Lon)
+			args = append(args, ownerKeys[g.OwnerID], string(g.OwnerKind), g.Lat, g.Lon)
 		}
-		sb.WriteString(` ON CONFLICT (owner_id) DO UPDATE SET
+		sb.WriteString(` ON CONFLICT (owner_id_key) DO UPDATE SET
 			owner_kind = excluded.owner_kind, lat = excluded.lat, lon = excluded.lon`)
 
 		if _, err := tx.Exec(rebind(sb.String()), args...); err != nil {
@@ -633,8 +693,9 @@ func (m *ModelStore) GetEdgesByNodeIDs(nodeIDs []string) ([]coremodel.Edge, erro
 	query := rebind(fmt.Sprintf(`
 		SELECT DISTINCT e.equipment_id, e.terminal1_node_id, e.terminal2_node_id
 		FROM model_edge_endpoint ep
-		JOIN model_edge e ON e.equipment_id = ep.edge_id
-		WHERE ep.node_id IN (%s)
+		JOIN entity_id ent ON ent.id = ep.edge_id_key
+		JOIN model_edge e ON e.equipment_id = ent.external_id
+		WHERE ep.node_id_key IN (SELECT id FROM entity_id WHERE external_id IN (%s))
 	`, placeholders(len(nodeIDs))))
 
 	rows, err := m.db.Query(query, idArgs(nodeIDs)...)
@@ -696,16 +757,16 @@ func (m *ModelStore) GetReachableNodes(rootNodeIDs []string) ([]string, error) {
 		return nil, nil
 	}
 	query := rebind(fmt.Sprintf(`
-		WITH RECURSIVE reachable(node_id) AS (
-			%s
+		WITH RECURSIVE reachable(node_key) AS (
+			SELECT id FROM entity_id WHERE external_id IN (%s)
 			UNION
-			SELECT ep2.node_id
+			SELECT ep2.node_id_key
 			FROM reachable r
-			JOIN model_edge_endpoint ep1 ON ep1.node_id = r.node_id
-			JOIN model_edge_endpoint ep2 ON ep2.edge_id = ep1.edge_id
+			JOIN model_edge_endpoint ep1 ON ep1.node_id_key = r.node_key
+			JOIN model_edge_endpoint ep2 ON ep2.edge_id_key = ep1.edge_id_key
 		)
-		SELECT node_id FROM reachable
-	`, unionAllSelects(len(rootNodeIDs))))
+		SELECT ent.external_id FROM reachable r JOIN entity_id ent ON ent.id = r.node_key
+	`, placeholders(len(rootNodeIDs))))
 
 	rows, err := m.db.Query(query, idArgs(rootNodeIDs)...)
 	if err != nil {
@@ -780,14 +841,20 @@ func (m *ModelStore) UpsertEdges(edges []coremodel.Edge) error {
 	if len(edges) == 0 {
 		return nil
 	}
+	cache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertEdgesTx(tx, edges)
+		return upsertEdgesTx(tx, edges, cache)
 	})
 }
 
 // upsertEdgesTx is UpsertEdges' 3-step chunked body — see
-// upsertEquipmentTx's doc comment for why this is factored out.
-func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
+// upsertEquipmentTx's doc comment for why this is factored out. cache
+// resolves each Edge's own ID and both terminal Node IDs to their
+// entity_id.id (see entity_id.go).
+func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge, cache *entityIDCache) error {
 	if len(edges) == 0 {
 		return nil
 	}
@@ -818,19 +885,41 @@ func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
 			}
 		}
 
+		// Resolve every ID this chunk touches (edge IDs + both terminal
+		// node IDs) to its entity_id.id up front, in one batched
+		// resolveMany call, so steps 2/3 below work with plain int64 keys.
+		var allIDs []string
+		for _, e := range chunk {
+			allIDs = append(allIDs, e.EquipmentID)
+			if e.Terminal1NodeID != "" {
+				allIDs = append(allIDs, e.Terminal1NodeID)
+			}
+			if e.Terminal2NodeID != "" {
+				allIDs = append(allIDs, e.Terminal2NodeID)
+			}
+		}
+		keys, err := cache.resolveMany(tx, allIDs)
+		if err != nil {
+			return fmt.Errorf("postgres: resolving entity ids for edge chunk: %w", err)
+		}
+
 		// 2) Clear any existing endpoint rows for this chunk's edges in
-		// one statement (WHERE edge_id IN (...)) instead of one DELETE
-		// per edge.
+		// one statement (WHERE edge_id_key IN (...)) instead of one
+		// DELETE per edge.
 		{
-			equipmentIDs := make([]string, len(chunk))
+			edgeKeys := make([]int64, len(chunk))
 			for i, e := range chunk {
-				equipmentIDs[i] = e.EquipmentID
+				edgeKeys[i] = keys[e.EquipmentID]
 			}
 			query := rebind(fmt.Sprintf(
-				`DELETE FROM model_edge_endpoint WHERE edge_id IN (%s)`,
-				placeholders(len(equipmentIDs)),
+				`DELETE FROM model_edge_endpoint WHERE edge_id_key IN (%s)`,
+				placeholders(len(edgeKeys)),
 			))
-			if _, err := tx.Exec(query, idArgs(equipmentIDs)...); err != nil {
+			args := make([]any, len(edgeKeys))
+			for i, k := range edgeKeys {
+				args[i] = k
+			}
+			if _, err := tx.Exec(query, args...); err != nil {
 				return fmt.Errorf("postgres: clearing edge_endpoint rows for chunk: %w", err)
 			}
 		}
@@ -839,10 +928,11 @@ func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
 		// multi-row statement.
 		{
 			var sb strings.Builder
-			sb.WriteString("INSERT INTO model_edge_endpoint (node_id, edge_id) VALUES ")
+			sb.WriteString("INSERT INTO model_edge_endpoint (node_id_key, edge_id_key) VALUES ")
 			args := make([]any, 0, len(chunk)*2)
 			first := true
 			for _, e := range chunk {
+				edgeKey := keys[e.EquipmentID]
 				for _, nodeID := range []string{e.Terminal1NodeID, e.Terminal2NodeID} {
 					if nodeID == "" {
 						continue
@@ -854,7 +944,7 @@ func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
 					sb.WriteString("(")
 					sb.WriteString(placeholders(2))
 					sb.WriteString(")")
-					args = append(args, nodeID, e.EquipmentID)
+					args = append(args, keys[nodeID], edgeKey)
 				}
 			}
 			if !first { // at least one endpoint row to insert
@@ -1087,8 +1177,12 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 	if err != nil {
 		return err
 	}
+	entityCache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertAttributesTx(tx, attributes, cache)
+		return upsertAttributesTx(tx, attributes, cache, entityCache)
 	})
 }
 
@@ -1097,8 +1191,10 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 // resolves each Attribute's Key to its attribute_key.id (creating a new
 // attribute_key row on first-ever use of a name — see attribute_key.go),
 // resolved once up front (Pass 0) so Pass 1/2 below work with plain
-// int64 key IDs, same chunking strategy as before.
-func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *attributeKeyCache) error {
+// int64 key IDs, same chunking strategy as before. entityCache likewise
+// resolves each Attribute's OwnerID to its entity_id.id (see
+// entity_id.go), also resolved up front in Pass 0.
+func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *attributeKeyCache, entityCache *entityIDCache) error {
 	if len(attributes) == 0 {
 		return nil
 	}
@@ -1110,7 +1206,8 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 
 	// Pass 0: resolve every distinct Key name to its attribute_key.id
 	// once, avoiding redundant cache lookups for repeated keys within
-	// this batch.
+	// this batch. Likewise resolve every distinct OwnerID to its
+	// entity_id.id in one batched resolveMany call (see entity_id.go).
 	keyIDs := make(map[coremodel.AttributeKey]int64, len(attributes))
 	for _, a := range attributes {
 		if _, ok := keyIDs[a.Key]; ok {
@@ -1121,6 +1218,14 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 			return fmt.Errorf("postgres: resolving attribute key %q: %w", a.Key, err)
 		}
 		keyIDs[a.Key] = id
+	}
+	ownerIDs := make([]string, len(attributes))
+	for i, a := range attributes {
+		ownerIDs[i] = a.OwnerID
+	}
+	ownerKeys, err := entityCache.resolveMany(tx, ownerIDs)
+	if err != nil {
+		return fmt.Errorf("postgres: resolving entity ids for attribute owners: %w", err)
 	}
 
 	// Pass 1: determine the distinct (owner,key) pairs touched (in
@@ -1142,7 +1247,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 		chunk := pairs[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("DELETE FROM model_attribute_value WHERE (owner_id, key_id) IN (")
+		sb.WriteString("DELETE FROM model_attribute_value WHERE (owner_id_key, key_id) IN (")
 		args := make([]any, 0, len(chunk)*2)
 		for i, p := range chunk {
 			if i > 0 {
@@ -1151,7 +1256,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 			sb.WriteString("(")
 			sb.WriteString(placeholders(2))
 			sb.WriteString(")")
-			args = append(args, p.owner, p.keyID)
+			args = append(args, ownerKeys[p.owner], p.keyID)
 		}
 		sb.WriteString(")")
 		if _, err := tx.Exec(rebind(sb.String()), args...); err != nil {
@@ -1183,7 +1288,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 		chunk := rows[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO model_attribute_value (owner_id, key_id, seq, value) VALUES ")
+		sb.WriteString("INSERT INTO model_attribute_value (owner_id_key, key_id, seq, value) VALUES ")
 		args := make([]any, 0, len(chunk)*4)
 		for i, r := range chunk {
 			if i > 0 {
@@ -1192,7 +1297,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 			sb.WriteString("(")
 			sb.WriteString(placeholders(4))
 			sb.WriteString(")")
-			args = append(args, r.owner, r.keyID, r.seq, r.value)
+			args = append(args, ownerKeys[r.owner], r.keyID, r.seq, r.value)
 		}
 		if _, err := tx.Exec(rebind(sb.String()), args...); err != nil {
 			return fmt.Errorf("postgres: inserting attribute chunk (%d rows): %w", len(chunk), err)
@@ -1226,6 +1331,10 @@ func (m *ModelStore) PersistBatch(
 	if err != nil {
 		return err
 	}
+	entityCache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	return withTx(m.db, func(tx *sql.Tx) error {
 		if err := upsertContainersTx(tx, containers); err != nil {
 			return err
@@ -1236,13 +1345,13 @@ func (m *ModelStore) PersistBatch(
 		if err := upsertNodesTx(tx, nodes); err != nil {
 			return err
 		}
-		if err := upsertEdgesTx(tx, edges); err != nil {
+		if err := upsertEdgesTx(tx, edges, entityCache); err != nil {
 			return err
 		}
-		if err := upsertAttributesTx(tx, attributes, cache); err != nil {
+		if err := upsertAttributesTx(tx, attributes, cache, entityCache); err != nil {
 			return err
 		}
-		if err := upsertGeometryTx(tx, geometries); err != nil {
+		if err := upsertGeometryTx(tx, geometries, entityCache); err != nil {
 			return err
 		}
 		if err := upsertElectricalGroupsTx(tx, groups); err != nil {

@@ -24,7 +24,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
 	coremodel "github.com/ame89/jag/pkg/core/model"
@@ -58,25 +57,47 @@ CREATE TABLE IF NOT EXISTS model_edge (
     terminal2_node_id TEXT NOT NULL
 );
 
+-- entity_id is the (large, ever-growing) dictionary of every distinct
+-- Node/Edge/Container/Equipment TEXT ID ever seen, normalizing what used
+-- to be a raw TEXT id repeated on every model_edge_endpoint,
+-- model_attribute_value, and model_geometry row — these three tables were
+-- explicitly identified as the DB's biggest size drivers (tens of
+-- thousands of rows each, each repeating the same handful-of-bytes-long
+-- TEXT ID). Deliberately scoped to just these three tables: model_node,
+-- model_edge, model_container, and model_equipment keep their own TEXT
+-- primary keys unchanged (a much larger, riskier change with little
+-- additional size benefit, since those tables have only one ID column
+-- each). IDs are never deleted (mirrors attribute_key.go's
+-- attributeKeyCache — see entity_id.go's entityIDCache doc comment) and
+-- are resolved lazily (get-or-create on first use), not migrated in bulk.
+CREATE TABLE IF NOT EXISTS entity_id (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE
+);
+
 -- Bridge table for GetEdgesByNodeIDs, one row per Edge terminal (2 rows per
 -- Edge) — an indexed node_id lookup instead of a
 -- "terminal1_node_id IN (...) OR terminal2_node_id IN (...)" join, which
 -- can defeat index usage (see Idee.md's graph-traversal performance
--- guidance, explicitly decided before any code existed).
+-- guidance, explicitly decided before any code existed). node_id_key/
+-- edge_id_key reference entity_id(id) instead of storing the raw TEXT id
+-- (see entity_id.go) — this table has no external readers outside
+-- model.go, so no compatibility VIEW is needed; GetEdgesByNodeIDs and
+-- GetReachableNodes translate back to TEXT IDs via an explicit JOIN.
 CREATE TABLE IF NOT EXISTS model_edge_endpoint (
-    node_id TEXT NOT NULL,
-    edge_id TEXT NOT NULL
+    node_id_key INTEGER NOT NULL REFERENCES entity_id(id),
+    edge_id_key INTEGER NOT NULL REFERENCES entity_id(id)
 );
 CREATE INDEX IF NOT EXISTS idx_model_edge_endpoint_by_node
-    ON model_edge_endpoint (node_id);
+    ON model_edge_endpoint (node_id_key);
 -- UpsertEdges' delete-then-insert re-upsert strategy runs
--- "DELETE FROM model_edge_endpoint WHERE edge_id = ?" once per Edge;
--- without an index on edge_id this is a full table scan per delete, i.e.
--- O(n^2) for n Edges (found via a lasttest-200 load-test hang: 84600
+-- "DELETE FROM model_edge_endpoint WHERE edge_id_key = ?" once per Edge;
+-- without an index on edge_id_key this is a full table scan per delete,
+-- i.e. O(n^2) for n Edges (found via a lasttest-200 load-test hang: 84600
 -- Edges effectively never finished). This index makes that delete a plain
 -- indexed lookup, restoring the intended per-Edge O(log n) cost.
 CREATE INDEX IF NOT EXISTS idx_model_edge_endpoint_by_edge
-    ON model_edge_endpoint (edge_id);
+    ON model_edge_endpoint (edge_id_key);
 
 CREATE TABLE IF NOT EXISTS model_container (
     id        TEXT PRIMARY KEY,
@@ -86,12 +107,27 @@ CREATE TABLE IF NOT EXISTS model_container (
 CREATE INDEX IF NOT EXISTS idx_model_container_by_parent
     ON model_container (parent_id);
 
-CREATE TABLE IF NOT EXISTS model_geometry (
-    owner_id   TEXT PRIMARY KEY,
-    owner_kind TEXT NOT NULL,
-    lat        REAL NOT NULL,
-    lon        REAL NOT NULL
+-- Physical storage keyed by entity_id (see entity_id.go) instead of the
+-- raw TEXT owner_id, normalizing the (formerly repeated-per-row) ID; the
+-- model_geometry VIEW below resolves owner_id_key back to the TEXT id so
+-- every existing reader (GetByIDsGeometry, InBoundingBox, AllGeometry,
+-- external tools like cmd/tmpdiff/jag2nsc's views.sql) keeps seeing the
+-- exact same (owner_id, owner_kind, lat, lon) shape without any change.
+CREATE TABLE IF NOT EXISTS model_geometry_value (
+    owner_id_key INTEGER PRIMARY KEY REFERENCES entity_id(id),
+    owner_kind   TEXT NOT NULL,
+    lat          REAL NOT NULL,
+    lon          REAL NOT NULL
 );
+
+-- Read-only compatibility view, deliberately named/shaped like the pre-
+-- normalization table so all existing SELECTs keep working unchanged.
+-- Writes must go through model_geometry_value (via entityIDCache-resolved
+-- owner_id_key) instead — see model.go's UpsertGeometry/upsertGeometryTx.
+CREATE VIEW IF NOT EXISTS model_geometry AS
+SELECT e.external_id AS owner_id, g.owner_kind, g.lat, g.lon
+FROM model_geometry_value g
+JOIN entity_id e ON e.id = g.owner_id_key;
 
 -- attribute_key is the (small, slowly-growing, curated — see Konzept.md's
 -- Sachdaten section) dictionary of every distinct Sachdaten key name ever
@@ -107,30 +143,34 @@ CREATE TABLE IF NOT EXISTS attribute_key (
 
 -- seq disambiguates multi-value keys (see coremodel.Attribute's doc
 -- comment) — several rows can legitimately share the same owner_id+key_id.
--- Physical storage lives here (renamed from the old model_attribute); the
--- model_attribute VIEW below resolves key_id back to the key name so every
--- existing reader (GetByOwnerIDs, AllAttributes, external tools like
--- cmd/tmpdiff) keeps seeing the exact same (owner_id, key, seq, value)
--- shape without any change.
+-- Physical storage lives here, keyed by entity_id (see entity_id.go)
+-- instead of the raw TEXT owner_id (normalizing what used to be a
+-- repeated-per-row ID, on top of the already-normalized key_id); the
+-- model_attribute VIEW below resolves both owner_id_key and key_id back
+-- to their TEXT/name form so every existing reader (GetByOwnerIDs,
+-- AllAttributes, external tools like cmd/tmpdiff) keeps seeing the exact
+-- same (owner_id, key, seq, value) shape without any change.
 CREATE TABLE IF NOT EXISTS model_attribute_value (
-    owner_id TEXT NOT NULL,
-    key_id   INTEGER NOT NULL REFERENCES attribute_key(id),
-    seq      INTEGER NOT NULL,
-    value    TEXT NOT NULL,
-    PRIMARY KEY (owner_id, key_id, seq)
+    owner_id_key INTEGER NOT NULL REFERENCES entity_id(id),
+    key_id       INTEGER NOT NULL REFERENCES attribute_key(id),
+    seq          INTEGER NOT NULL,
+    value        TEXT NOT NULL,
+    PRIMARY KEY (owner_id_key, key_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_model_attribute_value_by_owner
-    ON model_attribute_value (owner_id);
+    ON model_attribute_value (owner_id_key);
 
 -- Read-only compatibility view, deliberately named like the pre-
 -- normalization table so all existing SELECTs (application code and
 -- ad-hoc tooling alike) keep working unchanged. Writes must go through
--- model_attribute_value (via attributeKeyCache-resolved key_id) instead —
--- see model.go's UpsertAttributes/upsertAttributesTx.
+-- model_attribute_value (via attributeKeyCache/entityIDCache-resolved
+-- key_id/owner_id_key) instead — see model.go's
+-- UpsertAttributes/upsertAttributesTx.
 CREATE VIEW IF NOT EXISTS model_attribute AS
-SELECT v.owner_id, k.name AS key, v.seq, v.value
+SELECT e.external_id AS owner_id, k.name AS key, v.seq, v.value
 FROM model_attribute_value v
-JOIN attribute_key k ON k.id = v.key_id;
+JOIN attribute_key k ON k.id = v.key_id
+JOIN entity_id e ON e.id = v.owner_id_key;
 
 -- owner_id disambiguates independent per-station (or Pass B) perspectives
 -- on the SAME raw node_id: a ConnectivityNode legitimately referenced by
@@ -200,6 +240,10 @@ type ModelStore struct {
 	keyCacheOnce sync.Once
 	keyCache     *attributeKeyCache
 	keyCacheErr  error
+
+	entityCacheOnce sync.Once
+	entityCache     *entityIDCache
+	entityCacheErr  error
 }
 
 // Model returns a ModelStore sharing this StagingStore's database
@@ -217,6 +261,16 @@ func (m *ModelStore) attributeKeys() (*attributeKeyCache, error) {
 		m.keyCache, m.keyCacheErr = loadAttributeKeyCache(m.db)
 	})
 	return m.keyCache, m.keyCacheErr
+}
+
+// entityIDs returns this ModelStore's entityIDCache, loading it from the
+// entity_id table on first use (not eagerly in Model(), for the same
+// reason as attributeKeys() above).
+func (m *ModelStore) entityIDs() (*entityIDCache, error) {
+	m.entityCacheOnce.Do(func() {
+		m.entityCache, m.entityCacheErr = loadEntityIDCache(m.db)
+	})
+	return m.entityCache, m.entityCacheErr
 }
 
 // --- Equipment ---------------------------------------------------------
@@ -528,22 +582,28 @@ func (m *ModelStore) UpsertGeometry(geometries []coremodel.Geometry) error {
 	if len(geometries) == 0 {
 		return nil
 	}
+	cache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertGeometryTx(tx, geometries)
+		return upsertGeometryTx(tx, geometries, cache)
 	})
 }
 
 // upsertGeometryTx is UpsertGeometry's insert body — see
-// upsertEquipmentTx's doc comment for why this is factored out.
-func upsertGeometryTx(tx *sql.Tx, geometries []coremodel.Geometry) error {
+// upsertEquipmentTx's doc comment for why this is factored out. cache
+// resolves each Geometry's OwnerID to its entity_id.id (creating a new
+// entity_id row on first-ever use of an ID — see entity_id.go).
+func upsertGeometryTx(tx *sql.Tx, geometries []coremodel.Geometry, cache *entityIDCache) error {
 	if len(geometries) == 0 {
 		return nil
 	}
 	stmt, err := tx.Prepare(`
-			INSERT INTO model_geometry (owner_id, owner_kind, lat, lon) VALUES (?, ?, ?, ?)
-			ON CONFLICT (owner_id) DO UPDATE SET
+			INSERT INTO model_geometry_value (owner_id_key, owner_kind, lat, lon) VALUES (?, ?, ?, ?)
+			ON CONFLICT (owner_id_key) DO UPDATE SET
 				owner_kind = excluded.owner_kind, lat = excluded.lat, lon = excluded.lon
 		`)
 	if err != nil {
@@ -552,7 +612,11 @@ func upsertGeometryTx(tx *sql.Tx, geometries []coremodel.Geometry) error {
 	defer stmt.Close()
 
 	for _, g := range geometries {
-		if _, err := stmt.Exec(g.OwnerID, string(g.OwnerKind), g.Lat, g.Lon); err != nil {
+		ownerKey, err := cache.resolve(tx, g.OwnerID)
+		if err != nil {
+			return fmt.Errorf("sqlite: resolving entity id for geometry owner %q: %w", g.OwnerID, err)
+		}
+		if _, err := stmt.Exec(ownerKey, string(g.OwnerKind), g.Lat, g.Lon); err != nil {
 			return fmt.Errorf("sqlite: upserting geometry for %s: %w", g.OwnerID, err)
 		}
 	}
@@ -601,8 +665,9 @@ func (m *ModelStore) GetEdgesByNodeIDs(nodeIDs []string) ([]coremodel.Edge, erro
 	query := fmt.Sprintf(`
 		SELECT DISTINCT e.equipment_id, e.terminal1_node_id, e.terminal2_node_id
 		FROM model_edge_endpoint ep
-		JOIN model_edge e ON e.equipment_id = ep.edge_id
-		WHERE ep.node_id IN (%s)
+		JOIN entity_id ent ON ent.id = ep.edge_id_key
+		JOIN model_edge e ON e.equipment_id = ent.external_id
+		WHERE ep.node_id_key IN (SELECT id FROM entity_id WHERE external_id IN (%s))
 	`, placeholders(len(nodeIDs)))
 
 	rows, err := m.db.Query(query, idArgs(nodeIDs)...)
@@ -663,16 +728,16 @@ func (m *ModelStore) GetReachableNodes(rootNodeIDs []string) ([]string, error) {
 		return nil, nil
 	}
 	query := fmt.Sprintf(`
-		WITH RECURSIVE reachable(node_id) AS (
-			%s
+		WITH RECURSIVE reachable(node_key) AS (
+			SELECT id FROM entity_id WHERE external_id IN (%s)
 			UNION
-			SELECT ep2.node_id
+			SELECT ep2.node_id_key
 			FROM reachable r
-			JOIN model_edge_endpoint ep1 ON ep1.node_id = r.node_id
-			JOIN model_edge_endpoint ep2 ON ep2.edge_id = ep1.edge_id
+			JOIN model_edge_endpoint ep1 ON ep1.node_id_key = r.node_key
+			JOIN model_edge_endpoint ep2 ON ep2.edge_id_key = ep1.edge_id_key
 		)
-		SELECT node_id FROM reachable
-	`, unionAllSelects(len(rootNodeIDs)))
+		SELECT ent.external_id FROM reachable r JOIN entity_id ent ON ent.id = r.node_key
+	`, placeholders(len(rootNodeIDs)))
 
 	rows, err := m.db.Query(query, idArgs(rootNodeIDs)...)
 	if err != nil {
@@ -737,16 +802,22 @@ func (m *ModelStore) UpsertEdges(edges []coremodel.Edge) error {
 	if len(edges) == 0 {
 		return nil
 	}
+	cache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertEdgesTx(tx, edges)
+		return upsertEdgesTx(tx, edges, cache)
 	})
 }
 
 // upsertEdgesTx is UpsertEdges' insert body — see upsertEquipmentTx's doc
-// comment for why this is factored out.
-func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
+// comment for why this is factored out. cache resolves each Edge's own ID
+// and both terminal Node IDs to their entity_id.id (creating new
+// entity_id rows on first-ever use of an ID — see entity_id.go).
+func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge, cache *entityIDCache) error {
 	if len(edges) == 0 {
 		return nil
 	}
@@ -761,13 +832,13 @@ func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
 	}
 	defer edgeStmt.Close()
 
-	deleteEndpointsStmt, err := tx.Prepare(`DELETE FROM model_edge_endpoint WHERE edge_id = ?`)
+	deleteEndpointsStmt, err := tx.Prepare(`DELETE FROM model_edge_endpoint WHERE edge_id_key = ?`)
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing edge_endpoint delete: %w", err)
 	}
 	defer deleteEndpointsStmt.Close()
 
-	insertEndpointStmt, err := tx.Prepare(`INSERT INTO model_edge_endpoint (node_id, edge_id) VALUES (?, ?)`)
+	insertEndpointStmt, err := tx.Prepare(`INSERT INTO model_edge_endpoint (node_id_key, edge_id_key) VALUES (?, ?)`)
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing edge_endpoint insert: %w", err)
 	}
@@ -777,14 +848,22 @@ func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge) error {
 		if _, err := edgeStmt.Exec(e.EquipmentID, e.Terminal1NodeID, e.Terminal2NodeID); err != nil {
 			return fmt.Errorf("sqlite: upserting edge %s: %w", e.EquipmentID, err)
 		}
-		if _, err := deleteEndpointsStmt.Exec(e.EquipmentID); err != nil {
+		edgeKey, err := cache.resolve(tx, e.EquipmentID)
+		if err != nil {
+			return fmt.Errorf("sqlite: resolving entity id for edge %q: %w", e.EquipmentID, err)
+		}
+		if _, err := deleteEndpointsStmt.Exec(edgeKey); err != nil {
 			return fmt.Errorf("sqlite: clearing edge_endpoint rows for %s: %w", e.EquipmentID, err)
 		}
 		for _, nodeID := range []string{e.Terminal1NodeID, e.Terminal2NodeID} {
 			if nodeID == "" {
 				continue
 			}
-			if _, err := insertEndpointStmt.Exec(nodeID, e.EquipmentID); err != nil {
+			nodeKey, err := cache.resolve(tx, nodeID)
+			if err != nil {
+				return fmt.Errorf("sqlite: resolving entity id for node %q: %w", nodeID, err)
+			}
+			if _, err := insertEndpointStmt.Exec(nodeKey, edgeKey); err != nil {
 				return fmt.Errorf("sqlite: inserting edge_endpoint for %s/%s: %w", nodeID, e.EquipmentID, err)
 			}
 		}
@@ -998,28 +1077,34 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 	if err != nil {
 		return err
 	}
+	entityCache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertAttributesTx(tx, attributes, cache)
+		return upsertAttributesTx(tx, attributes, cache, entityCache)
 	})
 }
 
 // upsertAttributesTx is UpsertAttributes' insert body — see
 // upsertEquipmentTx's doc comment for why this is factored out. cache
 // resolves each Attribute's Key to its attribute_key.id (creating a new
-// attribute_key row on first-ever use of a name — see attribute_key.go).
-func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *attributeKeyCache) error {
+// attribute_key row on first-ever use of a name — see attribute_key.go);
+// entityCache likewise resolves each Attribute's OwnerID to its
+// entity_id.id (see entity_id.go).
+func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *attributeKeyCache, entityCache *entityIDCache) error {
 	if len(attributes) == 0 {
 		return nil
 	}
-	deleteStmt, err := tx.Prepare(`DELETE FROM model_attribute_value WHERE owner_id = ? AND key_id = ?`)
+	deleteStmt, err := tx.Prepare(`DELETE FROM model_attribute_value WHERE owner_id_key = ? AND key_id = ?`)
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing attribute delete: %w", err)
 	}
 	defer deleteStmt.Close()
 
-	insertStmt, err := tx.Prepare(`INSERT INTO model_attribute_value (owner_id, key_id, seq, value) VALUES (?, ?, ?, ?)`)
+	insertStmt, err := tx.Prepare(`INSERT INTO model_attribute_value (owner_id_key, key_id, seq, value) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing attribute insert: %w", err)
 	}
@@ -1037,9 +1122,13 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 		if err != nil {
 			return fmt.Errorf("sqlite: resolving attribute key %q: %w", a.Key, err)
 		}
+		ownerID, err := entityCache.resolve(tx, a.OwnerID)
+		if err != nil {
+			return fmt.Errorf("sqlite: resolving entity id for attribute owner %q: %w", a.OwnerID, err)
+		}
 		ok := ownerKey{a.OwnerID, keyID}
 		if !cleared[ok] {
-			if _, err := deleteStmt.Exec(a.OwnerID, keyID); err != nil {
+			if _, err := deleteStmt.Exec(ownerID, keyID); err != nil {
 				return fmt.Errorf("sqlite: clearing attribute rows for %s.%s: %w", a.OwnerID, a.Key, err)
 			}
 			cleared[ok] = true
@@ -1048,7 +1137,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *att
 		if err != nil {
 			return fmt.Errorf("sqlite: encoding attribute value for %s.%s: %w", a.OwnerID, a.Key, err)
 		}
-		if _, err := insertStmt.Exec(a.OwnerID, keyID, seq[ok], string(encoded)); err != nil {
+		if _, err := insertStmt.Exec(ownerID, keyID, seq[ok], string(encoded)); err != nil {
 			return fmt.Errorf("sqlite: upserting attribute %s.%s: %w", a.OwnerID, a.Key, err)
 		}
 		seq[ok]++
@@ -1079,6 +1168,10 @@ func (m *ModelStore) PersistBatch(
 	if err != nil {
 		return err
 	}
+	entityCache, err := m.entityIDs()
+	if err != nil {
+		return err
+	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
@@ -1091,13 +1184,13 @@ func (m *ModelStore) PersistBatch(
 		if err := upsertNodesTx(tx, nodes); err != nil {
 			return err
 		}
-		if err := upsertEdgesTx(tx, edges); err != nil {
+		if err := upsertEdgesTx(tx, edges, entityCache); err != nil {
 			return err
 		}
-		if err := upsertAttributesTx(tx, attributes, cache); err != nil {
+		if err := upsertAttributesTx(tx, attributes, cache, entityCache); err != nil {
 			return err
 		}
-		if err := upsertGeometryTx(tx, geometries); err != nil {
+		if err := upsertGeometryTx(tx, geometries, entityCache); err != nil {
 			return err
 		}
 		if len(groups) > 0 {
@@ -1136,20 +1229,4 @@ func idArgs(ids []string) []any {
 		args[i] = id
 	}
 	return args
-}
-
-// unionAllSelects builds "SELECT ? UNION ALL SELECT ? ..." (n terms) for
-// use as the non-recursive seed of a "WITH RECURSIVE cte(col) AS (...)"
-// query, where the caller-supplied root ID list has to be spliced in as
-// bound parameters rather than a literal VALUES row set (found to be
-// necessary 2026-07-14: SQLite's modernc.org driver rejected the
-// "FROM (VALUES (?), (?)) AS roots(id)" table-alias-with-column-list form
-// this was originally written with — a plain UNION ALL of single-column
-// SELECTs is more portable and needs no such aliasing).
-func unionAllSelects(n int) string {
-	terms := make([]string, n)
-	for i := range terms {
-		terms[i] = "SELECT ?"
-	}
-	return strings.Join(terms, " UNION ALL ")
 }

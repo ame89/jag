@@ -112,4 +112,20 @@ type Store interface {
 	// staging data has been consumed into the node-edge model in Phase 2)
 	// — staging is a transient scratch area, not permanent storage.
 	DeleteVersion(version uint64) error
+
+	// Vacuum reclaims disk space left behind by DeleteVersion and the
+	// many delete-then-insert re-upsert patterns used throughout Phase
+	// 2/3 (UpsertEdges' endpoint maintenance, UpsertAttributes,
+	// UpsertElectricalGroups, ...). Neither SQLite nor PostgreSQL return
+	// deleted pages to the filesystem on their own — they go onto an
+	// internal freelist for reuse by future writes within the same file,
+	// so the file itself never shrinks without this call. A measurement
+	// against the lasttest-200 fixture found ~76% of the on-disk file
+	// consisted of exactly such unused freelist pages (SQLite's
+	// PRAGMA freelist_count) — a far bigger lever than normalizing
+	// repeated TEXT IDs (see entity_id.go), so this is run by default at
+	// the end of every import (see common.FinalizeImport), not opt-in.
+	// Safe/idempotent to call on an already-compact database (a no-op
+	// other than the scan itself).
+	Vacuum() error
 }

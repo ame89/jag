@@ -72,6 +72,8 @@ func optionsFromEnv() (hjsonimport.Options, error) {
 	if opts.PassBBatchSize, err = intEnv("JAG_PASS_B_BATCH_SIZE", 0); err != nil {
 		return opts, err
 	}
+	opts.KeepStaging = os.Getenv("JAG_KEEP_STAGING") == "1"
+	opts.SkipVacuum = os.Getenv("JAG_SKIP_VACUUM") == "1"
 	return opts, nil
 }
 
