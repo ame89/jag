@@ -47,7 +47,12 @@ func openTestStore(t *testing.T) *StagingStore {
 		"staging_records", "staging_errors", "staging_version_counter",
 		"catalog_attributes",
 		"model_equipment", "model_node", "model_edge", "model_edge_endpoint",
-		"model_container", "model_geometry", "model_attribute",
+		"model_container", "model_geometry",
+		// model_attribute_value and attribute_key must be truncated together
+		// (a single TRUNCATE statement) since attribute_key.id is referenced
+		// by model_attribute_value.key_id via a foreign key - truncating them
+		// in separate statements fails even in the FK-child-first order.
+		"model_attribute_value, attribute_key",
 		"model_electrical_group", "import_flag",
 	} {
 		if _, err := s.db.Exec("TRUNCATE TABLE " + table); err != nil {

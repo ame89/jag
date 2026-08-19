@@ -49,16 +49,24 @@ DROP VIEW IF EXISTS jag2nsc_display_name CASCADE;
 DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_edge ON model_edge;
 DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_edge_delete ON model_edge;
 DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_equipment ON model_equipment;
-DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_cim_class ON model_attribute;
-DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_cim_class_delete ON model_attribute;
-DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_busbar_node ON model_attribute;
-DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_busbar_node_delete ON model_attribute;
+-- These four used to be defined ON model_attribute directly, back when it was a plain
+-- table. model_attribute is now a compatibility VIEW (see internal/sqlite,internal/postgres
+-- model.go's attribute_key/model_attribute_value normalization) - PostgreSQL only allows
+-- INSTEAD OF triggers on views, never AFTER row triggers, so these must fire on the real
+-- underlying table, model_attribute_value, instead (see jag2nsc_key_id() below for how the
+-- WHEN clauses adapt from comparing a text `key` column to comparing the normalized
+-- `key_id` column).
+DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_cim_class ON model_attribute_value;
+DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_cim_class_delete ON model_attribute_value;
+DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_busbar_node ON model_attribute_value;
+DROP TRIGGER IF EXISTS trg_jag2nsc_sync_model_attribute_busbar_node_delete ON model_attribute_value;
 DROP FUNCTION IF EXISTS jag2nsc_terminal_idx_refresh(text) CASCADE;
 DROP FUNCTION IF EXISTS jag2nsc_terminal_idx_refresh_busbar(text) CASCADE;
 DROP TABLE IF EXISTS jag2nsc_terminal_idx CASCADE;
 
 DROP FUNCTION IF EXISTS jag2nsc_id(text);
 DROP FUNCTION IF EXISTS jag2nsc_attr_text(text) CASCADE;
+DROP FUNCTION IF EXISTS jag2nsc_key_id(text);
 
 DROP TYPE IF EXISTS container_type CASCADE;
 DROP TYPE IF EXISTS device_type CASCADE;
@@ -99,6 +107,20 @@ CREATE FUNCTION jag2nsc_attr_text(raw text) RETURNS text
     LANGUAGE sql IMMUTABLE PARALLEL SAFE AS
 $$
 SELECT CASE WHEN raw IS NULL THEN NULL ELSE trim(both '"' from raw) END;
+$$;
+
+-- Resolves a Sachdaten key *name* (e.g. 'cim_class') to its normalized attribute_key.id
+-- (see internal/sqlite,internal/postgres model.go's attribute_key/model_attribute_value
+-- schema). Used by the trigger WHEN clauses below, which now run ON model_attribute_value
+-- and therefore see NEW.key_id/OLD.key_id (bigint) instead of the old NEW.key/OLD.key
+-- (text) - a plain function call is allowed in a trigger WHEN clause (unlike a bare
+-- subquery), so this keeps the WHEN-clause row filter as cheap as before. STABLE (not
+-- IMMUTABLE): attribute_key rows are created dynamically at import time, so the mapping
+-- from name to id is not fixed across the session/transaction.
+CREATE FUNCTION jag2nsc_key_id(p_name text) RETURNS bigint
+    LANGUAGE sql STABLE PARALLEL SAFE AS
+$$
+SELECT id FROM attribute_key WHERE name = p_name;
 $$;
 
 -- Best-effort display name per owner_id (equipment OR container): JAG stores both a
@@ -397,15 +419,15 @@ END;
 $$;
 CREATE TRIGGER trg_jag2nsc_sync_model_attribute_cim_class
     AFTER INSERT OR UPDATE
-    ON model_attribute
+    ON model_attribute_value
     FOR EACH ROW
-    WHEN (NEW.key = 'cim_class')
+    WHEN (NEW.key_id = jag2nsc_key_id('cim_class'))
 EXECUTE FUNCTION jag2nsc_trg_sync_model_attribute_cim_class();
 CREATE TRIGGER trg_jag2nsc_sync_model_attribute_cim_class_delete
     AFTER DELETE
-    ON model_attribute
+    ON model_attribute_value
     FOR EACH ROW
-    WHEN (OLD.key = 'cim_class')
+    WHEN (OLD.key_id = jag2nsc_key_id('cim_class'))
 EXECUTE FUNCTION jag2nsc_trg_sync_model_attribute_cim_class();
 
 -- Busbar-terminal synthesis (see comment above jag2nsc_terminal_idx): re-derives the single
@@ -439,15 +461,15 @@ END;
 $$;
 CREATE TRIGGER trg_jag2nsc_sync_model_attribute_busbar_node
     AFTER INSERT OR UPDATE
-    ON model_attribute
+    ON model_attribute_value
     FOR EACH ROW
-    WHEN (NEW.key = 'busbar_node_id')
+    WHEN (NEW.key_id = jag2nsc_key_id('busbar_node_id'))
 EXECUTE FUNCTION jag2nsc_trg_sync_model_attribute_busbar_node();
 CREATE TRIGGER trg_jag2nsc_sync_model_attribute_busbar_node_delete
     AFTER DELETE
-    ON model_attribute
+    ON model_attribute_value
     FOR EACH ROW
-    WHEN (OLD.key = 'busbar_node_id')
+    WHEN (OLD.key_id = jag2nsc_key_id('busbar_node_id'))
 EXECUTE FUNCTION jag2nsc_trg_sync_model_attribute_busbar_node();
 
 -- One-off backfill for rows that already existed before the triggers were installed.

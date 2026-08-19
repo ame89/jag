@@ -93,17 +93,44 @@ CREATE TABLE IF NOT EXISTS model_geometry (
     lon        REAL NOT NULL
 );
 
+-- attribute_key is the (small, slowly-growing, curated — see Konzept.md's
+-- Sachdaten section) dictionary of every distinct Sachdaten key name ever
+-- seen, normalizing what used to be a raw TEXT key repeated on every
+-- model_attribute row. Keys are never deleted (Sachdaten keys only ever
+-- grow, see attribute_key.go's attributeKeyCache doc comment) and are
+-- resolved lazily (get-or-create on first use of a new name), not
+-- pre-seeded from a fixed Go enum — the enum is intentionally not closed.
+CREATE TABLE IF NOT EXISTS attribute_key (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
 -- seq disambiguates multi-value keys (see coremodel.Attribute's doc
--- comment) — several rows can legitimately share the same owner_id+key.
-CREATE TABLE IF NOT EXISTS model_attribute (
+-- comment) — several rows can legitimately share the same owner_id+key_id.
+-- Physical storage lives here (renamed from the old model_attribute); the
+-- model_attribute VIEW below resolves key_id back to the key name so every
+-- existing reader (GetByOwnerIDs, AllAttributes, external tools like
+-- cmd/tmpdiff) keeps seeing the exact same (owner_id, key, seq, value)
+-- shape without any change.
+CREATE TABLE IF NOT EXISTS model_attribute_value (
     owner_id TEXT NOT NULL,
-    key      TEXT NOT NULL,
+    key_id   INTEGER NOT NULL REFERENCES attribute_key(id),
     seq      INTEGER NOT NULL,
     value    TEXT NOT NULL,
-    PRIMARY KEY (owner_id, key, seq)
+    PRIMARY KEY (owner_id, key_id, seq)
 );
-CREATE INDEX IF NOT EXISTS idx_model_attribute_by_owner
-    ON model_attribute (owner_id);
+CREATE INDEX IF NOT EXISTS idx_model_attribute_value_by_owner
+    ON model_attribute_value (owner_id);
+
+-- Read-only compatibility view, deliberately named like the pre-
+-- normalization table so all existing SELECTs (application code and
+-- ad-hoc tooling alike) keep working unchanged. Writes must go through
+-- model_attribute_value (via attributeKeyCache-resolved key_id) instead —
+-- see model.go's UpsertAttributes/upsertAttributesTx.
+CREATE VIEW IF NOT EXISTS model_attribute AS
+SELECT v.owner_id, k.name AS key, v.seq, v.value
+FROM model_attribute_value v
+JOIN attribute_key k ON k.id = v.key_id;
 
 -- owner_id disambiguates independent per-station (or Pass B) perspectives
 -- on the SAME raw node_id: a ConnectivityNode legitimately referenced by
@@ -169,12 +196,27 @@ CREATE TABLE IF NOT EXISTS import_flag (
 type ModelStore struct {
 	db      *sql.DB
 	writeMu *sync.Mutex
+
+	keyCacheOnce sync.Once
+	keyCache     *attributeKeyCache
+	keyCacheErr  error
 }
 
 // Model returns a ModelStore sharing this StagingStore's database
 // connection (opened once in Open, which also creates the model schema).
 func (s *StagingStore) Model() *ModelStore {
 	return &ModelStore{db: s.db, writeMu: &s.writeMu}
+}
+
+// attributeKeys returns this ModelStore's attributeKeyCache, loading it
+// from the attribute_key table on first use (not eagerly in Model(),
+// since Model() itself has no error return and is called in many places
+// that never write Attributes at all).
+func (m *ModelStore) attributeKeys() (*attributeKeyCache, error) {
+	m.keyCacheOnce.Do(func() {
+		m.keyCache, m.keyCacheErr = loadAttributeKeyCache(m.db)
+	})
+	return m.keyCache, m.keyCacheErr
 }
 
 // --- Equipment ---------------------------------------------------------
@@ -952,39 +994,52 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 	if len(attributes) == 0 {
 		return nil
 	}
+	cache, err := m.attributeKeys()
+	if err != nil {
+		return err
+	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertAttributesTx(tx, attributes)
+		return upsertAttributesTx(tx, attributes, cache)
 	})
 }
 
 // upsertAttributesTx is UpsertAttributes' insert body — see
-// upsertEquipmentTx's doc comment for why this is factored out.
-func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
+// upsertEquipmentTx's doc comment for why this is factored out. cache
+// resolves each Attribute's Key to its attribute_key.id (creating a new
+// attribute_key row on first-ever use of a name — see attribute_key.go).
+func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *attributeKeyCache) error {
 	if len(attributes) == 0 {
 		return nil
 	}
-	deleteStmt, err := tx.Prepare(`DELETE FROM model_attribute WHERE owner_id = ? AND key = ?`)
+	deleteStmt, err := tx.Prepare(`DELETE FROM model_attribute_value WHERE owner_id = ? AND key_id = ?`)
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing attribute delete: %w", err)
 	}
 	defer deleteStmt.Close()
 
-	insertStmt, err := tx.Prepare(`INSERT INTO model_attribute (owner_id, key, seq, value) VALUES (?, ?, ?, ?)`)
+	insertStmt, err := tx.Prepare(`INSERT INTO model_attribute_value (owner_id, key_id, seq, value) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing attribute insert: %w", err)
 	}
 	defer insertStmt.Close()
 
-	type ownerKey struct{ owner, key string }
+	type ownerKey struct {
+		owner string
+		keyID int64
+	}
 	cleared := map[ownerKey]bool{}
 	seq := map[ownerKey]int{}
 
 	for _, a := range attributes {
-		ok := ownerKey{a.OwnerID, string(a.Key)}
+		keyID, err := cache.resolve(tx, string(a.Key))
+		if err != nil {
+			return fmt.Errorf("sqlite: resolving attribute key %q: %w", a.Key, err)
+		}
+		ok := ownerKey{a.OwnerID, keyID}
 		if !cleared[ok] {
-			if _, err := deleteStmt.Exec(a.OwnerID, string(a.Key)); err != nil {
+			if _, err := deleteStmt.Exec(a.OwnerID, keyID); err != nil {
 				return fmt.Errorf("sqlite: clearing attribute rows for %s.%s: %w", a.OwnerID, a.Key, err)
 			}
 			cleared[ok] = true
@@ -993,7 +1048,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
 		if err != nil {
 			return fmt.Errorf("sqlite: encoding attribute value for %s.%s: %w", a.OwnerID, a.Key, err)
 		}
-		if _, err := insertStmt.Exec(a.OwnerID, string(a.Key), seq[ok], string(encoded)); err != nil {
+		if _, err := insertStmt.Exec(a.OwnerID, keyID, seq[ok], string(encoded)); err != nil {
 			return fmt.Errorf("sqlite: upserting attribute %s.%s: %w", a.OwnerID, a.Key, err)
 		}
 		seq[ok]++
@@ -1020,6 +1075,10 @@ func (m *ModelStore) PersistBatch(
 	geometries []coremodel.Geometry,
 	groups map[string]map[string]string,
 ) error {
+	cache, err := m.attributeKeys()
+	if err != nil {
+		return err
+	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 	return withTx(m.db, func(tx *sql.Tx) error {
@@ -1035,7 +1094,7 @@ func (m *ModelStore) PersistBatch(
 		if err := upsertEdgesTx(tx, edges); err != nil {
 			return err
 		}
-		if err := upsertAttributesTx(tx, attributes); err != nil {
+		if err := upsertAttributesTx(tx, attributes, cache); err != nil {
 			return err
 		}
 		if err := upsertGeometryTx(tx, geometries); err != nil {

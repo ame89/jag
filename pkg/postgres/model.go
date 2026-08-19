@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	coremodel "github.com/ame89/jag/pkg/core/model"
 )
@@ -86,17 +87,41 @@ CREATE TABLE IF NOT EXISTS model_geometry (
     lon        DOUBLE PRECISION NOT NULL
 );
 
+-- attribute_key is the (small, slowly-growing, curated) dictionary of
+-- every distinct Sachdaten key name ever seen — see internal/sqlite/
+-- model.go's identical schema comment and attribute_key.go for the full
+-- rationale (lazy get-or-create, not a pre-seeded fixed enum).
+CREATE TABLE IF NOT EXISTS attribute_key (
+    id   BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
 -- seq disambiguates multi-value keys (see coremodel.Attribute's doc
--- comment) — several rows can legitimately share the same owner_id+key.
-CREATE TABLE IF NOT EXISTS model_attribute (
+-- comment) — several rows can legitimately share the same owner_id+key_id.
+-- Physical storage lives here (renamed from the old model_attribute); the
+-- model_attribute VIEW below resolves key_id back to the key name so every
+-- existing reader keeps seeing the exact same (owner_id, key, seq, value)
+-- shape without any change.
+CREATE TABLE IF NOT EXISTS model_attribute_value (
     owner_id TEXT NOT NULL,
-    key      TEXT NOT NULL,
+    key_id   BIGINT NOT NULL REFERENCES attribute_key(id),
     seq      INTEGER NOT NULL,
     value    TEXT NOT NULL,
-    PRIMARY KEY (owner_id, key, seq)
+    PRIMARY KEY (owner_id, key_id, seq)
 );
-CREATE INDEX IF NOT EXISTS idx_model_attribute_by_owner
-    ON model_attribute (owner_id);
+CREATE INDEX IF NOT EXISTS idx_model_attribute_value_by_owner
+    ON model_attribute_value (owner_id);
+
+-- Read-only compatibility view — see internal/sqlite/model.go's identical
+-- view for the full rationale. Writes must go through
+-- model_attribute_value (via attributeKeyCache-resolved key_id) instead.
+-- PostgreSQL has no "CREATE VIEW IF NOT EXISTS"; CREATE OR REPLACE VIEW is
+-- the idempotent equivalent (safe to run on every Open, unlike a plain
+-- CREATE VIEW which would error on the second run).
+CREATE OR REPLACE VIEW model_attribute AS
+SELECT v.owner_id, k.name AS key, v.seq, v.value
+FROM model_attribute_value v
+JOIN attribute_key k ON k.id = v.key_id;
 
 -- owner_id disambiguates independent per-station (or Pass B) perspectives
 -- on the SAME raw node_id — see internal/sqlite/model.go's identical
@@ -144,12 +169,27 @@ CREATE TABLE IF NOT EXISTS import_flag (
 // internal/impl/common) and unaffected by removing this lock.
 type ModelStore struct {
 	db *sql.DB
+
+	keyCacheOnce sync.Once
+	keyCache     *attributeKeyCache
+	keyCacheErr  error
 }
 
 // Model returns a ModelStore sharing this StagingStore's database
 // connection (opened once in Open, which also creates the model schema).
 func (s *StagingStore) Model() *ModelStore {
 	return &ModelStore{db: s.db}
+}
+
+// attributeKeys returns this ModelStore's attributeKeyCache, loading it
+// from the attribute_key table on first use — see internal/sqlite/
+// model.go's identical attributeKeys() for the rationale (lazy, not
+// eager in Model(), since Model() has no error return).
+func (m *ModelStore) attributeKeys() (*attributeKeyCache, error) {
+	m.keyCacheOnce.Do(func() {
+		m.keyCache, m.keyCacheErr = loadAttributeKeyCache(m.db)
+	})
+	return m.keyCache, m.keyCacheErr
 }
 
 // --- Equipment ---------------------------------------------------------
@@ -1043,19 +1083,45 @@ func (m *ModelStore) UpsertAttributes(attributes []coremodel.Attribute) error {
 	if len(attributes) == 0 {
 		return nil
 	}
+	cache, err := m.attributeKeys()
+	if err != nil {
+		return err
+	}
 	return withTx(m.db, func(tx *sql.Tx) error {
-		return upsertAttributesTx(tx, attributes)
+		return upsertAttributesTx(tx, attributes, cache)
 	})
 }
 
 // upsertAttributesTx is UpsertAttributes' chunked delete+insert body —
-// see upsertEquipmentTx's doc comment for why this is factored out.
-func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
+// see upsertEquipmentTx's doc comment for why this is factored out. cache
+// resolves each Attribute's Key to its attribute_key.id (creating a new
+// attribute_key row on first-ever use of a name — see attribute_key.go),
+// resolved once up front (Pass 0) so Pass 1/2 below work with plain
+// int64 key IDs, same chunking strategy as before.
+func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute, cache *attributeKeyCache) error {
 	if len(attributes) == 0 {
 		return nil
 	}
-	type ownerKey struct{ owner, key string }
+	type ownerKey struct {
+		owner string
+		keyID int64
+	}
 	seq := map[ownerKey]int{}
+
+	// Pass 0: resolve every distinct Key name to its attribute_key.id
+	// once, avoiding redundant cache lookups for repeated keys within
+	// this batch.
+	keyIDs := make(map[coremodel.AttributeKey]int64, len(attributes))
+	for _, a := range attributes {
+		if _, ok := keyIDs[a.Key]; ok {
+			continue
+		}
+		id, err := cache.resolve(tx, string(a.Key))
+		if err != nil {
+			return fmt.Errorf("postgres: resolving attribute key %q: %w", a.Key, err)
+		}
+		keyIDs[a.Key] = id
+	}
 
 	// Pass 1: determine the distinct (owner,key) pairs touched (in
 	// first-seen order isn't important — a set suffices) and clear
@@ -1063,7 +1129,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
 	seen := map[ownerKey]bool{}
 	var pairs []ownerKey
 	for _, a := range attributes {
-		ok := ownerKey{a.OwnerID, string(a.Key)}
+		ok := ownerKey{a.OwnerID, keyIDs[a.Key]}
 		if !seen[ok] {
 			seen[ok] = true
 			pairs = append(pairs, ok)
@@ -1076,7 +1142,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
 		chunk := pairs[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("DELETE FROM model_attribute WHERE (owner_id, key) IN (")
+		sb.WriteString("DELETE FROM model_attribute_value WHERE (owner_id, key_id) IN (")
 		args := make([]any, 0, len(chunk)*2)
 		for i, p := range chunk {
 			if i > 0 {
@@ -1085,7 +1151,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
 			sb.WriteString("(")
 			sb.WriteString(placeholders(2))
 			sb.WriteString(")")
-			args = append(args, p.owner, p.key)
+			args = append(args, p.owner, p.keyID)
 		}
 		sb.WriteString(")")
 		if _, err := tx.Exec(rebind(sb.String()), args...); err != nil {
@@ -1096,18 +1162,19 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
 	// Pass 2: encode every value once, computing seq per (owner,key)
 	// exactly as before, then insert in chunked multi-row statements.
 	type encodedRow struct {
-		owner, key string
-		seq        int
-		value      string
+		owner string
+		keyID int64
+		seq   int
+		value string
 	}
 	rows := make([]encodedRow, 0, len(attributes))
 	for _, a := range attributes {
-		ok := ownerKey{a.OwnerID, string(a.Key)}
+		ok := ownerKey{a.OwnerID, keyIDs[a.Key]}
 		encoded, err := json.Marshal(a.Value)
 		if err != nil {
 			return fmt.Errorf("postgres: encoding attribute value for %s.%s: %w", a.OwnerID, a.Key, err)
 		}
-		rows = append(rows, encodedRow{a.OwnerID, string(a.Key), seq[ok], string(encoded)})
+		rows = append(rows, encodedRow{a.OwnerID, keyIDs[a.Key], seq[ok], string(encoded)})
 		seq[ok]++
 	}
 
@@ -1116,7 +1183,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
 		chunk := rows[start:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO model_attribute (owner_id, key, seq, value) VALUES ")
+		sb.WriteString("INSERT INTO model_attribute_value (owner_id, key_id, seq, value) VALUES ")
 		args := make([]any, 0, len(chunk)*4)
 		for i, r := range chunk {
 			if i > 0 {
@@ -1125,7 +1192,7 @@ func upsertAttributesTx(tx *sql.Tx, attributes []coremodel.Attribute) error {
 			sb.WriteString("(")
 			sb.WriteString(placeholders(4))
 			sb.WriteString(")")
-			args = append(args, r.owner, r.key, r.seq, r.value)
+			args = append(args, r.owner, r.keyID, r.seq, r.value)
 		}
 		if _, err := tx.Exec(rebind(sb.String()), args...); err != nil {
 			return fmt.Errorf("postgres: inserting attribute chunk (%d rows): %w", len(chunk), err)
@@ -1155,6 +1222,10 @@ func (m *ModelStore) PersistBatch(
 	geometries []coremodel.Geometry,
 	groups map[string]map[string]string,
 ) error {
+	cache, err := m.attributeKeys()
+	if err != nil {
+		return err
+	}
 	return withTx(m.db, func(tx *sql.Tx) error {
 		if err := upsertContainersTx(tx, containers); err != nil {
 			return err
@@ -1168,7 +1239,7 @@ func (m *ModelStore) PersistBatch(
 		if err := upsertEdgesTx(tx, edges); err != nil {
 			return err
 		}
-		if err := upsertAttributesTx(tx, attributes); err != nil {
+		if err := upsertAttributesTx(tx, attributes, cache); err != nil {
 			return err
 		}
 		if err := upsertGeometryTx(tx, geometries); err != nil {

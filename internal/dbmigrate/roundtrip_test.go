@@ -46,7 +46,11 @@ func truncatePostgres(t *testing.T, dsn string) {
 	defer db.Close()
 	for _, table := range []string{
 		"model_equipment", "model_node", "model_edge", "model_edge_endpoint",
-		"model_container", "model_geometry", "model_attribute",
+		"model_container", "model_geometry",
+		// model_attribute_value and attribute_key must be truncated together
+		// (a single TRUNCATE statement) since attribute_key.id is referenced
+		// by model_attribute_value.key_id via a foreign key.
+		"model_attribute_value, attribute_key",
 		"model_electrical_group",
 	} {
 		if _, err := db.Exec("TRUNCATE TABLE " + table); err != nil {

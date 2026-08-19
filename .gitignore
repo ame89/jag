@@ -12,4 +12,6 @@ spec/
 .data/
 out*.*
 __pycache__/
-*.pyc*.exe
+*.pyc
+*.exe
+rtscratch/
