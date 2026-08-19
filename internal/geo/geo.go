@@ -2,7 +2,7 @@
 // (WGS84 point type, geodesic distance) shared across JAG's Geometry-related
 // code (see spec/Konzept.md, "Geometrie"). This package holds pure
 // data/utility logic only — it doesn't know about Equipment/Container
-// ownership or storage, unlike internal/core/geometry.
+// ownership or storage, unlike pkg/core/geometry.
 package geo
 
 import "github.com/tidwall/geodesic"

@@ -29,7 +29,7 @@ const (
 
 // GenerateScaffold renders c as a commented HJSON snippet in the
 // Fachmodell "equipment entry" shape (id/class/connects/attributes — see
-// internal/importer/hjson's format). Every attribute is preceded by a
+// pkg/importer/hjson's format). Every attribute is preceded by a
 // comment line stating its data type, required/optional status and
 // meaning, so a JAG user knows exactly what to fill in without consulting
 // the CIM standard separately. mode selects between an empty

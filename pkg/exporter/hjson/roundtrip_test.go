@@ -1,7 +1,7 @@
 package hjson_test
 
 // End-to-end regression tests for the HJSON Fachmodell exporter/importer
-// pair (internal/exporter/hjson + internal/importer/hjson), added
+// pair (internal/exporter/hjson + pkg/importer/hjson), added
 // 2026-07-19 after a series of real bugs found while exporting the NSC
 // example dataset: (1) a PowerElectronicsUnit satellite (Wallbox) folded
 // into its owning PowerElectronicsConnection's Sachdaten was excluded by
@@ -11,7 +11,7 @@ package hjson_test
 // HJSON writer had no array-rendering support at all, and (4) a
 // Substation/House's own container-level Sachdaten (its "name") was
 // computed by ResolveBatchContainers but never flushed to the sink.
-// internal/impl/common/sachdaten_test.go already covers (1)/(4) at the
+// pkg/impl/common/sachdaten_test.go already covers (1)/(4) at the
 // Sachdaten-pipeline level; this file instead drives the actual
 // ModelStore -> Load -> Build -> Write -> (re-)Emit round trip so the
 // HJSON-specific layers (build.go/write.go/resolve.go) that were the
@@ -34,7 +34,7 @@ import (
 
 // byOwnerKey groups a flat []model.StagingRecord's literal attribute rows
 // by (ID, Attribute) -> ordered values, mirroring
-// internal/impl/common/sachdaten_test.go's own helper of the same name but
+// pkg/impl/common/sachdaten_test.go's own helper of the same name but
 // operating on the importer's raw StagingRecord shape (this package can't
 // import that internal test helper directly, and duplicating a five-line
 // grouping helper is simpler than exporting it).
@@ -215,7 +215,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 	// StagingRecord (satID = "<ownerID>-SAT<i>", see resolve.go's
 	// addSatellites), carrying its own class and own attributes
 	// untouched — this is what the real satellite walk
-	// (internal/impl/common/sachdaten.go) will rediscover and re-fold on
+	// (pkg/impl/common/sachdaten.go) will rediscover and re-fold on
 	// Phase 2, achieving full export/import symmetry with no
 	// special-casing (bug 1 and its 2026-07-19 redesign).
 	satID := pec1ID + "-SAT0"
@@ -254,7 +254,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 	// The container-level geometry round-trips as a synthesized
 	// PowerSystemResource.Location -> Location -> PositionPoint chain
 	// (see resolve.go's addGeometry), the exact CIM GL-profile shape
-	// BuildGeometry (internal/impl/common/geometry.go) already knows how
+	// BuildGeometry (pkg/impl/common/geometry.go) already knows how
 	// to resolve on any subsequent Phase 2 run.
 	var sawLocRef, sawXPos, sawYPos bool
 	for _, rec := range recs {

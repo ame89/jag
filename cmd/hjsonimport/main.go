@@ -1,10 +1,10 @@
 // Command hjsonimport is the reference CLI for the current, authoritative
-// HJSON Fachmodell dialect (see internal/importer/hjson's doc comment):
+// HJSON Fachmodell dialect (see pkg/importer/hjson's doc comment):
 // it parses a directory tree of *.hjson files produced by cmd/hjsonexport
 // into the staging store, runs it through the existing Pass A/B Phase 2/3
 // pipeline unchanged, and persists the result via ModelStore. The older,
 // deprecated dialect lives on as cmd/hjsonimport-deprecated/
-// cmd/hjsonexport-deprecated (internal/importer/hjson-deprecated,
+// cmd/hjsonexport-deprecated (pkg/importer/hjson-deprecated,
 // internal/exporter/hjson-deprecated).
 //
 // The actual pipeline lives in pkg/impl/hjsonimport so it can be shared

@@ -10,7 +10,7 @@
     q: 0.0 // PowerElectronicsConnection.q
   }
   // Die eigentliche Erzeugungseinheit hängt als Satellit an diesem Netzanschlusspunkt
-  // (siehe internal/importer/hjson.Satellite).
+  // (siehe pkg/importer/hjson.Satellite).
   satellites: [
     {
       class: PhotoVoltaicUnit

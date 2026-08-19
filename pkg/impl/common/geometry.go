@@ -127,7 +127,7 @@ func buildGeometryBatch(store staging.Store, version uint64, batch []string, own
 	// found the forward direction, silently losing Geometry for any
 	// owner using only the inverse direction (confirmed missing entirely
 	// from BuildGeometry's output, yet still reachable — and therefore
-	// round-tripped back in — via internal/impl/common/sachdaten.go's
+	// round-tripped back in — via pkg/impl/common/sachdaten.go's
 	// bidirectional satellite walk, which is what first surfaced this gap
 	// as a spurious HJSON export/reimport diff). For owners still without
 	// a Location after hop 1, look up any Location referencing them in

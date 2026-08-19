@@ -14,7 +14,7 @@ package hjson
 // a Fuse, Breaker, Meter, ... — "Equipment" is a shared CIM base class,
 // not any one concrete class) — as long as the suffix isn't also used by
 // some other class for a different meaning, stripping it can't lose
-// information: internal/importer/hjson2's denormalizeAttrKey below
+// information: pkg/importer/hjson2's denormalizeAttrKey below
 // consults this same table to reconstruct the exact full key on import.
 //
 // This is a curated *seed*, not a guaranteed-exhaustive enumeration of the
@@ -33,7 +33,7 @@ var UniqueAttrClass = map[string]string{
 	// despite "SvSwitch.open"/"SvStatus.inService" also occurring in real
 	// CGMES data (examples/cgmes3/{Svedala,MicroGrid,SmallGrid,MiniGrid},
 	// examples/cgmes/ReliCapGrid_Espheim's SV profile): denormalizeAttrKey
-	// (internal/importer/hjson2/resolve.go) special-cases any owner whose
+	// (pkg/importer/hjson2/resolve.go) special-cases any owner whose
 	// own concrete class starts with "Sv" (an SV-profile satellite, e.g.
 	// SvSwitch/SvStatus) and skips this table for those, using the
 	// satellite's own class instead — so the two contexts never collide.

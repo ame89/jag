@@ -1,7 +1,7 @@
 // Package usecase implements a first slice of the concrete queries
 // sketched in Usecases.md, on top of the persisted target-model stores
-// (internal/core/hierarchy, geometry, topology/physical, topology/
-// electrical — see internal/sqlite/model.go for the SQLite backend).
+// (pkg/core/hierarchy, geometry, topology/physical, topology/
+// electrical — see pkg/sqlite/model.go for the SQLite backend).
 // Deliberately backend-agnostic: Service depends only on those core
 // interfaces (Ports & Adapters, see Impl.md), never on internal/sqlite
 // directly, so any future backend (Postgres, file) gets these usecases
@@ -19,7 +19,7 @@
 // further building blocks (load-flow export, generic attribute-value
 // filtering, GeoJSON) not implemented here. UC15 is permanently out of
 // scope (historisation dropped, see Konzept.md). UC16 (consistency) is
-// already covered separately by internal/impl/common.CheckInvariants
+// already covered separately by pkg/impl/common.CheckInvariants
 // (Phase 3, operates on the in-memory Phase 2 result, not this package).
 package usecase
 

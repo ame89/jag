@@ -10,7 +10,7 @@ import (
 )
 
 // catalogSchema creates the ParameterCatalog table if it doesn't exist
-// yet. See internal/sqlite/catalog.go for the SQLite original this
+// yet. See pkg/sqlite/catalog.go for the SQLite original this
 // mirrors exactly (no dialect differences here — plain TEXT columns and a
 // composite primary key port unchanged).
 const catalogSchema = `

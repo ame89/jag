@@ -7,7 +7,7 @@ import (
 
 // ElementKind identifies one of the composite, ready-to-fill Fachmodell
 // scaffolds handled by GenerateElementScaffold — a whole top-level HJSON
-// file (internal/importer/hjson.File shape: busbars/bays/equipments/
+// file (pkg/importer/hjson.File shape: busbars/bays/equipments/
 // segments/attributes/geometry), not just one CIM class' "equipments"
 // entry like GenerateScaffold produces. See cmd/hjsonscaffold's -element
 // flag and Konzept.md's HJSON-Fachmodell directory layout
@@ -180,7 +180,7 @@ func generateStation(reg *Registry, withTransformer bool, mode ScaffoldMode) (st
 		}
 	} else {
 		b.WriteString("        {\n")
-		b.WriteString("          id: \"1\" // Sektionsnummer, keine echte CIM-ID (siehe internal/importer/hjson.BusbarSectionEntry)\n")
+		b.WriteString("          id: \"1\" // Sektionsnummer, keine echte CIM-ID (siehe pkg/importer/hjson.BusbarSectionEntry)\n")
 		if err := writeNamedAttributes(&b, reg, "          ", "BusbarSection"); err != nil {
 			return "", err
 		}
@@ -353,7 +353,7 @@ func generateHouse(reg *Registry, mode ScaffoldMode) (string, error) {
 			return "", err
 		}
 		b.WriteString("      // Die eigentliche Erzeugungseinheit hängt als Satellit an diesem Netzanschlusspunkt\n")
-		b.WriteString("      // (siehe internal/importer/hjson.Satellite) — ihr vollständiges Attribut-Set:\n")
+		b.WriteString("      // (siehe pkg/importer/hjson.Satellite) — ihr vollständiges Attribut-Set:\n")
 		b.WriteString("      satellites: [\n")
 		b.WriteString("        {\n")
 		b.WriteString("          class: PhotoVoltaicUnit\n")

@@ -15,7 +15,7 @@ import (
 // creating directories as needed.
 //
 // Deliberately hand-formatted, always-multi-line, always-quoted-key/value
-// output (not hjson-go's own Marshal): see internal/importer/hjson's doc
+// output (not hjson-go's own Marshal): see pkg/importer/hjson's doc
 // comment — hjson-go/v4's parser was found to reliably mis-parse dense
 // single-line object/array syntax, and there is no guarantee its own
 // Marshal wouldn't produce exactly that dense style. Writing HJSON by hand
@@ -192,7 +192,7 @@ func writeAttributesBlock(b *strings.Builder, attrs map[string]interface{}, dept
 }
 
 // writeSatellitesBlock renders a folded satellite object list (see
-// internal/importer/hjson.Satellite and internal/impl/common's
+// pkg/importer/hjson.Satellite and pkg/impl/common's
 // AttributeKeySatellite doc comment) as its own "satellites: [...]" array,
 // one {class, attributes} object per satellite — kept structurally
 // separate from writeAttributesBlock's flat map so a satellite's own data

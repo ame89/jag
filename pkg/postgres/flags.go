@@ -9,7 +9,7 @@ import (
 // FlagStore implements common.FlagStore on top of the ephemeral
 // import_flag table (see model.go's schema). Shares its *sql.DB with
 // ModelStore — obtained via StagingStore.Flags(), same pattern as
-// StagingStore.Model()/StagingStore.Catalog(). See internal/sqlite/flags.go
+// StagingStore.Model()/StagingStore.Catalog(). See pkg/sqlite/flags.go
 // for the full design rationale this mirrors; the only real port change is
 // MarkFlags' "INSERT OR IGNORE" becoming an "ON CONFLICT DO NOTHING",
 // since PostgreSQL has no OR IGNORE syntax.
@@ -27,7 +27,7 @@ func (s *StagingStore) Flags() *FlagStore {
 // milestone for this import version. ON CONFLICT (version, kind, id) DO
 // NOTHING is deliberate (not a plain upsert): existence is the only thing
 // that matters here, never downgraded — a flag can only go from "unset" to
-// "set", never back (see internal/sqlite/flags.go's identical doc comment
+// "set", never back (see pkg/sqlite/flags.go's identical doc comment
 // for the full rationale).
 func (f *FlagStore) MarkFlags(version uint64, kind string, ids []string) error {
 	if len(ids) == 0 {

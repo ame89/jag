@@ -20,7 +20,7 @@ var profileSuffixPattern = regexp.MustCompile(`_([A-Z]{2,3})(?:_v[\d.]+)?(?:_\d+
 // It carries the source file (populated by ParseFileSAXStream; empty when
 // parsing an arbitrary io.Reader via ParseSAXStream directly), the 1-based
 // line number, and the byte offset where the error occurred, so callers
-// (see internal/importer/phase1) can populate model.StagingError without
+// (see pkg/importer/phase1) can populate model.StagingError without
 // re-parsing error message text.
 type ParseError struct {
 	File   string
@@ -179,7 +179,7 @@ func ParseSAX(r io.Reader, profile string) ([]model.StagingRecord, error) {
 // stays bounded independent of model size (see Idee.md's streaming-import
 // requirement). Callers that need bounded RAM end-to-end should pass an
 // emit function that itself batches into a bulk store (see
-// internal/importer/batch.Writer) rather than accumulating records
+// pkg/importer/batch.Writer) rather than accumulating records
 // themselves.
 //
 // If emit returns an error, parsing stops immediately and that error is

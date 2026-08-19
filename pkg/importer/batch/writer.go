@@ -50,7 +50,7 @@ func (w *Writer) Emit(r model.StagingRecord) error {
 //
 // Any error returned here is a *WriteError — an infrastructure/store
 // failure, as opposed to a parser-level error. Orchestrators running
-// multiple files (see internal/importer/phase1) treat WriteError as fatal
+// multiple files (see pkg/importer/phase1) treat WriteError as fatal
 // (abort the whole run immediately), since there is no safe way to keep
 // writing once the store itself is failing.
 func (w *Writer) Flush() error {

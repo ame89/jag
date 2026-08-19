@@ -23,7 +23,7 @@ type ContainerType string
 // (e.g. Substation, ACLine, Junction). Name/Label are deliberately not
 // struct fields here — like any other descriptive data they flow through
 // the generic Attribute (Sachdaten) mechanism instead, under reserved keys
-// (see /internal/impl/common's AttributeKeyName/AttributeKeyLabel), so
+// (see /pkg/impl/common's AttributeKeyName/AttributeKeyLabel), so
 // there is exactly one generic data channel for descriptive data rather
 // than two parallel ones. Historisation was dropped entirely (see
 // Konzept.md) — there is no Version field, Upsert always overwrites.

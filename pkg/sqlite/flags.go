@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// FlagStore implements common.FlagStore (see internal/impl/common/flags.go
+// FlagStore implements common.FlagStore (see pkg/impl/common/flags.go
 // for the full design rationale) on top of the ephemeral import_flag table
 // (see model.go's schema). Shares its *sql.DB/writeMu with ModelStore —
 // obtained via StagingStore.Flags(), same pattern as StagingStore.Model()/

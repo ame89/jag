@@ -77,7 +77,7 @@ type BatchResult struct {
 	// owner's ElectricalGroups is its own independently-computed local
 	// result — never merged with any other owner's, here or anywhere else
 	// at import time (see the ElectricalGroups persistence comment in
-	// ProcessStationBatch below, and internal/sqlite/model.go's
+	// ProcessStationBatch below, and pkg/sqlite/model.go's
 	// model_electrical_group (node_id, owner_id) composite key).
 	Groups     map[string]ElectricalGroups
 	Anomalies  []Anomaly // Terminal-resolution anomalies for this batch's own equipment
@@ -224,7 +224,7 @@ func ProcessStationBatch(store staging.Store, version uint64, subIDs, houseIDs [
 	// ReliCapGrid_Espheim's Riverlands/Needlehole pair) therefore ends up
 	// with one independently-computed group PER owning station rather than
 	// a single, arbitrarily-overwritten value — model_electrical_group's
-	// (node_id, owner_id) composite key (see internal/sqlite/model.go)
+	// (node_id, owner_id) composite key (see pkg/sqlite/model.go)
 	// stores exactly that, and any correct merged/reconciled view across
 	// such a boundary Node is deferred entirely to query time (see
 	// usecase.ElectricallyConnected's group-expansion). This is

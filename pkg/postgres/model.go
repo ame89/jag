@@ -1,7 +1,7 @@
 // Package postgres — this file implements the target/final-model storage
-// interfaces (internal/core/hierarchy, geometry, topology/physical,
+// interfaces (pkg/core/hierarchy, geometry, topology/physical,
 // topology/electrical, technical) on top of PostgreSQL, mirroring
-// internal/sqlite/model.go query-by-query. See this package's doc comment
+// pkg/sqlite/model.go query-by-query. See this package's doc comment
 // (postgres.go) for the overall parity rationale and rebind.go for how
 // the shared "?" placeholder style is translated to "$N".
 //
@@ -26,7 +26,7 @@ import (
 // from staging_* (Phase 1, raw/EAV) and catalog_* (ParameterCatalog) at a
 // glance in any DB browser.
 //
-// Differences from internal/sqlite/model.go's identical schema: REAL ->
+// Differences from pkg/sqlite/model.go's identical schema: REAL ->
 // DOUBLE PRECISION (PostgreSQL's REAL is single-precision float4, but
 // coremodel.Geometry's Lat/Lon are Go float64 — DOUBLE PRECISION is
 // PostgreSQL's float8, the correct match); BIGINT instead of INTEGER for
@@ -45,7 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_model_equipment_by_container
 -- Node.id is NOT always a real Equipment ID: an ordinary ConnectivityNode
 -- (not a Node-role Equipment like BusbarSection/Junction) has no
 -- corresponding model_equipment row at all (see nodeedge.go's doc comment
--- in internal/impl/common). Deliberately no FK constraint to
+-- in pkg/impl/common). Deliberately no FK constraint to
 -- model_equipment(id).
 CREATE TABLE IF NOT EXISTS model_node (
     id   TEXT PRIMARY KEY,
@@ -116,7 +116,7 @@ FROM model_geometry_value g
 JOIN entity_id e ON e.id = g.owner_id_key;
 
 -- attribute_key is the (small, slowly-growing, curated) dictionary of
--- every distinct Sachdaten key name ever seen — see internal/sqlite/
+-- every distinct Sachdaten key name ever seen — see pkg/sqlite/
 -- model.go's identical schema comment and attribute_key.go for the full
 -- rationale (lazy get-or-create, not a pre-seeded fixed enum).
 CREATE TABLE IF NOT EXISTS attribute_key (
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS model_attribute_value (
 CREATE INDEX IF NOT EXISTS idx_model_attribute_value_by_owner
     ON model_attribute_value (owner_id_key);
 
--- Read-only compatibility view — see internal/sqlite/model.go's identical
+-- Read-only compatibility view — see pkg/sqlite/model.go's identical
 -- view for the full rationale. Writes must go through
 -- model_attribute_value (via attributeKeyCache/entityIDCache-resolved
 -- key_id/owner_id_key) instead.
@@ -155,7 +155,7 @@ JOIN attribute_key k ON k.id = v.key_id
 JOIN entity_id e ON e.id = v.owner_id_key;
 
 -- owner_id disambiguates independent per-station (or Pass B) perspectives
--- on the SAME raw node_id — see internal/sqlite/model.go's identical
+-- on the SAME raw node_id — see pkg/sqlite/model.go's identical
 -- schema comment for the full rationale (a real cross-station boundary
 -- Node legitimately belongs to more than one owner's electrical group).
 CREATE TABLE IF NOT EXISTS model_electrical_group (
@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS import_flag (
 // UpsertEdges' endpoint maintenance) is safe without the mutex as long as
 // Pass A/B callers never concurrently touch the same owner/key across two
 // workers — an invariant already relied upon elsewhere (see
-// internal/impl/common) and unaffected by removing this lock.
+// pkg/impl/common) and unaffected by removing this lock.
 type ModelStore struct {
 	db *sql.DB
 
@@ -217,7 +217,7 @@ func (s *StagingStore) Model() *ModelStore {
 }
 
 // attributeKeys returns this ModelStore's attributeKeyCache, loading it
-// from the attribute_key table on first use — see internal/sqlite/
+// from the attribute_key table on first use — see pkg/sqlite/
 // model.go's identical attributeKeys() for the rationale (lazy, not
 // eager in Model(), since Model() has no error return).
 func (m *ModelStore) attributeKeys() (*attributeKeyCache, error) {
@@ -964,7 +964,7 @@ func upsertEdgesTx(tx *sql.Tx, edges []coremodel.Edge, cache *entityIDCache) err
 // model_electrical_group DDL comment above) legitimately returns more than
 // one group id — callers that need "are these two nodes connected"
 // semantics must treat a multi-group node as a union point and expand
-// across all of its groups (see internal/impl/usecase.ElectricallyConnected).
+// across all of its groups (see pkg/impl/usecase.ElectricallyConnected).
 func (m *ModelStore) GetElectricalGroup(nodeIDs []string) (map[string][]string, error) {
 	if len(nodeIDs) == 0 {
 		return nil, nil
@@ -1053,7 +1053,7 @@ func (m *ModelStore) GroupSizes() (map[string]int, error) {
 // UpsertElectricalGroups implements topology/electrical.Store.Upsert
 // (renamed from plain Upsert to avoid colliding with the other Upsert*
 // methods on this same ModelStore type). See
-// internal/sqlite/model.go's identical method for the full rationale of
+// pkg/sqlite/model.go's identical method for the full rationale of
 // the per-owner delete-then-insert strategy (concurrent Pass A station
 // workers / Pass B never touch each other's rows).
 func (m *ModelStore) UpsertElectricalGroups(owned map[string]map[string]string) error {
@@ -1162,7 +1162,7 @@ func (m *ModelStore) GetByOwnerIDs(ownerIDs []string) ([]coremodel.Attribute, er
 
 // UpsertAttributes implements technical.Store.Upsert (renamed from plain
 // Upsert to avoid colliding with the other Upsert* methods on this same
-// ModelStore type). See internal/sqlite/model.go's identical method for
+// ModelStore type). See pkg/sqlite/model.go's identical method for
 // the full rationale of the per-(owner,key) delete-then-insert strategy.
 // Both the delete and insert steps are chunked multi-row statements
 // (row-value IN(...) for the delete, multi-row VALUES for the insert)
@@ -1392,7 +1392,7 @@ func idArgs(ids []string) []any {
 
 // unionAllSelects builds "SELECT ? UNION ALL SELECT ? ..." (n terms) for
 // use as the non-recursive seed of a "WITH RECURSIVE cte(col) AS (...)"
-// query — see internal/sqlite/model.go's identical helper for why a plain
+// query — see pkg/sqlite/model.go's identical helper for why a plain
 // UNION ALL of single-column SELECTs is used instead of a
 // "FROM (VALUES (?), (?)) AS roots(id)" table-alias form.
 func unionAllSelects(n int) string {

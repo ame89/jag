@@ -61,7 +61,7 @@ func TestDenormalizeAttrKey(t *testing.T) {
 }
 
 // TestAddTerminals covers addTerminals' three connects-length cases (see
-// its doc comment, and internal/importer/hjson2/resolve.go's 2026-07-21
+// its doc comment, and pkg/importer/hjson2/resolve.go's 2026-07-21
 // fix): 0 entries is a silent no-op (multi-winding-transformer-style
 // Anomaly equipment, no Edge to reconstruct), 1-2 entries emit one
 // Terminal pair per entry, and >2 entries is a parse-time StagingError

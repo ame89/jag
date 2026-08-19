@@ -1,7 +1,7 @@
 // circuits.go implements the NSC_SUPPORT feature's `circuit` / `circuit_network_device_map`
 // tables: computing the real domain-model-connector's "NetIsland"/Circuit concept from an
 // already-imported JAG model_* schema, reusing JAG's own existing, exported
-// internal/impl/common.BuildCircuits ("Schaltkreis") implementation as a library call - this
+// pkg/impl/common.BuildCircuits ("Schaltkreis") implementation as a library call - this
 // is the one part of jag2nsc that DOES import another JAG internal package, per explicit
 // user instruction ("nur wenn nicht in jag ist, in jag2nsc ok" - i.e. calling jag's own
 // exported logic from jag2nsc is fine; only ever MODIFYING a jag core file is forbidden).

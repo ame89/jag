@@ -14,7 +14,7 @@
 // Terminal/ConnectivityNode translation, unit conversion) lives in
 // resolve.go. The Phase 1 entrypoint that ties this to a staging.Store
 // (mirroring phase1.RunCGMESFiles/RunNSCFiles) lives in
-// internal/importer/phase1.
+// pkg/importer/phase1.
 //
 // IMPORTANT (hjson-go/v4 parsing limitation, discovered while building this
 // package — not obvious from the library's docs): hjson-go/v4 reliably
@@ -52,7 +52,7 @@ type File struct {
 // GeometryPoint is a 2D WGS84 coordinate (see Konzept.md's "Geometrie"
 // section — no height/depth) composed onto a top-level container
 // (Substation/KVS/House/ACLine's own Location, not any individual piece of
-// Equipment inside it — see internal/impl/common/geometry.go's
+// Equipment inside it — see pkg/impl/common/geometry.go's
 // GeometryOwnerContainer). Added 2026-07-19: a container's own Geometry
 // was previously computed (BuildGeometry, if the raw source data has a
 // PowerSystemResource.Location) but had no representation at all in the
@@ -73,7 +73,7 @@ type Busbar struct {
 
 // Satellite is one folded "Anhängsel"/satellite object (e.g. a Wallbox
 // folded into its owning PowerElectronicsConnection's Sachdaten, see
-// internal/impl/common/sachdaten.go's satellite walk and
+// pkg/impl/common/sachdaten.go's satellite walk and
 // AttributeKeySatellite's doc comment) — its own raw CIM class plus its
 // own literal attributes, kept together as one self-contained object
 // instead of being scattered across several parallel top-level Attributes

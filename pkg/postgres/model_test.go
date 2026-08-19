@@ -19,7 +19,7 @@ import (
 // during development:
 //
 //	$env:JAG_TEST_POSTGRES_DSN = "postgres://postgres:jag@localhost:55432/jag?sslmode=disable"
-//	go test ./internal/postgres/...
+//	go test ./pkg/postgres/...
 func testDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("JAG_TEST_POSTGRES_DSN")

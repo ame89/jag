@@ -14,7 +14,7 @@
 // Terminal/ConnectivityNode translation, unit conversion) lives in
 // resolve.go. The Phase 1 entrypoint that ties this to a staging.Store
 // (mirroring phase1.RunCGMESFiles/RunNSCFiles) lives in
-// internal/importer/phase1.
+// pkg/importer/phase1.
 //
 // IMPORTANT (hjson-go/v4 parsing limitation, discovered while building this
 // package — not obvious from the library's docs): hjson-go/v4 reliably
@@ -49,7 +49,7 @@ package hjson
 // inside O-5.hjson becomes "O-5-6"); a name NOT starting with "@" is
 // already a global ID, valid verbatim inside and outside the file (e.g.
 // "ABC" stays "ABC" no matter which file it appears in). See
-// internal/importer/hjson2/resolve.go's localIDPrefix/resolveID for the
+// pkg/importer/hjson2/resolve.go's localIDPrefix/resolveID for the
 // import-side implementation, and internal/exporter/hjson2/build.go's
 // shortenID for the export-side counterpart (an ID exported with a
 // "<rootID>-" prefix is shortened AND marked local with "@"; anything
@@ -68,7 +68,7 @@ type File struct {
 // GeometryPoint is a 2D WGS84 coordinate (see Konzept.md's "Geometrie"
 // section — no height/depth) composed onto a top-level container
 // (Substation/KVS/House/ACLine's own Location, not any individual piece of
-// Equipment inside it — see internal/impl/common/geometry.go's
+// Equipment inside it — see pkg/impl/common/geometry.go's
 // GeometryOwnerContainer). Added 2026-07-19: a container's own Geometry
 // was previously computed (BuildGeometry, if the raw source data has a
 // PowerSystemResource.Location) but had no representation at all in the
@@ -107,7 +107,7 @@ type Busbar struct {
 
 // Satellite is one folded "Anhängsel"/satellite object (e.g. a Wallbox
 // folded into its owning PowerElectronicsConnection's Sachdaten, see
-// internal/impl/common/sachdaten.go's satellite walk and
+// pkg/impl/common/sachdaten.go's satellite walk and
 // AttributeKeySatellite's doc comment) — its own raw CIM class plus its
 // own literal attributes, kept together as one self-contained object
 // instead of being scattered across several parallel top-level Attributes
@@ -182,7 +182,7 @@ type Equipment struct {
 	// (first TimeSchedule satellite -> Measuring, second -> Transmission)
 	// hardcoded in this package only — the real CIM relation name
 	// (MeasuringSchedule vs. TransmissionSchedule) is not persisted by
-	// the shared satellite-fold pipeline (internal/impl/common/
+	// the shared satellite-fold pipeline (pkg/impl/common/
 	// sachdaten.go), so it can't be recovered exactly; see this package's
 	// history for why a shared-code change to preserve it was explicitly
 	// declined in favor of this self-contained hjson2 approximation. Only

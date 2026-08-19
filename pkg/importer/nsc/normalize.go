@@ -4,7 +4,7 @@
 // found to be pure format quirks — not genuine modeling differences — and
 // are therefore normalized entirely at this import layer, keeping
 // internal/core and internal/impl (and the generic Terminal-resolution
-// logic in internal/impl/common) completely dialect-agnostic:
+// logic in pkg/impl/common) completely dialect-agnostic:
 //
 //  1. Terminal.ACDCTerminal.sequenceNumber is 0-based (0/1) instead of
 //     CGMES's 1-based convention (1/2) for two-terminal Equipment (and 0
@@ -24,7 +24,7 @@
 //     Container (they share the same VoltageLevel via
 //     Equipment.EquipmentContainer). Any real electrical connection this
 //     hides (the copies now look like disconnected components) is
-//     recovered by internal/impl/common's MergeBusbarSectionNodes, which
+//     recovered by pkg/impl/common's MergeBusbarSectionNodes, which
 //     already exists to handle exactly this "same busbar Container, no
 //     explicit connecting Equipment" case.
 //

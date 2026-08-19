@@ -12,7 +12,7 @@ import (
 // root using the deprecated v1 HJSON Fachmodell dialect (see
 // hjsondeprecated.FindFiles/hjsondeprecated.Emit) and writes the resulting
 // StagingRecords into store under a freshly allocated version. Deprecated:
-// hjson2 (internal/exporter/hjson, internal/importer/hjson,
+// hjson2 (internal/exporter/hjson, pkg/importer/hjson,
 // RunHJSONFiles) is the current, authoritative HJSON Fachmodell dialect;
 // this v1 entrypoint is kept only for backward compatibility, not actively
 // developed further. Unlike RunCGMESFiles/RunNSCFiles (one file -> one

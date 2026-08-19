@@ -6,7 +6,7 @@
 // network_group is genuinely CIM-derived, not hardcoded: verified against real ground truth
 // that a real domain_model.network_group row's external_id/name are exactly the CIM
 // SubGeographicalRegion element's own rdf:about id and IdentifiedObject.name. JAG's own
-// Phase 2 (internal/impl/common/container.go, sachdaten.go) deliberately never turns
+// Phase 2 (pkg/impl/common/container.go, sachdaten.go) deliberately never turns
 // SubGeographicalRegion into a model_container/model_equipment row - Region classes are
 // treated as structural hubs the satellite walk never walks into (see sachdaten.go's
 // structuralClasses) - so there is no model_*-level source for this at all; staging_records

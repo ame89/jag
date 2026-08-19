@@ -608,7 +608,7 @@ func buildPipelineForFiles(t *testing.T, files []string, isNSC bool) (*sqlite.St
 //
 // "Sections" here means Equipment classified as a busbar Node-role member
 // (BusbarSection, post NSC-dialect Terminal-split — see
-// internal/importer/nsc/normalize.go's doc comment) and grouped under one
+// pkg/importer/nsc/normalize.go's doc comment) and grouped under one
 // busbar Container by BuildContainers/pass_a.go — NOT the post-merge
 // electrically-distinct Node count (see busbarmerge.go). This pins the
 // container-grouping step's current behavior, independent of

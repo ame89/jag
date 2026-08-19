@@ -10,7 +10,7 @@ import (
 
 // This file adds small, cursor-paginated "read the whole model" bulk
 // methods to ModelStore, needed by internal/exporter/hjson (the Fachmodell
-// HJSON exporter) — see internal/sqlite/model_export.go for the full
+// HJSON exporter) — see pkg/sqlite/model_export.go for the full
 // rationale this mirrors query-by-query (only rebind(...) wrapping
 // differs).
 
@@ -174,7 +174,7 @@ func scanElectricalGroupRows(rows *sql.Rows) ([]coremodel.ElectricalGroupRow, er
 
 // AllAttributes pages through every Attribute in (owner_id, key, seq)
 // order — same decoding as GetByOwnerIDs. See
-// internal/sqlite/model_export.go's AllAttributes doc comment for the
+// pkg/sqlite/model_export.go's AllAttributes doc comment for the
 // 2026-07-21 owner-straddling-page-boundary bugfix this mirrors: a page
 // is never allowed to end mid-owner, so a trailing owner's remaining
 // rows are fetched via a follow-up query instead of being silently

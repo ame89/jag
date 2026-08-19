@@ -7,7 +7,7 @@ import (
 	"github.com/ame89/jag/pkg/sqlite"
 )
 
-// pageLimit bounds each ModelStore.AllX call — see internal/sqlite/
+// pageLimit bounds each ModelStore.AllX call — see pkg/sqlite/
 // model_export.go's doc comment for the cursor-pagination shape this
 // mirrors.
 const pageLimit = 5000

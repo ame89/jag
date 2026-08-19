@@ -4,7 +4,7 @@
 // has a real Fuse/Breaker/BusbarSection/Bay hierarchy, real SSH switch
 // states, and real GL-profile WGS84 geometry), persists the result into a
 // SQLite model_* database via ModelStore, and then demonstrates every
-// usecase currently implemented in internal/impl/usecase against that
+// usecase currently implemented in pkg/impl/usecase against that
 // persisted data: UC1 (station subgraph), UC2a (physical reachability),
 // UC2b/UC4 (electrical connectivity), UC3 (region/bounding-box geometry),
 // UC12 (container-type counts). See spec/Usecases.md for the full usecase

@@ -61,13 +61,13 @@ func FindFiles(root string) ([]FileInfo, error) {
 // into dialect-neutral model.StagingRecord values (plus any
 // model.StagingError encountered), ready for staging.Store.InsertRecords/
 // InsertErrors exactly like the CGMES/NSC parsers (see
-// internal/importer/cgmes/parser.go).
+// pkg/importer/cgmes/parser.go).
 //
 // Container-level custom Attributes (e.g. a Substation's "region", or a
 // House's MaLo/MeLo) are parsed into File.Attributes and emitted as
 // ordinary Sachdaten owned by the container's own ID (see emitStation/
 // emitHouse). This previously round-tripped only halfway: the shared
-// Phase 2 Sachdaten extraction (internal/impl/common/sachdaten.go) only
+// Phase 2 Sachdaten extraction (pkg/impl/common/sachdaten.go) only
 // ever processed the caller-supplied Equipment ID list, never a batch's
 // own Substation/Building root IDs, so ResolveBatchContainers' own
 // res.Attributes (built from these very records) was computed but never
@@ -161,7 +161,7 @@ func (e *r) resolve(name string) string { return resolveID(e.fi.ContainerID, nam
 
 // addGeometry synthesizes the minimal CIM GL-profile shape
 // (PowerSystemResource.Location -> Location -> PositionPoint) BuildGeometry
-// (internal/impl/common/geometry.go) already knows how to resolve, so a
+// (pkg/impl/common/geometry.go) already knows how to resolve, so a
 // container's own Geometry (added 2026-07-19) round-trips through Phase 2
 // exactly like real CIM/CGMES Location data, with no changes needed to
 // that already-load-tested pipeline. ownerID is the container's own ID
@@ -211,15 +211,15 @@ func (e *r) addAttributes(id, class string, attrs map[string]interface{}) {
 // satelliteRefAttribute is a synthetic, JAG-only reference key (never a
 // real CIM attribute) used purely to tie a re-imported satellite object
 // back to its owner. It is deliberately NOT one of sachdaten.go's
-// topologyAttributes, so internal/impl/common's satellite walk discovers
+// topologyAttributes, so pkg/impl/common's satellite walk discovers
 // it exactly like it would a real, dialect-specific CIM back-reference
 // (e.g. PowerElectronicsUnit.PowerElectronicsConnection) — no special
 // casing needed there for HJSON-authored satellites vs. real CIM ones.
 const satelliteRefAttribute = "Satellite.Of"
 
 // addSatellites emits one synthetic StagingRecord object per Satellite
-// entry (see internal/importer/hjson.Satellite and
-// internal/impl/common.AttributeKeySatellite's doc comment): its own
+// entry (see pkg/importer/hjson.Satellite and
+// pkg/impl/common.AttributeKeySatellite's doc comment): its own
 // literal attributes (addAttributes) plus one satelliteRefAttribute
 // reference back to ownerID. This makes a re-imported satellite
 // indistinguishable, from the satellite walk's point of view, from a real

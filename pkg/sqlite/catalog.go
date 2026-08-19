@@ -9,7 +9,7 @@ import (
 )
 
 // catalogSchema creates the ParameterCatalog table if it doesn't exist yet.
-// See internal/core/catalog for the interface this backs. Catalog entries
+// See pkg/core/catalog for the interface this backs. Catalog entries
 // are not versioned (see coremodel.CatalogEntry) — a plain key-value table
 // suffices, no version column needed.
 //

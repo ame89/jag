@@ -13,7 +13,7 @@
 // differences (INSERT OR IGNORE -> ON CONFLICT DO NOTHING, REAL -> DOUBLE
 // PRECISION, is_reference as a real BOOLEAN column instead of INTEGER
 // 0/1). Keeping the two backends structurally identical is deliberate:
-// internal/impl/common and internal/exporter/hjson depend only on the
+// pkg/impl/common and internal/exporter/hjson depend only on the
 // core/* interfaces, so either backend should be swappable without any
 // caller-visible behavior difference.
 package postgres
@@ -31,8 +31,8 @@ import (
 )
 
 // stagingSchema creates the Phase 1 staging tables if they don't exist
-// yet. See internal/core/staging for the interface this backs, and
-// internal/sqlite/staging.go for the SQLite original this mirrors —
+// yet. See pkg/core/staging for the interface this backs, and
+// pkg/sqlite/staging.go for the SQLite original this mirrors —
 // identical except INSERT OR IGNORE -> ON CONFLICT ... DO NOTHING
 // (PostgreSQL has no "OR IGNORE" clause) and is_reference is a real
 // BOOLEAN column (see this package's doc comment).
@@ -92,7 +92,7 @@ const insertChunkSize = 1000
 // worker's writes onto one connection was an actual bottleneck for this
 // backend, so it was removed. The delete-then-insert re-upsert pattern
 // (UpsertAttributes, UpsertElectricalGroups, UpsertEdges' endpoint
-// maintenance) relies on Pass A/B callers (internal/impl/common) never
+// maintenance) relies on Pass A/B callers (pkg/impl/common) never
 // concurrently touching the same owner/key across two workers — an
 // invariant already relied upon elsewhere and unaffected by removing this
 // lock.
@@ -190,7 +190,7 @@ func stripSQLLineComments(schema string) string {
 }
 
 // stagingIndexes creates the secondary indexes staging_records reads rely
-// on. See internal/sqlite/staging.go's identical constant for the
+// on. See pkg/sqlite/staging.go's identical constant for the
 // rationale (building these once after Phase 1's bulk insert, rather than
 // maintaining them incrementally on every insert, was measured to matter a
 // lot for SQLite; kept identical here for behavioral parity even though

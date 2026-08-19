@@ -18,7 +18,7 @@ import (
 
 // baseBusbarSectionID strips the "#<n>" suffix the NSC dialect's Terminal
 // split adds to a multi-Terminal BusbarSection's extra copies (see
-// internal/importer/nsc/normalize.go's package doc, fix 2: "B-1-1" stays
+// pkg/importer/nsc/normalize.go's package doc, fix 2: "B-1-1" stays
 // as-is, its extra copies become "B-1-1#2", "B-1-1#3", ...). Used to group
 // a physical busbar's Terminal-split copies back under one busbar
 // grouping key/Container (see the "NSC has no VoltageLevel" busbar-group

@@ -38,7 +38,7 @@ import (
 
 // PassBOwnerID is the fixed sentinel owner ID Pass B uses when persisting
 // its own ElectricalGroups (see model_electrical_group's (node_id,
-// owner_id) composite key, internal/sqlite/model.go). It is guaranteed
+// owner_id) composite key, pkg/sqlite/model.go). It is guaranteed
 // never to collide with a real Substation/Building root Container ID (see
 // stationOwnerOf in pass_a_pipeline.go), so Pass B's rows always coexist
 // independently alongside Pass A's per-station rows without any run-order
@@ -86,7 +86,7 @@ type PassBACLineBatchResult struct {
 	// OwnerID is this batch's own, distinct ElectricalGroups owner id
 	// (PassBOwnerID + "#" + batch index) — deliberately NOT the shared
 	// PassBOwnerID constant every batch would otherwise collide on:
-	// UpsertElectricalGroups (internal/sqlite/model.go) replaces an
+	// UpsertElectricalGroups (pkg/sqlite/model.go) replaces an
 	// owner's rows wholesale (delete-then-insert) on every call, so two
 	// batches sharing one owner id would have the later batch silently
 	// wipe out the earlier batch's rows. Query-time code (e.g.

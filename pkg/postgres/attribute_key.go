@@ -7,7 +7,7 @@ import (
 )
 
 // attributeKeyCache resolves Sachdaten attribute key names to their
-// internal attribute_key.id — see internal/sqlite/attribute_key.go's
+// internal attribute_key.id — see pkg/sqlite/attribute_key.go's
 // identical type for the full design rationale (lazy get-or-create, not a
 // pre-seeded fixed Go enum; concurrent readers, no concurrent writers to
 // the same central database).

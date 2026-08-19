@@ -11,7 +11,7 @@ BEGIN;
 -- the physical Node/Edge graph, using the exact same PowerTransformer-boundary / open-
 -- switch-interrupts / GND-excluded rules as the real domain-model-connector's own
 -- NetIsland computation (see circuits.go's doc comment, and
--- internal/impl/common/electrical.go's BuildCircuits, reused as-is via its exported API -
+-- pkg/impl/common/electrical.go's BuildCircuits, reused as-is via its exported API -
 -- no jag core file is modified).
 --
 -- circuit_key is jag's own internal Union-Find group id (Circuit.ID - lexicographically

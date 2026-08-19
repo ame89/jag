@@ -1,7 +1,7 @@
 // Package staging defines the storage abstraction for Phase 1 raw import
 // records (see Konzept.md, "Die Import-Pipeline", Phase 1 "Rohimport"). No
 // logic lives here — this is a pure storage interface; parsing (producing
-// StagingRecord/StagingError values) lives in /internal/importer/*, and
+// StagingRecord/StagingError values) lives in /pkg/importer/*, and
 // Phase 2 (resolving references, building the node-edge model) lives in
 // /internal/impl.
 package staging
@@ -73,7 +73,7 @@ type Store interface {
 	// points at this object". Backed by an index on the value column, so
 	// this is a bounded, indexed lookup rather than a full-table scan.
 	// This is what lets Phase 2's bidirectional Sachdaten/Anhängsel walk
-	// (see internal/impl/common/sachdaten.go) resolve one Equipment at a
+	// (see pkg/impl/common/sachdaten.go) resolve one Equipment at a
 	// time against the store, instead of preloading a reverse-reference
 	// index for the whole model into memory.
 	GetReferencesTo(version uint64, targetID string) ([]model.StagingRecord, error)

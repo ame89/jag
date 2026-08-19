@@ -10,12 +10,12 @@ import (
 	importhjson "github.com/ame89/jag/internal/importer/hjson-deprecated"
 )
 
-// gndToken mirrors internal/importer/hjson's gndToken (unexported there) —
+// gndToken mirrors pkg/importer/hjson's gndToken (unexported there) —
 // duplicated rather than exported across the import/export package
 // boundary, since it's a single reserved literal, not shared logic.
 const gndToken = "GND"
 
-// kwToMWKeys mirrors internal/importer/hjson's own (unexported) unit
+// kwToMWKeys mirrors pkg/importer/hjson's own (unexported) unit
 // table, reversed here (MW/MVAr -> kW/kvar) for export. Kept as a small,
 // separately-documented duplicate rather than exporting the importer's
 // internal table, consistent with this package's own doc comment about
@@ -30,7 +30,7 @@ var kwToMWKeys = map[string]bool{
 
 // FileOutput is one file this exporter will write: its final relative
 // path (Netzregion/TopLevelDir/id.hjson) and its parsed-shape content
-// (reusing internal/importer/hjson's File/Busbar/Bay/Equipment/Segment
+// (reusing pkg/importer/hjson's File/Busbar/Bay/Equipment/Segment
 // types, so the export side is structurally guaranteed to stay in sync
 // with whatever the importer accepts).
 type FileOutput struct {
@@ -41,7 +41,7 @@ type FileOutput struct {
 }
 
 // dirForType maps a container type to its Fachmodell top-level directory
-// name (see internal/importer/hjson/toplevel.go's dirNameToType, reversed).
+// name (see pkg/importer/hjson/toplevel.go's dirNameToType, reversed).
 var dirForType = map[coremodel.ContainerType]string{
 	common.ContainerTypeSubstation:      "ONS",
 	common.ContainerTypeDistributionBox: "KVS",
@@ -142,7 +142,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File) {
 // buildEquipment reconstructs one ordinary (non-BusbarSection,
 // non-ACLineSegment) Equipment entry: its class (from the "cim_class"
 // Sachdaten attribute — see AttributeKeyClass's doc comment in
-// internal/impl/common/attributekeys.go for why this round-trips through
+// pkg/impl/common/attributekeys.go for why this round-trips through
 // Sachdaten instead of a dedicated field), its connects (from its own
 // Edge, omitting GND for single-terminal source/sink equipment per the
 // auto-GND-wiring decision), and its remaining literal attributes.
@@ -169,7 +169,7 @@ func buildEquipment(s *Snapshot, rootID, eqID string) importhjson.Equipment {
 }
 
 // buildSegment reconstructs one ACLineSegment as a Segment entry (From/To
-// instead of Connects — see internal/importer/hjson.Segment).
+// instead of Connects — see pkg/importer/hjson.Segment).
 func buildSegment(s *Snapshot, rootID, eqID string) importhjson.Segment {
 	seg := importhjson.Segment{ID: shortenID(rootID, eqID)}
 	if edge, ok := s.Edges[eqID]; ok {
@@ -186,7 +186,7 @@ func buildSegment(s *Snapshot, rootID, eqID string) importhjson.Segment {
 }
 
 // buildAttributes renders ownerID's Sachdaten as the map[string]interface{}
-// shape internal/importer/hjson.Equipment/Segment/BusbarSectionEntry
+// shape pkg/importer/hjson.Equipment/Segment/BusbarSectionEntry
 // expect, excluding the internal-only AttributeKeyClass key (already
 // surfaced separately as Equipment.Class when skipClass is true) and
 // reversing the kW/kVA <-> MW/MVA curated-key conversion.
@@ -202,7 +202,7 @@ func buildSegment(s *Snapshot, rootID, eqID string) importhjson.Segment {
 // and only the last one survived a plain map assignment. A single-value
 // key still renders as a plain scalar (not a one-element array), so
 // existing hand-authored fixtures/output for ordinary Equipment are
-// unaffected. See internal/importer/hjson's addAttributes for the
+// unaffected. See pkg/importer/hjson's addAttributes for the
 // corresponding import-side array handling.
 func buildAttributes(s *Snapshot, ownerID string, skipClass bool) map[string]interface{} {
 	attrs := s.AttributesByOwner[ownerID]
@@ -292,7 +292,7 @@ func regionOf(s *Snapshot, ownerID, defaultNetzregion string) string {
 }
 
 // shortenID strips a "<rootID>-" prefix if present (the Fachmodell
-// importer's own ID-prefixing scheme — see internal/importer/hjson's
+// importer's own ID-prefixing scheme — see pkg/importer/hjson's
 // resolveID); GND and IDs without that prefix (e.g. raw CIM/CGMES/NSC
 // mRIDs, or cross-file references into a different root) are returned
 // unchanged.

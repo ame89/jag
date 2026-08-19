@@ -51,7 +51,7 @@ const (
 type Attribute struct {
 	// Key is the CIM attribute name in "<Class>.<attribute>" form (e.g.
 	// "Switch.normalOpen"), matching the staging/Sachdaten key convention
-	// used elsewhere in this project (see internal/impl/common's doc
+	// used elsewhere in this project (see pkg/impl/common's doc
 	// comments) — deliberately not just the bare attribute name, so a
 	// generated scaffold's attribute keys are directly usable as HJSON
 	// Fachmodell "attributes" map keys without renaming.

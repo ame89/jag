@@ -1,5 +1,5 @@
 // Package sqlite — this file implements the target/final-model storage
-// interfaces (internal/core/hierarchy, geometry, topology/physical,
+// interfaces (pkg/core/hierarchy, geometry, topology/physical,
 // topology/electrical, technical) on top of SQLite, as a new schema
 // alongside the existing Phase 1 staging schema (staging.go) and
 // ParameterCatalog schema (catalog.go). Pure persistence only — no
@@ -8,7 +8,7 @@
 // IMPORTANT (2026-07-14, implementation status): this is a first,
 // deliberately NOT-yet-wired-in schema/store implementation (see
 // Konzept.md's "DB-Schema für JAG" discussion) — cmd/phase2check and
-// internal/impl/common's Phase 2/3 pipeline (BuildNodesAndEdges,
+// pkg/impl/common's Phase 2/3 pipeline (BuildNodesAndEdges,
 // CheckInvariants, BuildContainers, etc.) still work entirely in-memory
 // and do not yet read/write through this store. Wiring the pipeline to
 // actually persist here (and, per the still-open "RAM growth" issue,

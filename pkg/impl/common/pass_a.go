@@ -161,7 +161,7 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 	// Substation ID, or "" if any link of the chain is absent.
 	//
 	// 2026-08-05 fix: checks ownIdx's own literal "region" attribute
-	// FIRST — this is how internal/importer/hjson's emitStation/emitHouse
+	// FIRST — this is how pkg/importer/hjson's emitStation/emitHouse
 	// stages a Fachmodell file's own "region" Sachdaten value (derived,
 	// per that package's applyRegionPrecedence, from either an explicit
 	// attribute or the file's own directory path/Netzregion — see
@@ -205,7 +205,7 @@ func ResolveBatchContainers(store staging.Store, version uint64, subIDs, houseID
 
 	// containerNameOf prefers a literal "name" attribute (see regionOf's
 	// doc comment above for the identical rationale — this is how
-	// internal/importer/hjson's addAttributes stages a Fachmodell file's
+	// pkg/importer/hjson's addAttributes stages a Fachmodell file's
 	// own "name" Sachdaten value) over ownIdx.NameOf's
 	// "IdentifiedObject.name" lookup, which emitStation always sets to a
 	// fallback of the container's own ID whether or not the file carried

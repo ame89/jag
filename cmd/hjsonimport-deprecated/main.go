@@ -1,11 +1,11 @@
 // Command hjsonimport-deprecated is the reference CLI for the deprecated
 // v1 Fachmodell HJSON Phase 1 dialect (see
-// internal/importer/hjson-deprecated's doc comment and Konzept.md's "HJSON
+// pkg/importer/hjson-deprecated's doc comment and Konzept.md's "HJSON
 // Fachmodell" history): it parses a directory tree of *.hjson files
 // (<root>/<Netzregion>/<ONS|KVS|Kabel|Haushalte>/<id>.hjson) into the
 // staging store, runs it through the existing Pass A/B Phase 2/3 pipeline
 // unchanged, and persists the result via ModelStore. Deprecated: hjson2
-// (cmd/hjsonimport, internal/importer/hjson) is the current, authoritative
+// (cmd/hjsonimport, pkg/importer/hjson) is the current, authoritative
 // HJSON Fachmodell dialect. NOTE: examples/hjson now contains hjson2
 // (pluralized-key) format data, not the v1 format this binary expects —
 // there is no dedicated v1 example directory; pass an explicit v1-format

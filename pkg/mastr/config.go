@@ -12,7 +12,7 @@
 //
 // This is a standalone mirror for querying MaStR data, unrelated to JAG's
 // own CIM/CGMES node-edge model — it does not feed into
-// /internal/core/model.
+// /pkg/core/model.
 package mastr
 
 // Config describes how to reach the MaStR database. Fields beyond

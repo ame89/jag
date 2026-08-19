@@ -2,7 +2,7 @@
 // (instance-specific attribute key-value data, see Konzept.md, "Sachdaten").
 // Pure interface + data only — no domain/business logic lives here (see
 // Impl.md, Ports & Adapters). ParameterCatalog entries use a separate
-// storage interface (see /internal/core/catalog) despite sharing the same
+// storage interface (see /pkg/core/catalog) despite sharing the same
 // underlying Attribute mechanism/global key enum (see Konzept.md's
 // explicit "kein eigenes Storage-Interface für ParameterCatalog"
 // decision — catalog entries are addressed by their own entry ID, not an

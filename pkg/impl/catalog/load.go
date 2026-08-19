@@ -50,7 +50,7 @@ func Default() ([]coremodel.CatalogEntry, error) {
 // jsonEntry mirrors one catalog JSON seed file's array element: an ID plus
 // a flat key-value bundle. Attribute keys are taken directly from the JSON
 // key names (same convention as the CIM Sachdaten walk in
-// internal/impl/common/sachdaten.go: raw/descriptive names, since the final
+// pkg/impl/common/sachdaten.go: raw/descriptive names, since the final
 // global AttributeKey enum isn't decided yet — see Konzept.md).
 type jsonEntry struct {
 	ID         string         `json:"id"`

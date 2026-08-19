@@ -13,7 +13,7 @@ import coremodel "github.com/ame89/jag/pkg/core/model"
 // electrical.Store's Upsert — only physical.Store happens to line up
 // exactly. The adapters below are zero-cost wrappers renaming those calls
 // back to the exact method sets the core interfaces require, for callers
-// (e.g. internal/impl/usecase) that want to depend on the interfaces
+// (e.g. pkg/impl/usecase) that want to depend on the interfaces
 // rather than the concrete *ModelStore type.
 
 // ContainerAdapter adapts *ModelStore to hierarchy.Store.

@@ -33,10 +33,10 @@ import (
 // "examples stay stable under refactoring" safety net.
 //
 // Golden files are checked in under
-// internal/impl/common/testdata/golden/<dataset>.golden. To (re)generate
+// pkg/impl/common/testdata/golden/<dataset>.golden. To (re)generate
 // them after an intentional model-building change, run:
 //
-//	JAG_UPDATE_GOLDEN=1 go test ./internal/impl/common/... -run TestGoldenSnapshotAgainstRealDatasets -v
+//	JAG_UPDATE_GOLDEN=1 go test ./pkg/impl/common/... -run TestGoldenSnapshotAgainstRealDatasets -v
 //
 // and review the resulting diff in the golden files like any other code
 // change before committing it — a passing regeneration does NOT by itself
@@ -140,7 +140,7 @@ func snapshotModel(nodes []coremodel.Node, edges []coremodel.Edge, containers []
 }
 
 // compareGolden compares got against the checked-in golden file for name
-// (internal/impl/common/testdata/golden/<name>.golden). If the
+// (pkg/impl/common/testdata/golden/<name>.golden). If the
 // JAG_UPDATE_GOLDEN environment variable is set (to any non-empty value),
 // the golden file is (over)written with got instead of compared — used to
 // intentionally regenerate golden files after a reviewed model-building
@@ -166,6 +166,6 @@ func compareGolden(t *testing.T, name, got string) {
 		t.Fatalf("golden file %s not found (run with JAG_UPDATE_GOLDEN=1 to generate it, then review + commit it): %v", path, err)
 	}
 	if got != string(want) {
-		t.Fatalf("snapshot for %s does not match golden file %s.\nThis means the Node/Edge/Container set produced by the pipeline changed.\nIf this is an intentional, reviewed change, regenerate with:\n  JAG_UPDATE_GOLDEN=1 go test ./internal/impl/common/... -run TestGoldenSnapshotAgainstRealDatasets/%s -v\nand review the resulting diff before committing.\n\n--- got ---\n%s", name, path, name, got)
+		t.Fatalf("snapshot for %s does not match golden file %s.\nThis means the Node/Edge/Container set produced by the pipeline changed.\nIf this is an intentional, reviewed change, regenerate with:\n  JAG_UPDATE_GOLDEN=1 go test ./pkg/impl/common/... -run TestGoldenSnapshotAgainstRealDatasets/%s -v\nand review the resulting diff before committing.\n\n--- got ---\n%s", name, path, name, got)
 	}
 }

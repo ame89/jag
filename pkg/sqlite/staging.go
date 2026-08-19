@@ -15,7 +15,7 @@ import (
 )
 
 // stagingSchema creates the Phase 1 staging tables if they don't exist yet.
-// See internal/core/staging for the interface this backs.
+// See pkg/core/staging for the interface this backs.
 const stagingSchema = `
 CREATE TABLE IF NOT EXISTS staging_records (
     version       INTEGER NOT NULL,
@@ -83,7 +83,7 @@ type StagingStore struct {
 // file-backed database allows (see the WAL comment below). Generous but
 // fixed rather than tied to a caller-supplied worker count: Phase 2's
 // planned per-station worker goroutines (see
-// internal/impl/common's BuildSachdatenAndGeometryParallel, "step (b)" of
+// pkg/impl/common's BuildSachdatenAndGeometryParallel, "step (b)" of
 // the user's parallel-import decision) need at most a handful of
 // concurrent readers, and idle pooled connections cost SQLite nothing
 // noticeable, so there is no need to plumb a worker count through Open's

@@ -17,7 +17,7 @@ import (
 // directories as needed.
 //
 // Deliberately hand-formatted, always-multi-line, always-quoted-key/value
-// output (not hjson-go's own Marshal): see internal/importer/hjson's doc
+// output (not hjson-go's own Marshal): see pkg/importer/hjson's doc
 // comment — hjson-go/v4's parser was found to reliably mis-parse dense
 // single-line object/array syntax, and there is no guarantee its own
 // Marshal wouldn't produce exactly that dense style. Writing HJSON by hand
@@ -230,7 +230,7 @@ func writeSegment(b *strings.Builder, seg importhjson.Segment, depth int) {
 // field (already written separately, outside this block) makes a hjson2
 // file scannable without hunting through an alphabetical attribute list.
 // It is rendered under the simplified alias "name" (attributesLeadKeyAlias)
-// rather than its raw CIM key — see internal/importer/hjson2's
+// rather than its raw CIM key — see pkg/importer/hjson2's
 // denormalizeAttrKey, which maps "name" back to "IdentifiedObject.name" on
 // re-import so the round trip stays lossless. A top-level container's
 // f.Attributes never contains this literal CIM key in the first place
@@ -429,7 +429,7 @@ func renderAttrValue(k string, v interface{}) string {
 
 // attrUnits is a small, deliberately non-exhaustive, curated table of
 // well-known CIM attribute units (mirrors the kwToMWKeys precedent in
-// internal/importer/hjson2/resolve.go: a seed list, extended as more units
+// pkg/importer/hjson2/resolve.go: a seed list, extended as more units
 // are confirmed) — keyed by the FULL raw "Class.attribute" CIM key (not
 // the possibly-stripped display key written to hjson2) so a unit is never
 // misattributed just because two unrelated classes happen to share a
@@ -462,7 +462,7 @@ var attrUnits = map[string]string{
 // (class prefix, attribute name), reporting ok == false for a key with no
 // dot at all (should not normally occur for CIM keys, but handled
 // defensively) — and also for any key already carrying a "cim:" prefix
-// (see internal/impl/common/container.go's LineRefs: an untrusted raw
+// (see pkg/impl/common/container.go's LineRefs: an untrusted raw
 // CGMES "Line" grouping reference kept as opaque Sachdaten, e.g.
 // "cim:ACLineSegment.Line" or "cim:Line.IdentifiedObject.mRID"). Such a
 // key must never be simplified: stripping only its "cim:Line." portion
@@ -505,7 +505,7 @@ func writeAttributesBlock(b *strings.Builder, attrs map[string]interface{}, dept
 // the very same object (e.g. a Zweipol that folds both an
 // "ACLineSegment.r" and an unrelated "PerLengthSequenceImpedance.r" into
 // one Sachdaten map would keep both fully qualified). See
-// internal/importer/hjson2's denormalizeAttrKey/UniqueAttrClass for the
+// pkg/importer/hjson2's denormalizeAttrKey/UniqueAttrClass for the
 // import-side reconstruction this enables (best-effort, since the
 // importer only ever sees one already-stripped file, not this local
 // collision check's input).
@@ -584,7 +584,7 @@ func writeNamedBlock(b *strings.Builder, label string, attrs map[string]interfac
 }
 
 // writeSatellitesBlock renders a folded satellite object list (see
-// internal/importer/hjson.Satellite and internal/impl/common's
+// pkg/importer/hjson.Satellite and pkg/impl/common's
 // AttributeKeySatellite doc comment) as its own "satellites: [...]" array,
 // one {class, attributes} object per satellite — kept structurally
 // separate from writeAttributesBlock's flat map so a satellite's own data
@@ -610,7 +610,7 @@ func writeSatellitesBlock(b *strings.Builder, satellites []importhjson.Satellite
 
 // writeGeometryPoint renders a single WGS84 point as its own compact,
 // single-line "geometry: { lat, lon }" object (always this exact pair,
-// nothing else — see internal/importer/hjson2.GeometryPoint) — used
+// nothing else — see pkg/importer/hjson2.GeometryPoint) — used
 // everywhere a Geometry is a single point (top-level containers,
 // Equipment, BusbarSectionEntry). A dense single-line form is safe here
 // (unlike Write's doc comment's general warning about hjson-go/v4

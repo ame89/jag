@@ -21,7 +21,7 @@ BEGIN;
 -- jag2nsc_raw_terminal mirrors the real CIM Terminal objects (id/ConductingEquipment/
 -- ConnectivityNode/sequenceNumber) exactly as JAG's own staging_records still hold them
 -- right after import, BEFORE any of JAG's own node-merging (MergeJunctionNodes/
--- MergeBusbarSectionNodes - see internal/impl/common) collapses a node-role Equipment's
+-- MergeBusbarSectionNodes - see pkg/impl/common) collapses a node-role Equipment's
 -- several own ConnectivityNodes onto one canonical id. JAG's persisted model_edge/
 -- model_node deliberately only records the POST-merge graph (that's the correct design for
 -- JAG's own domain, see Konzept.md), so it has no way to tell jag2nsc that e.g. a
@@ -33,7 +33,7 @@ BEGIN;
 -- reading staging_records via plain SQL - no JAG Go source file is imported, called, or
 -- modified to produce it. It only works while staging_records for the imported version
 -- still exists (JAG's own import pipeline never deletes it automatically - see
--- internal/importer/phase1/run.go's doc comment - DeleteVersion is only ever called
+-- pkg/importer/phase1/run.go's doc comment - DeleteVersion is only ever called
 -- explicitly by a caller that wants to reclaim the scratch space); if a deployment does
 -- clear staging_records after import, this table (and therefore BuildTopology) simply has
 -- nothing to read and produces an empty/incomplete topology - a known, accepted limitation

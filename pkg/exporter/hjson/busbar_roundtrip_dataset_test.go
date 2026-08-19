@@ -33,7 +33,7 @@ import (
 )
 
 // modelSink persists Attribute/Geometry batches straight into a ModelStore
-// — unlike internal/impl/common's own nopSink-based tests, this round
+// — unlike pkg/impl/common's own nopSink-based tests, this round
 // trip actually needs Sachdaten (e.g. Equipment.Class, IdentifiedObject.name)
 // and Geometry to survive, since hjson2's exporter reads them back out of
 // the ModelStore to reconstruct the .hjson tree.

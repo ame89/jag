@@ -7,7 +7,7 @@
 // model_edge/model_container/model_attribute (already populated by JAG's own, completely
 // unmodified, import pipeline - phase1/RunPassA/RunPassB) and writes to the new
 // jag2nsc_topo_terminal/jag2nsc_topo_connection/jag2nsc_topo_connection_terminal_map/jag2nsc_topo_line_segment
-// tables (topology_tables.sql). No existing JAG Go source file (internal/impl/common,
+// tables (topology_tables.sql). No existing JAG Go source file (pkg/impl/common,
 // internal/postgres, cmd/phase2check, ...) is imported, called, or modified by this code.
 //
 // Algorithm (ported from the real connector's ConnectionBuilderService.getConnections/
@@ -50,7 +50,7 @@ import (
 // progressLogger is used by BuildTopology to report per-phase progress (record counts,
 // elapsed time, RAM) while it runs - see internal/progress's doc comment. Defaults to
 // discarding everything so existing callers/tests see no behavior change; call SetLogger to
-// opt in (cmd/jag2nsc-apply does, mirroring internal/impl/common's own SetLogger/logger
+// opt in (cmd/jag2nsc-apply does, mirroring pkg/impl/common's own SetLogger/logger
 // package-level knob). This only READS internal/progress (an existing, unmodified JAG
 // helper package) - no jag core file is changed by this.
 var progressLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -327,7 +327,7 @@ func ApplyTopologyTables(ctx context.Context, db *sql.DB) error {
 // "equipmentID#T1" - this both removes the need for any of the old special-casing AND makes
 // jag2nsc's own terminal.external_id naming match the real domain-model-connector's 1:1.
 // baseEquipmentID reverses JAG's own import-time BusbarSection Terminal ID
-// splitting (internal/importer/nsc/normalize.go: "<busbarID>#N" synthetic
+// splitting (pkg/importer/nsc/normalize.go: "<busbarID>#N" synthetic
 // copies) by stripping a trailing "#<digits>" suffix, if present, so all of a
 // BusbarSection's raw Terminals group back under its one real equipment ID.
 func baseEquipmentID(id string) string {
@@ -417,7 +417,7 @@ ORDER BY equipment_id, sequence_number NULLS LAST, terminal_id`)
 			rawRows.Close()
 			return nil, err
 		}
-		// JAG's own import normalization (internal/importer/nsc/normalize.go,
+		// JAG's own import normalization (pkg/importer/nsc/normalize.go,
 		// StreamFile) rewrites Terminal.ConductingEquipment for every
 		// BusbarSection Terminal beyond the first to a synthetic "<busbarID>#N"
 		// value (and creates a matching synthetic model_equipment row), so that

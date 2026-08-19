@@ -11,12 +11,12 @@ import (
 	importhjson "github.com/ame89/jag/pkg/importer/hjson"
 )
 
-// gndToken mirrors internal/importer/hjson's gndToken (unexported there) —
+// gndToken mirrors pkg/importer/hjson's gndToken (unexported there) —
 // duplicated rather than exported across the import/export package
 // boundary, since it's a single reserved literal, not shared logic.
 const gndToken = "GND"
 
-// kwToMWKeys mirrors internal/importer/hjson's own (unexported) unit
+// kwToMWKeys mirrors pkg/importer/hjson's own (unexported) unit
 // table, reversed here (MW/MVAr -> kW/kvar) for export. Kept as a small,
 // separately-documented duplicate rather than exporting the importer's
 // internal table, consistent with this package's own doc comment about
@@ -31,7 +31,7 @@ var kwToMWKeys = map[string]bool{
 
 // FileOutput is one file this exporter will write: its final relative
 // path (Netzregion/TopLevelDir/id.hjson) and its parsed-shape content
-// (reusing internal/importer/hjson's File/Busbar/Bay/Equipment/Segment
+// (reusing pkg/importer/hjson's File/Busbar/Bay/Equipment/Segment
 // types, so the export side is structurally guaranteed to stay in sync
 // with whatever the importer accepts).
 type FileOutput struct {
@@ -47,7 +47,7 @@ type FileOutput struct {
 }
 
 // dirForType maps a container type to its Fachmodell top-level directory
-// name (see internal/importer/hjson/toplevel.go's dirNameToType, reversed).
+// name (see pkg/importer/hjson/toplevel.go's dirNameToType, reversed).
 var dirForType = map[coremodel.ContainerType]string{
 	common.ContainerTypeSubstation:      "ONS",
 	common.ContainerTypeDistributionBox: "KVS",
@@ -496,7 +496,7 @@ func classifyInternalACLines(s *Snapshot, roots []coremodel.Container, nodeEquip
 //
 // Once a station's busbar node(s) are found, each is assigned a short,
 // per-station synthetic local ID ("@BB-1", "@BB-2", ...; the "@" prefix
-// marks it explicitly as file-local, see internal/importer/hjson2's
+// marks it explicitly as file-local, see pkg/importer/hjson2's
 // localIDPrefix/resolveID), independent of any original CIM object ID
 // (busbar containers/BusbarSection Equipment IDs are container-hierarchy
 // artifacts, not electrical identity — see container.go's "busbar:"-
@@ -539,7 +539,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines 
 		bay := importhjson.Bay{ID: shortenID(rootID, child.ID)}
 		// Bay's own container-level Sachdaten (currently just "name") —
 		// see Bay.Attributes' doc comment in
-		// internal/importer/hjson2/types.go for why this is needed at
+		// pkg/importer/hjson2/types.go for why this is needed at
 		// all (previously silently dropped, defaulting to the Bay's own
 		// ID on reimport).
 		bay.Attributes = buildAttributes(s, child.ID, false)
@@ -569,7 +569,7 @@ func buildStation(s *Snapshot, rootID string, f *importhjson.File, ownedACLines 
 
 // buildBusbarSections finds each busbar container's real electrical Node
 // directly from the AttributeKeyBusbarNode bookkeeping written by
-// internal/impl/common's Pass A (ProcessStationBatch, see that key's doc
+// pkg/impl/common's Pass A (ProcessStationBatch, see that key's doc
 // comment) — one row per original BusbarSection Equipment ID, holding the
 // canonical Node ID it was merged into by MergeBusbarSectionNodes. This
 // replaced an earlier "2+ independent branches converge on this node"
@@ -643,7 +643,7 @@ func buildBusbarSections(
 		// ID by resolveConnectTarget/shortenID, never against a Section
 		// — Sections are purely informational (Attributes/Satellites/
 		// Geometry), see this type's doc comment in
-		// internal/importer/hjson/types.go. So this now emits exactly
+		// pkg/importer/hjson/types.go. So this now emits exactly
 		// one Section per *original* BusbarSection Equipment, keeping
 		// the exported Section count equal to the real one, with no
 		// connects-resolution impact at all.
@@ -706,7 +706,7 @@ func buildBusbarSections(
 // name legitimately differs (or is entirely missing) prevents ANY hoist
 // for that busbar — no partial/best-effort hoisting, to avoid silently
 // dropping a genuinely distinct Section name. See
-// internal/importer/hjson2/resolve.go's emitStation for the corresponding
+// pkg/importer/hjson2/resolve.go's emitStation for the corresponding
 // import-side fallback (a Section without its own name inherits the
 // Busbar's hoisted one), which keeps this fully round-trip safe.
 func hoistCommonSectionName(bb *importhjson.Busbar) {
@@ -738,7 +738,7 @@ func hoistCommonSectionName(bb *importhjson.Busbar) {
 // buildEquipment reconstructs one ordinary (non-BusbarSection,
 // non-ACLineSegment) Equipment entry: its class (from the "cim_class"
 // Sachdaten attribute — see AttributeKeyClass's doc comment in
-// internal/impl/common/attributekeys.go for why this round-trips through
+// pkg/impl/common/attributekeys.go for why this round-trips through
 // Sachdaten instead of a dedicated field), its connects (from its own
 // Edge, omitting GND for single-terminal source/sink equipment per the
 // auto-GND-wiring decision), and its remaining literal attributes.
@@ -874,7 +874,7 @@ func extractMeterSchedules(eq *importhjson.Equipment) {
 // three times over: the Meter itself plus both its schedules), so
 // repeating it verbatim in both blocks is pure noise. Left untouched
 // (schedule keeps its own, presumably meaningful, name) if it differs.
-// See internal/importer/hjson2/resolve.go's addMeterSchedules for the
+// See pkg/importer/hjson2/resolve.go's addMeterSchedules for the
 // corresponding import-side fallback (a schedule missing its own name
 // inherits the owning Equipment's name), which keeps this round-trip
 // safe.
@@ -896,7 +896,7 @@ func dropRedundantScheduleName(schedule, ownerAttrs map[string]interface{}) {
 }
 
 // buildSegment reconstructs one ACLineSegment as a Segment entry (From/To
-// instead of Connects — see internal/importer/hjson.Segment). overrides
+// instead of Connects — see pkg/importer/hjson.Segment). overrides
 // (see buildBusbarSections) rewrites From/To exactly like buildEquipment
 // does for Connects — relevant for a station-internal ACLine folded into
 // its owning station's own file (see classifyInternalACLines) whose
@@ -924,7 +924,7 @@ func buildSegment(s *Snapshot, rootID, eqID string, fromDirPath string, xref map
 }
 
 // buildAttributes renders ownerID's Sachdaten as the map[string]interface{}
-// shape internal/importer/hjson.Equipment/Segment/BusbarSectionEntry
+// shape pkg/importer/hjson.Equipment/Segment/BusbarSectionEntry
 // expect, excluding the internal-only AttributeKeyClass key (already
 // surfaced separately as Equipment.Class when skipClass is true) and
 // reversing the kW/kVA <-> MW/MVA curated-key conversion.
@@ -940,7 +940,7 @@ func buildSegment(s *Snapshot, rootID, eqID string, fromDirPath string, xref map
 // and only the last one survived a plain map assignment. A single-value
 // key still renders as a plain scalar (not a one-element array), so
 // existing hand-authored fixtures/output for ordinary Equipment are
-// unaffected. See internal/importer/hjson's addAttributes for the
+// unaffected. See pkg/importer/hjson's addAttributes for the
 // corresponding import-side array handling.
 func buildAttributes(s *Snapshot, ownerID string, skipClass bool) map[string]interface{} {
 	attrs := s.AttributesByOwner[ownerID]
@@ -1047,7 +1047,7 @@ func isGeometrySatelliteClass(class string) bool {
 // buildGeometryPath reconstructs ownerID's full WGS84 route from its raw
 // "PositionPoint" satellites (see sachdaten.go's satellite walk — neither
 // "Location" nor "PositionPoint" is excluded from the generic walk there,
-// since internal/impl/common/geometry.go's BuildGeometry already reduces
+// since pkg/impl/common/geometry.go's BuildGeometry already reduces
 // them to a single owner-level Geometry point independently and doesn't
 // touch the Sachdaten/satellite pipeline at all), sorted ascending by
 // PositionPoint.sequenceNumber (ties broken by encounter order — real CIM
@@ -1109,7 +1109,7 @@ func buildGeometryPath(s *Snapshot, ownerID string) []importhjson.GeometryPoint 
 }
 
 // ownerGeometryPoint returns ownerID's own single-point Geometry as
-// determined by Phase 2 (internal/impl/common/geometry.go's BuildGeometry,
+// determined by Phase 2 (pkg/impl/common/geometry.go's BuildGeometry,
 // persisted in s.GeometryByOwner), or nil if Phase 2 found none.
 //
 // Equipment and BusbarSectionEntry geometry MUST be sourced from here, not
@@ -1371,7 +1371,7 @@ func dirPathOf(region, subregion, dir string) string {
 
 // shortenID strips a "<rootID>-" prefix if present and marks the result
 // as an explicitly local ID with the "@" prefix (see
-// internal/importer/hjson2's resolveID/localIDPrefix — a name is local to
+// pkg/importer/hjson2's resolveID/localIDPrefix — a name is local to
 // a file iff it starts with "@", global otherwise); GND and IDs without
 // the "<rootID>-" prefix (e.g. raw CIM/CGMES/NSC mRIDs, or cross-file
 // references into a different root — Kabel/ACLine files in particular

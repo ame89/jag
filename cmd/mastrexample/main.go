@@ -41,7 +41,7 @@ func main() {
 	fmt.Printf("=== Tables (%d) ===\n%s\n\n", len(tables), strings.Join(tables, ", "))
 
 	// 2. What columns does one specific table have? Column sets are
-	// discovered dynamically at import time (see internal/mastr/import.go),
+	// discovered dynamically at import time (see pkg/mastr/import.go),
 	// so this is the authoritative way to find out what's queryable rather
 	// than guessing from MaStR's documentation.
 	if cols, err := store.Columns("EinheitenWind"); err != nil {

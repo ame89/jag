@@ -37,7 +37,7 @@ type modelWriter interface {
 	// PersistBatch writes Containers/Equipment/Nodes/Edges/Attributes/
 	// Geometries/Groups for ONE Pass A/B batch inside a single
 	// transaction, instead of one transaction per entity type. See
-	// internal/postgres/model.go's PersistBatch doc comment for the
+	// pkg/postgres/model.go's PersistBatch doc comment for the
 	// PostgreSQL-specific commit/fsync-count rationale that made this
 	// necessary (internal/sqlite's implementation is a thin sequential
 	// wrapper around its existing per-entity Upsert* methods, since
@@ -55,7 +55,7 @@ type modelWriter interface {
 }
 
 // storeCloser is the small extra bit staging.Store itself doesn't require
-// (see internal/core/staging/store.go's doc comment: Close is a resource
+// (see pkg/core/staging/store.go's doc comment: Close is a resource
 // lifecycle concern, not a staging-data operation) but both
 // *sqlite.StagingStore and *postgres.StagingStore provide.
 type storeCloser interface {
@@ -118,7 +118,7 @@ func (s *reportSink) WriteGeometries(batch []coremodel.Geometry) error {
 
 // persistSink wraps a *reportSink (for the existing counters/sample used
 // in the report below) and additionally persists every batch through
-// ModelStore into the model_* schema (internal/sqlite/model.go) — this is
+// ModelStore into the model_* schema (pkg/sqlite/model.go) — this is
 // the "wiring in" of the previously schema-only target model: Attributes
 // and Geometries built by BuildAttributes/BuildGeometry (and the parallel
 // station-worker variant) now actually land in SQLite, batch by batch,
@@ -197,11 +197,11 @@ func main() {
 	} else {
 		// NSC dialect files use a .rdf extension instead of CGMES's .xml — the
 		// underlying parser is dialect-neutral RDF/XML either way (see
-		// internal/importer/cgmes/parser.go). Which Phase 1 entry point to use
+		// pkg/importer/cgmes/parser.go). Which Phase 1 entry point to use
 		// is decided per directory (not per file): if any .rdf files are
 		// present, the whole directory is treated as an NSC dataset and run
 		// through phase1.RunNSCFiles (which also normalizes NSC's dialect
-		// quirks — see internal/importer/nsc's doc comment); a pure .xml
+		// quirks — see pkg/importer/nsc's doc comment); a pure .xml
 		// directory keeps using phase1.RunCGMESFiles. Mixing both dialects in
 		// one directory isn't a real scenario in the example data and isn't
 		// supported here.
@@ -359,7 +359,7 @@ func main() {
 
 	overallStart := time.Now()
 	// Backend selection: JAG_BACKEND=postgres (see
-	// internal/postgres/dsn.go's DSNFromEnv doc comment for the full
+	// pkg/postgres/dsn.go's DSNFromEnv doc comment for the full
 	// JAG_POSTGRES_* variable set) switches to a PostgreSQL-backed store;
 	// anything else (including unset, the default) keeps the original
 	// SQLite-file behavior unchanged.
