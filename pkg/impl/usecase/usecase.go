@@ -10,13 +10,12 @@
 // Scope (2026-07-14): covers UC1 (station subgraph), UC2a (physical
 // reachability), UC2b/UC4 (electrical connectivity), UC3 (region/bounding
 // box), UC12 (container-type aggregation). UC7 (n-1 "what-if" switch
-// override) deliberately stays out of this package for now — it needs
-// switch classification (Fuse/Breaker/Disconnector class + normalOpen),
-// which today only exists as Phase 2 logic reading the raw staging model
-// (see internal/impl/common.BuildElectricalGroups), not yet as a
-// Sachdaten-only computation over the persisted model_attribute table;
-// see that function's SwitchStateOverrides parameter for the existing
-// override mechanism until this is revisited. UC5/6/8/9/10/11/13/14 need
+// override) is now covered too (added later, see circuits.go's
+// GetSchaltkreis/GetSchaltkreise): switch/PowerTransformer classification
+// is computed purely from persisted Sachdaten (technical.Store), NOT from
+// the raw staging model, so it works correctly even after
+// common.FinalizeImport's default post-import staging_records cleanup.
+// UC5/6/8/9/10/11/13/14 need
 // further building blocks (load-flow export, generic attribute-value
 // filtering, GeoJSON) not implemented here. UC15 is permanently out of
 // scope (historisation dropped, see Konzept.md). UC16 (consistency) is
@@ -31,6 +30,7 @@ import (
 
 	"github.com/ame89/jag/pkg/core/geometry"
 	"github.com/ame89/jag/pkg/core/hierarchy"
+	"github.com/ame89/jag/pkg/core/technical"
 	"github.com/ame89/jag/pkg/core/topology/electrical"
 	"github.com/ame89/jag/pkg/core/topology/physical"
 )
@@ -45,11 +45,17 @@ type Service struct {
 	Geometry   geometry.Store
 	Physical   physical.Store
 	Electrical electrical.Store
+	// Technical provides Sachdaten (Attribute) reads, used by
+	// GetSchaltkreis/GetSchaltkreise (see circuits.go) to reconstruct
+	// switch/PowerTransformer classification purely from the persisted
+	// model — deliberately not from staging.Store (see circuits.go's
+	// package doc comment).
+	Technical technical.Store
 }
 
 // NewService constructs a Service from the given stores.
-func NewService(containers hierarchy.Store, equipment hierarchy.EquipmentStore, geo geometry.Store, phys physical.Store, elec electrical.Store) *Service {
-	return &Service{Containers: containers, Equipment: equipment, Geometry: geo, Physical: phys, Electrical: elec}
+func NewService(containers hierarchy.Store, equipment hierarchy.EquipmentStore, geo geometry.Store, phys physical.Store, elec electrical.Store, tech technical.Store) *Service {
+	return &Service{Containers: containers, Equipment: equipment, Geometry: geo, Physical: phys, Electrical: elec, Technical: tech}
 }
 
 // StationSubgraph is the result of UC1 ("Wie ist eine Ortsnetzstation

@@ -57,3 +57,14 @@ type ElectricalAdapter struct{ *ModelStore }
 func (e ElectricalAdapter) Upsert(owned map[string]map[string]string) error {
 	return e.ModelStore.UpsertElectricalGroups(owned)
 }
+
+// TechnicalAdapter adapts *ModelStore to technical.Store (GetByOwnerIDs
+// already lines up directly, but Upsert was renamed to UpsertAttributes to
+// avoid colliding with the other Upsert* methods on this same ModelStore
+// type — see the package doc comment above).
+type TechnicalAdapter struct{ *ModelStore }
+
+// Upsert implements technical.Store.
+func (t TechnicalAdapter) Upsert(attributes []coremodel.Attribute) error {
+	return t.ModelStore.UpsertAttributes(attributes)
+}

@@ -85,6 +85,7 @@ func setupService(t *testing.T) *usecase.Service {
 		sqlite.GeometryAdapter{ModelStore: m},
 		m,
 		sqlite.ElectricalAdapter{ModelStore: m},
+		sqlite.TechnicalAdapter{ModelStore: m},
 	)
 }
 
@@ -200,6 +201,7 @@ func TestElectricallyConnected_BoundaryNode(t *testing.T) {
 		sqlite.GeometryAdapter{ModelStore: m},
 		m,
 		sqlite.ElectricalAdapter{ModelStore: m},
+		sqlite.TechnicalAdapter{ModelStore: m},
 	)
 
 	connected, err := svc.ElectricallyConnected("nodeA", "nodeB")

@@ -152,6 +152,7 @@ func main() {
 		sqlite.GeometryAdapter{ModelStore: model},
 		model,
 		sqlite.ElectricalAdapter{ModelStore: model},
+		sqlite.TechnicalAdapter{ModelStore: model},
 	)
 
 	fmt.Println("\n--- UC12: container counts by type ---")

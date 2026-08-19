@@ -44,4 +44,13 @@ type Store interface {
 	UpsertNodes(nodes []coremodel.Node) error
 	// UpsertEdges inserts or replaces Edge entries in bulk.
 	UpsertEdges(edges []coremodel.Edge) error
+	// AllNodes pages through every persisted Node, ordered by EquipmentID,
+	// cursor-paginated via afterID (exclusive) and limit — mirrors the
+	// HJSON exporter's Snapshot/Load cursor convention (see
+	// pkg/exporter/hjson). Pass an empty afterID to start from the
+	// beginning. Returns an empty (not nil) slice once exhausted.
+	AllNodes(afterID string, limit int) ([]coremodel.Node, error)
+	// AllEdges pages through every persisted Edge, ordered by EquipmentID,
+	// same cursor convention as AllNodes.
+	AllEdges(afterID string, limit int) ([]coremodel.Edge, error)
 }
