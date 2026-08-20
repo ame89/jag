@@ -2,6 +2,7 @@ package hjson
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -417,7 +418,7 @@ func renderAttrValue(k string, v interface{}) string {
 	if numericAttrKeys[k] {
 		if s, ok := v.(string); ok {
 			if f, err := strconv.ParseFloat(s, 64); err == nil {
-				return strconv.FormatFloat(f, 'g', -1, 64)
+				return formatHJSONFloat(f)
 			}
 		}
 	}
@@ -741,6 +742,26 @@ func needsQuoteAsBareValue(s string) bool {
 	return false
 }
 
+// formatHJSONFloat renders a float64 as an HJSON number, avoiding
+// scientific notation for values that are actually whole numbers (e.g.
+// large OSM IDs like 307857772.0 that arrived here as float64 due to
+// encoding/json's default numeric decoding of coremodel.Attribute.Value —
+// see coremodel.Attribute's doc comment). strconv.FormatFloat's 'g' verb
+// switches to exponential notation once enough significant digits are
+// needed (e.g. "3.07857772e+08"), which is technically valid JSON/HJSON
+// but corrupts any consumer that expects to read the value back as a
+// plain integer ID. Whole numbers that fit as an int64 are therefore
+// rendered via 'f' (no exponent, no unnecessary trailing zeros thanks to
+// precision -1); everything else (genuine fractional values) keeps using
+// 'g' as before. Bug found 2026-08-20 in jaggen's MS-*.hjson export
+// (osm_id rendered as "3.07857772e+08" instead of "307857772").
+func formatHJSONFloat(f float64) string {
+	if f == math.Trunc(f) && !math.IsInf(f, 0) && math.Abs(f) < 1e18 {
+		return strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
 // quoteValue renders one Attribute.Value (string/float64/bool from
 // encoding/json decoding — see coremodel.Attribute's doc comment) as an
 // HJSON literal. A []interface{} (multi-value Sachdaten key, see
@@ -751,7 +772,7 @@ func quoteValue(v interface{}) string {
 	case string:
 		return quote(val)
 	case float64:
-		return strconv.FormatFloat(val, 'g', -1, 64)
+		return formatHJSONFloat(val)
 	case bool:
 		return strconv.FormatBool(val)
 	case []interface{}:
