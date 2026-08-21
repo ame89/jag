@@ -114,6 +114,62 @@ func TestAddTerminals(t *testing.T) {
 	})
 }
 
+// TestAddSatellites_MultipleCallsDoNotCollide is the regression test for
+// the satCount bugfix documented on addSatellites: a single owner
+// accumulating satellites across two independent addSatellites calls
+// (e.g. its own "satellites:" list, then addDiscreteControlLimits'
+// synthesized entries) must get distinct synthetic "<ownerID>-SATn" IDs
+// across BOTH calls, not just within each call. Before the fix, each call
+// restarted its own counter at 0, so the second call's first satellite
+// silently reused (and overwrote the attributes of) the first call's
+// first satellite.
+func TestAddSatellites_MultipleCallsDoNotCollide(t *testing.T) {
+	e := &r{version: 1, fi: FileInfo{ContainerID: "S-1"}}
+
+	// First call: 2 "real" satellites (e.g. RegulatingControl, Wallbox).
+	// "customWallboxTag" is a deliberately made-up, not-in-uniqueattrs.go
+	// key so this test's expected denormalized attribute name
+	// ("Wallbox.customWallboxTag", the own-class fallback) doesn't depend
+	// on uniqueattrs.go's curated table possibly changing later.
+	e.addSatellites("EQ1", []Satellite{
+		{Class: "RegulatingControl", Attributes: map[string]interface{}{"targetValue": "1.0"}},
+		{Class: "Wallbox", Attributes: map[string]interface{}{"customWallboxTag": "wb-11"}},
+	})
+	// Second call: 2 more satellites synthesized from a different source
+	// on the SAME owner (e.g. DiscreteControlLimit entries from "steps:").
+	e.addSatellites("EQ1", []Satellite{
+		{Class: "DiscreteControlLimit", Attributes: map[string]interface{}{"normalValue": "5"}},
+		{Class: "DiscreteControlLimit", Attributes: map[string]interface{}{"normalValue": "10"}},
+	})
+
+	var ids []string
+	seen := map[string]bool{}
+	for _, rec := range e.recs {
+		if rec.Attribute == satelliteRefAttribute && !seen[rec.ID] {
+			seen[rec.ID] = true
+			ids = append(ids, rec.ID)
+		}
+	}
+	if len(ids) != 4 {
+		t.Fatalf("got %d distinct satellite IDs across both calls, want 4 (no collisions); ids=%v", len(ids), ids)
+	}
+
+	// The Wallbox's own tag attribute (from the FIRST call's second
+	// satellite, "EQ1-SAT1") must still be present and readable — this is
+	// exactly the real-world symptom the bug report describes ("a
+	// Wallbox's own maxP became unreadable because its satellite object
+	// got clobbered by a same-Equipment steps: entry").
+	foundTag := false
+	for _, rec := range e.recs {
+		if rec.ID == "EQ1-SAT1" && rec.Attribute == "Wallbox.customWallboxTag" && rec.Value == "wb-11" {
+			foundTag = true
+		}
+	}
+	if !foundTag {
+		t.Fatalf("Wallbox satellite's own attribute was lost/overwritten; recs=%+v", e.recs)
+	}
+}
+
 // writeHJSONFile creates the given content at dir/relPath, creating parent
 // directories as needed — a small helper shared by the Emit tests below to
 // build a temporary Fachmodell directory tree without depending on any

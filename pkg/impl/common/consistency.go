@@ -154,6 +154,9 @@ func CheckInvariants(
 // via BatchResult.Violations/PassBResult.Violations, so they never need a
 // separate whole-model pass at all.
 func CheckInvariantsFlagged(store staging.Store, flags FlagStore, version uint64, chunkSize int) ([]InvariantViolation, error) {
+	if chunkSize <= 0 {
+		chunkSize = DefaultChunkSize
+	}
 	var violations []InvariantViolation
 	unreferenced, err := checkUnreferencedNodesFlagged(store, flags, version, chunkSize)
 	if err != nil {

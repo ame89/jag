@@ -86,3 +86,35 @@ func (c *entityIDCache) resolve(tx *sql.Tx, externalID string) (int64, error) {
 	c.byID[externalID] = id2
 	return id2, nil
 }
+
+// lookup is resolve's read-only counterpart: it reports whether
+// externalID already has an entity_id row, without creating one when it
+// doesn't. Used by deletion paths (see DeleteContainers) that only ever
+// want to act on IDs that already own attribute_value/geometry_value
+// rows — creating a fresh, now-orphaned entity_id row for an ID that is
+// being deleted would be pointless (entity_id rows are never deleted, see
+// this file's doc comment, so such a row would linger forever unused).
+func (c *entityIDCache) lookup(tx *sql.Tx, externalID string) (int64, bool, error) {
+	c.mu.RLock()
+	id, ok := c.byID[externalID]
+	c.mu.RUnlock()
+	if ok {
+		return id, true, nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if id, ok := c.byID[externalID]; ok {
+		return id, true, nil
+	}
+	var id2 int64
+	err := tx.QueryRow(`SELECT id FROM entity_id WHERE external_id = ?`, externalID).Scan(&id2)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("sqlite: looking up entity_id for %q: %w", externalID, err)
+	}
+	c.byID[externalID] = id2
+	return id2, true, nil
+}

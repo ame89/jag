@@ -168,6 +168,9 @@ type PassBACLineBatchResult struct {
 //     resolveBoundaryEquivalents) plus its own ElectricalGroups under the
 //     plain PassBOwnerID.
 func RunPassB(store staging.Store, version uint64, chunkSize, batchSize, workers int, sink Sink, flags FlagStore, onACLineBatch func(*PassBACLineBatchResult) error) (*PassBResult, error) {
+	if chunkSize <= 0 {
+		chunkSize = DefaultChunkSize
+	}
 	res := &PassBResult{}
 
 	aclineNodeToContainer, err := resolveACLineSegments(store, version, chunkSize, batchSize, workers, sink, res, flags, onACLineBatch)

@@ -164,6 +164,80 @@ func TestRunPassAAndPassBMatchWholeModelPipeline(t *testing.T) {
 	}
 }
 
+// TestRunPassAAndPassB_ZeroChunkSizeDefaults is the regression test for
+// the chunkSize=0 bug found 2026-08-21 (see DefaultChunkSize's doc
+// comment): unlike batchSize/workers, chunkSize used to be passed
+// straight through to staging.Store.GetByClass's raw SQL "LIMIT ?" with
+// no defaulting at all, so a caller passing chunkSize<=0 (e.g. a
+// zero-value Options{} in pkg/impl/hjsonimport) got "LIMIT 0" and
+// silently processed zero station roots — no error, just an empty
+// result. This pins that RunPassA/RunPassB (and CheckInvariantsFlagged,
+// covered separately) now default chunkSize<=0 to DefaultChunkSize
+// exactly like they already did for batchSize/workers, using the
+// smallest real dataset (MicroGrid_NL_BusCoupler) as a canary: before the
+// fix, this test would have observed zero Nodes/Edges/Containers from
+// both passes despite non-empty staging data.
+func TestRunPassAAndPassB_ZeroChunkSizeDefaults(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "examples", "cgmes", "MicroGrid_NL_BusCoupler")
+	files, err := filepath.Glob(filepath.Join(dir, "*.xml"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", dir, err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("no .xml files found in %s", dir)
+	}
+	sort.Strings(files)
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer store.Close()
+
+	result, err := phase1.RunCGMESFiles(store, files)
+	if err != nil {
+		t.Fatalf("RunCGMESFiles: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("RunCGMESFiles reported %d collected errors: %+v", len(result.Errors), result.Errors)
+	}
+
+	flags := store.Flags()
+
+	var containerCount, equipmentCount, nodeCount, edgeCount int
+	err = RunPassA(store, result.Version, 0, 0, 0, nopSink{}, flags, false, func(b *BatchResult) error {
+		containerCount += len(b.Containers)
+		equipmentCount += len(b.Equipment)
+		nodeCount += len(b.Nodes)
+		edgeCount += len(b.Edges)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunPassA(chunkSize=0): %v", err)
+	}
+	if containerCount == 0 || equipmentCount == 0 || nodeCount == 0 || edgeCount == 0 {
+		t.Fatalf("RunPassA(chunkSize=0) produced containers=%d equipment=%d nodes=%d edges=%d, want all > 0 (chunkSize=0 must default, not silently process nothing)",
+			containerCount, equipmentCount, nodeCount, edgeCount)
+	}
+
+	passB, err := RunPassB(store, result.Version, 0, 0, 0, nopSink{}, flags, nil)
+	if err != nil {
+		t.Fatalf("RunPassB(chunkSize=0): %v", err)
+	}
+	// MicroGrid_NL_BusCoupler's ACLineSegments are all station-internal
+	// (see TestRunPassAAndPassBMatchWholeModelPipeline's dataset comment),
+	// so Pass B itself is expected to contribute no additional Nodes/
+	// Edges here — this call only needs to complete without error to
+	// prove chunkSize=0 didn't break its own internal DB paging either.
+	_ = passB
+
+	violations, err := CheckInvariantsFlagged(store, flags, result.Version, 0)
+	if err != nil {
+		t.Fatalf("CheckInvariantsFlagged(chunkSize=0): %v", err)
+	}
+	_ = violations
+}
+
 // samePartition compares two node-id -> group-id maps by PARTITION
 // (the set of node-id sets sharing a group), not by literal group-id
 // string equality — Union-Find's chosen representative id is an

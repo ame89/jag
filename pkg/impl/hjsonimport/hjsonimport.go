@@ -39,6 +39,19 @@ type Options struct {
 	// pages left behind by DeleteVersion/Pass A/B's delete-then-insert
 	// churn, but rewrites the entire database file.
 	SkipVacuum bool
+	// KeepExistingFile skips Run's default "os.Remove(dbPath) first"
+	// behavior, so a pre-existing SQLite file at dbPath is opened and
+	// built on top of (via the same Upsert* calls Run always makes)
+	// instead of being discarded and rebuilt from scratch. Added for
+	// callers (see jaggit's SPEC.md, "apply" command) that first remove
+	// containers no longer present in the hjson source themselves — via
+	// ModelStore.ListContainerIDs/DeleteContainers — and then want Run to
+	// upsert the current source state on top of that already-cleaned
+	// model, instead of Run's own unconditional full-file rebuild
+	// clobbering that preparatory work. Existing callers (cmd/hjsonimport,
+	// cmd/hjsonwatch) never set this, so their full-rebuild behavior is
+	// completely unchanged.
+	KeepExistingFile bool
 }
 
 // Summary is the aggregate result of one full import run, returned so
@@ -88,15 +101,21 @@ func (s *countingSink) WriteGeometries(batch []coremodel.Geometry) error {
 	return nil
 }
 
-// Run parses the *.hjson tree under root and persists it into a fresh
-// SQLite file at dbPath (any existing file at dbPath is deleted first,
-// same as cmd/hjsonimport has always done — this is a full rebuild, not
-// an incremental update). Progress lines are printed to stdout as the
+// Run parses the *.hjson tree under root and persists it into a SQLite
+// file at dbPath. By default (opts.KeepExistingFile == false, matching
+// every existing caller's behavior) any existing file at dbPath is
+// deleted first, same as cmd/hjsonimport has always done — a full
+// rebuild, not an incremental update. If opts.KeepExistingFile is set, an
+// existing file is instead opened and built on top of via the same
+// Upsert* calls (see Options.KeepExistingFile's doc comment for the
+// intended use case). Progress lines are printed to stdout as the
 // pipeline runs, matching cmd/hjsonimport's existing CLI output.
 func Run(root, dbPath string, opts Options) (Summary, error) {
 	var summary Summary
 
-	os.Remove(dbPath)
+	if !opts.KeepExistingFile {
+		os.Remove(dbPath)
+	}
 
 	overallStart := time.Now()
 	store, err := sqlite.Open(dbPath)

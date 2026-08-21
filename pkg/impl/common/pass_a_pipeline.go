@@ -64,6 +64,20 @@ const DefaultStationBatchSize = 1000
 // worth the added complexity.
 const DefaultPassAWorkers = 4
 
+// DefaultChunkSize is the default cursor-based batch size RunPassA/RunPassB
+// use for their DB-paging reads (staging.Store.GetByClass/GetByIDs etc.)
+// when a caller passes chunkSize <= 0 — matching cmd/phase2check's own
+// long-standing default (see its JAG_CHUNK_SIZE handling). Added
+// 2026-08-21 after a real bug was found: unlike batchSize/workers (which
+// were always defaulted here), chunkSize used to be passed straight
+// through with no such guard, all the way down to a raw SQL "LIMIT ?" in
+// staging.Store.GetByClass — so a caller leaving an Options{} zero value
+// at this parameter (e.g. pkg/impl/hjsonimport.Options.ChunkSize) got
+// "LIMIT 0", silently processing zero station roots (and therefore zero
+// Containers/Equipment/Nodes/Edges) instead of "no chunking"/"use a
+// sensible default", with no error or warning at all.
+const DefaultChunkSize = 2000
+
 // BatchResult is everything one Pass A batch produces — small, transient,
 // meant to be persisted and discarded immediately by the caller, never
 // accumulated across batches.
@@ -391,6 +405,9 @@ type rootBatch struct {
 // with its own mutex, or write straight through to a store whose driver
 // already serializes writes) — mirrors Sink's concurrency contract.
 func RunPassA(store staging.Store, version uint64, chunkSize, batchSize, workers int, sink Sink, flags FlagStore, isNSC bool, onBatchResult func(*BatchResult) error) error {
+	if chunkSize <= 0 {
+		chunkSize = DefaultChunkSize
+	}
 	if batchSize <= 0 {
 		batchSize = DefaultStationBatchSize
 	}

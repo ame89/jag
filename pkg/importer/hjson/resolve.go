@@ -161,10 +161,11 @@ func resolveID(fileContainerID, name string) string {
 // (version, file info) so individual emit* helpers don't need to thread
 // several parameters each.
 type r struct {
-	version uint64
-	fi      FileInfo
-	recs    []model.StagingRecord
-	errs    []model.StagingError
+	version  uint64
+	fi       FileInfo
+	recs     []model.StagingRecord
+	errs     []model.StagingError
+	satCount map[string]int
 }
 
 func (e *r) add(id, class, attr, value string, isRef bool, seq int) {
@@ -429,8 +430,29 @@ const satelliteRefAttribute = "Satellite.Of"
 // AttributeKeySatellite exactly as it would on first import from a real
 // CIM/CGMES/NSC file, giving full export<->import symmetry with no
 // dedicated satellite-merging logic anywhere.
+//
+// satCount tracks a running per-ownerID synthetic-ID counter across ALL
+// addSatellites calls for that owner (not just within one call): a single
+// Equipment can accumulate satellites from up to three independent
+// sources (its own "satellites:" list, addMeterSchedules' synthesized
+// TimeSchedules, and addDiscreteControlLimits' synthesized
+// DiscreteControlLimits), each calling addSatellites separately. Each
+// call previously restarted its "SAT%d" suffix at 0, so e.g. a
+// PowerElectronicsConnection with 2 real satellites (RegulatingControl,
+// Wallbox) AND a non-empty "steps:" list (-> 2+ DiscreteControlLimit
+// satellites) would collide: both the 2 real satellites and the first 2
+// DiscreteControlLimits reused "<ownerID>-SAT0"/"<ownerID>-SAT1",
+// silently overwriting the real satellites' own attributes with the
+// DiscreteControlLimits' (a real bug — found while wiring up jaggit's
+// scenario_test.go, where a Wallbox's own maxP became unreadable because
+// its satellite object got clobbered by a same-Equipment "steps:" entry).
 func (e *r) addSatellites(ownerID string, satellites []Satellite) {
-	for i, sat := range satellites {
+	if e.satCount == nil {
+		e.satCount = map[string]int{}
+	}
+	for _, sat := range satellites {
+		i := e.satCount[ownerID]
+		e.satCount[ownerID] = i + 1
 		satID := fmt.Sprintf("%s-SAT%d", ownerID, i)
 		e.add(satID, sat.Class, satelliteRefAttribute, ownerID, true, 0)
 		e.addEntityAttributes(satID, sat.Class, sat.Attributes)
