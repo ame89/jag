@@ -12,13 +12,10 @@
 //
 //	sqlite2postgres -sqlite path/to/model.db
 //
-// PostgreSQL connection is configured via the same JAG_POSTGRES_* /
-// JAG_POSTGRES_DSN environment variables cmd/phase2check uses (see
-// pkg/postgres/dsn.go's DSNFromEnv doc comment) — JAG_BACKEND does not
-// need to be set to "postgres" for this tool specifically, since its
-// whole purpose is talking to PostgreSQL; JAG_POSTGRES_DSN (or the
-// individual JAG_POSTGRES_HOST/PORT/USER/PASSWORD/DB/SSLMODE variables)
-// are read directly.
+// PostgreSQL connection is configured via the JAG_DATABASE environment
+// variable (see pkg/jagdb's doc comment) — it must be set to a
+// postgres://... value; sqlite:// is rejected here since the SQLite side
+// is already given via the -sqlite flag.
 package main
 
 import (
@@ -28,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ame89/jag/internal/dbmigrate"
+	"github.com/ame89/jag/pkg/jagdb"
 	"github.com/ame89/jag/pkg/postgres"
 	"github.com/ame89/jag/pkg/sqlite"
 )
@@ -39,11 +37,15 @@ func main() {
 
 	if *sqlitePath == "" {
 		fmt.Fprintln(os.Stderr, "usage: sqlite2postgres -sqlite path/to/model.db")
-		fmt.Fprintln(os.Stderr, "PostgreSQL target is configured via JAG_POSTGRES_DSN or JAG_POSTGRES_HOST/PORT/USER/PASSWORD/DB/SSLMODE")
+		fmt.Fprintln(os.Stderr, "PostgreSQL target is configured via JAG_DATABASE (postgres://...)")
 		os.Exit(2)
 	}
 
-	dsn := postgresDSN()
+	dsn, err := postgresDSN()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	src, err := sqlite.Open(*sqlitePath)
 	if err != nil {
@@ -71,19 +73,17 @@ func main() {
 	fmt.Printf("done in %s\n", time.Since(start).Round(time.Millisecond))
 }
 
-// postgresDSN builds the PostgreSQL DSN the same way cmd/phase2check does,
-// but without requiring JAG_BACKEND=postgres (this tool's whole purpose is
-// talking to PostgreSQL, so that extra opt-in switch would just be
-// friction here).
-func postgresDSN() string {
-	if v := os.Getenv("JAG_POSTGRES_DSN"); v != "" {
-		return v
+// postgresDSN reads JAG_DATABASE and requires it to resolve to the
+// Postgres backend (the SQLite side of this migration is already given
+// via the -sqlite flag, so JAG_DATABASE here can only mean the
+// PostgreSQL target).
+func postgresDSN() (string, error) {
+	backend, conn, err := jagdb.FromEnv()
+	if err != nil {
+		return "", err
 	}
-	// Temporarily set JAG_BACKEND so postgres.DSNFromEnv's env-variable
-	// combination logic (host/port/user/password/db/sslmode with their
-	// documented defaults) can be reused verbatim instead of duplicated
-	// here.
-	os.Setenv("JAG_BACKEND", "postgres")
-	dsn, _ := postgres.DSNFromEnv()
-	return dsn
+	if backend != jagdb.Postgres {
+		return "", fmt.Errorf("sqlite2postgres: JAG_DATABASE must be a postgres:// value, got backend %q", backend)
+	}
+	return conn, nil
 }

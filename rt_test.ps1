@@ -31,7 +31,7 @@ foreach ($ds in $datasets) {
   Remove-Item -Force $db1, $db2 -ErrorAction SilentlyContinue
   Remove-Item -Recurse -Force $hj -ErrorAction SilentlyContinue
 
-  $env:JAG_DB_PATH = $db1
+  $env:JAG_DATABASE = "sqlite://$db1"
   if ($ds.nsc) { $env:JAG_FORCE_NSC = "1" } else { Remove-Item Env:JAG_FORCE_NSC -ErrorAction SilentlyContinue }
   & .\phase2check.exe $ds.path 2>&1 | Select-Object -Last 15
   if ($LASTEXITCODE -ne 0) { Write-Host "IMPORT FAILED for $name (exit $LASTEXITCODE)"; continue }
@@ -39,7 +39,7 @@ foreach ($ds in $datasets) {
   & .\hjsonexport.exe $db1 $hj "TestRegion" 2>&1 | Select-Object -Last 10
   if ($LASTEXITCODE -ne 0) { Write-Host "EXPORT FAILED for $name (exit $LASTEXITCODE)"; continue }
 
-  $env:JAG_DB_PATH = $db2
+  $env:JAG_DATABASE = "sqlite://$db2"
   Remove-Item Env:JAG_FORCE_NSC -ErrorAction SilentlyContinue
   & .\hjsonimport.exe $hj 2>&1 | Select-Object -Last 15
   if ($LASTEXITCODE -ne 0) { Write-Host "REIMPORT FAILED for $name (exit $LASTEXITCODE)"; continue }

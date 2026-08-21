@@ -21,6 +21,7 @@ import (
 	coremodel "github.com/ame89/jag/pkg/core/model"
 	"github.com/ame89/jag/pkg/impl/common"
 	"github.com/ame89/jag/pkg/importer/phase1"
+	"github.com/ame89/jag/pkg/jagdb"
 	"github.com/ame89/jag/pkg/sqlite"
 )
 
@@ -70,9 +71,17 @@ func main() {
 		root = os.Args[1]
 	}
 
-	dbPath := "hjsonimport-deprecated.db"
-	if v := os.Getenv("JAG_DB_PATH"); v != "" {
-		dbPath = v
+	// JAG_DATABASE selects backend + connection string/path (see
+	// pkg/jagdb's doc comment). This deprecated CLI only ever supported
+	// SQLite, so a postgres:// value is a hard error here.
+	backend, dbPath, err := jagdb.FromEnv()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if backend != jagdb.SQLite {
+		fmt.Fprintf(os.Stderr, "hjsonimport-deprecated: only sqlite:// is supported, got backend %q\n", backend)
+		os.Exit(1)
 	}
 	os.Remove(dbPath)
 

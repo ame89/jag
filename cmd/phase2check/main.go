@@ -15,6 +15,7 @@ import (
 	"github.com/ame89/jag/pkg/core/staging"
 	"github.com/ame89/jag/pkg/impl/common"
 	"github.com/ame89/jag/pkg/importer/phase1"
+	"github.com/ame89/jag/pkg/jagdb"
 	"github.com/ame89/jag/pkg/postgres"
 	"github.com/ame89/jag/pkg/sqlite"
 )
@@ -238,13 +239,21 @@ func main() {
 	}
 	sort.Strings(files)
 
-	// Real SQLite file (not :memory:) so timings reflect actual disk I/O,
-	// not an in-process B-tree kept entirely in RAM.
-	dbPath := "phase2check.db"
-	if v := os.Getenv("JAG_DB_PATH"); v != "" {
-		dbPath = v
+	// JAG_DATABASE selects both the backend and its connection string/path
+	// (see pkg/jagdb's doc comment) — e.g. "sqlite://phase2check.db" or
+	// "postgres://jag:jag@localhost:5432/jag?sslmode=disable". There is no
+	// default anymore: JAG_DATABASE must always be set.
+	backend, dbConn, err := jagdb.FromEnv()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	os.Remove(dbPath) // fresh run each time, avoid stale data from a previous invocation
+	if backend == jagdb.SQLite {
+		// Real SQLite file (not :memory:) so timings reflect actual disk
+		// I/O, not an in-process B-tree kept entirely in RAM — unless the
+		// caller explicitly opted into ":memory" via JAG_DATABASE.
+		os.Remove(dbConn) // fresh run each time, avoid stale data from a previous invocation
+	}
 
 	// JAG_KEEP_STAGING=1 skips the automatic staging_records/staging_errors
 	// cleanup that otherwise runs after a successful import (see
@@ -358,16 +367,14 @@ func main() {
 	}
 
 	overallStart := time.Now()
-	// Backend selection: JAG_BACKEND=postgres (see
-	// pkg/postgres/dsn.go's DSNFromEnv doc comment for the full
-	// JAG_POSTGRES_* variable set) switches to a PostgreSQL-backed store;
-	// anything else (including unset, the default) keeps the original
-	// SQLite-file behavior unchanged.
+	// Backend selection: entirely driven by JAG_DATABASE (parsed above
+	// into backend/dbConn) — see pkg/jagdb's doc comment.
 	var store storeCloser
 	var modelStore modelWriter
 	var flags common.FlagStore
-	if dsn, usePostgres := postgres.DSNFromEnv(); usePostgres {
-		pg, err := postgres.Open(dsn)
+	switch backend {
+	case jagdb.Postgres:
+		pg, err := postgres.Open(dbConn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "opening postgres store: %v\n", err)
 			os.Exit(1)
@@ -376,8 +383,8 @@ func main() {
 		modelStore = pg.Model()
 		flags = pg.Flags()
 		fmt.Println("using postgres backend")
-	} else {
-		sq, err := sqlite.Open(dbPath)
+	case jagdb.SQLite:
+		sq, err := sqlite.Open(dbConn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "opening sqlite store: %v\n", err)
 			os.Exit(1)
@@ -385,7 +392,7 @@ func main() {
 		store = sq
 		modelStore = sq.Model()
 		flags = sq.Flags()
-		fmt.Printf("using sqlite file: %s\n", dbPath)
+		fmt.Printf("using sqlite file: %s\n", dbConn)
 	}
 	defer store.Close()
 

@@ -16,9 +16,10 @@
 //
 // The target SQLite file is created if it doesn't already exist (same
 // behavior as sqlite.Open elsewhere in this codebase). PostgreSQL source
-// connection is configured via JAG_POSTGRES_DSN or the individual
-// JAG_POSTGRES_HOST/PORT/USER/PASSWORD/DB/SSLMODE variables — see
-// pkg/postgres/dsn.go's DSNFromEnv doc comment.
+// connection is configured via the JAG_DATABASE environment variable
+// (see pkg/jagdb's doc comment) — it must be set to a postgres://...
+// value; sqlite:// is rejected here since the SQLite side is already
+// given via the -sqlite flag.
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ame89/jag/internal/dbmigrate"
+	"github.com/ame89/jag/pkg/jagdb"
 	"github.com/ame89/jag/pkg/postgres"
 	"github.com/ame89/jag/pkg/sqlite"
 )
@@ -39,11 +41,15 @@ func main() {
 
 	if *sqlitePath == "" {
 		fmt.Fprintln(os.Stderr, "usage: postgres2sqlite -sqlite path/to/model.db")
-		fmt.Fprintln(os.Stderr, "PostgreSQL source is configured via JAG_POSTGRES_DSN or JAG_POSTGRES_HOST/PORT/USER/PASSWORD/DB/SSLMODE")
+		fmt.Fprintln(os.Stderr, "PostgreSQL source is configured via JAG_DATABASE (postgres://...)")
 		os.Exit(2)
 	}
 
-	dsn := postgresDSN()
+	dsn, err := postgresDSN()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	src, err := postgres.Open(dsn)
 	if err != nil {
@@ -71,15 +77,17 @@ func main() {
 	fmt.Printf("done in %s\n", time.Since(start).Round(time.Millisecond))
 }
 
-// postgresDSN builds the PostgreSQL DSN the same way cmd/sqlite2postgres
-// does — see that file's identical helper for the rationale (reuse
-// postgres.DSNFromEnv's env-variable combination logic without requiring
-// JAG_BACKEND=postgres to be set first).
-func postgresDSN() string {
-	if v := os.Getenv("JAG_POSTGRES_DSN"); v != "" {
-		return v
+// postgresDSN reads JAG_DATABASE and requires it to resolve to the
+// Postgres backend (the SQLite side of this migration is already given
+// via the -sqlite flag, so JAG_DATABASE here can only mean the
+// PostgreSQL source).
+func postgresDSN() (string, error) {
+	backend, conn, err := jagdb.FromEnv()
+	if err != nil {
+		return "", err
 	}
-	os.Setenv("JAG_BACKEND", "postgres")
-	dsn, _ := postgres.DSNFromEnv()
-	return dsn
+	if backend != jagdb.Postgres {
+		return "", fmt.Errorf("postgres2sqlite: JAG_DATABASE must be a postgres:// value, got backend %q", backend)
+	}
+	return conn, nil
 }

@@ -5,9 +5,9 @@
 //
 // Usage:
 //
-//	go run ./cmd/hjsonwatch <hjson-root> [JAG_DB_PATH=... JAG_CHUNK_SIZE=... ...]
+//	go run ./cmd/hjsonwatch <hjson-root> [JAG_DATABASE=... JAG_CHUNK_SIZE=... ...]
 //
-// It reads the same JAG_DB_PATH/JAG_CHUNK_SIZE/JAG_STATION_BATCH_SIZE/
+// It reads the same JAG_DATABASE/JAG_CHUNK_SIZE/JAG_STATION_BATCH_SIZE/
 // JAG_STATION_WORKERS/JAG_PASS_B_WORKERS/JAG_PASS_B_BATCH_SIZE environment
 // variables cmd/hjsonimport does. Each run is a full rebuild of the
 // target SQLite file (matching cmd/hjsonimport's existing behavior) —
@@ -34,6 +34,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/ame89/jag/pkg/impl/hjsonimport"
+	"github.com/ame89/jag/pkg/jagdb"
 )
 
 // debounceWindow is how long hjsonwatch waits after the last observed
@@ -121,9 +122,17 @@ func main() {
 	}
 	root = filepath.Clean(root)
 
-	dbPath := "hjsonimport.db"
-	if v := os.Getenv("JAG_DB_PATH"); v != "" {
-		dbPath = v
+	// JAG_DATABASE selects backend + connection string/path (see
+	// pkg/jagdb's doc comment). hjsonimport.Run is SQLite-only for now,
+	// so a postgres:// value is a hard error here.
+	backend, dbPath, err := jagdb.FromEnv()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if backend != jagdb.SQLite {
+		fmt.Fprintf(os.Stderr, "hjsonwatch: only sqlite:// is supported, got backend %q\n", backend)
+		os.Exit(1)
 	}
 
 	opts, err := optionsFromEnv()
