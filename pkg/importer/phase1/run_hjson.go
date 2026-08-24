@@ -15,13 +15,17 @@ import (
 // RunHJSONDeprecatedFiles: parse/semantic errors are recorded as
 // model.StagingError and do NOT abort the run; only store infrastructure
 // failures are fatal.
-func RunHJSONFiles(store staging.Store, root string) (Result, error) {
+//
+// onFile is forwarded verbatim to hjson.Emit (see its doc comment) — a
+// variadic pass-through purely so this signature change didn't require
+// touching any existing caller.
+func RunHJSONFiles(store staging.Store, root string, onFile ...func(string)) (Result, error) {
 	version, err := store.NextVersion()
 	if err != nil {
 		return Result{}, fmt.Errorf("phase1: allocating version: %w", err)
 	}
 
-	records, stagingErrs, err := hjson.Emit(version, root)
+	records, stagingErrs, err := hjson.Emit(version, root, onFile...)
 	if err != nil {
 		return Result{Version: version}, fmt.Errorf("phase1: hjson emit: %w", err)
 	}

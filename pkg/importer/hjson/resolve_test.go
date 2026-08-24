@@ -3,6 +3,7 @@ package hjson
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -279,5 +280,87 @@ func TestEmit_MissingRootIsFatal(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "does-not-exist")
 	if _, _, err := Emit(1, dir); err == nil {
 		t.Fatal("Emit(missing root) = nil error, want an error")
+	}
+}
+
+// TestEmit_OnFileCalledForEachParsedFile covers Emit's variadic onFile
+// callback (see its doc comment): it must fire once per non-duplicate
+// file, with that file's path, immediately before it is parsed — a
+// duplicate-container-ID file (skipped entirely, see
+// TestEmit_DuplicateContainerID) must NOT trigger a call.
+func TestEmit_OnFileCalledForEachParsedFile(t *testing.T) {
+	dir := t.TempDir()
+	writeHJSONFile(t, dir, "Nord/ONS/S-1.hjson", minimalStationHJSON)
+	writeHJSONFile(t, dir, "Nord/KVS/K-1.hjson", minimalStationHJSON)
+
+	var gotPaths []string
+	records, errs, err := Emit(1, dir, func(path string) {
+		gotPaths = append(gotPaths, path)
+	})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("got %d staging errors, want 0: %+v", len(errs), errs)
+	}
+	if len(records) == 0 {
+		t.Fatal("got 0 records, want the two well-formed files to be processed")
+	}
+	if len(gotPaths) != 2 {
+		t.Fatalf("onFile called %d times, want 2 (one per file); got=%v", len(gotPaths), gotPaths)
+	}
+	wantSuffixes := []string{
+		filepath.ToSlash(filepath.Join("Nord", "ONS", "S-1.hjson")),
+		filepath.ToSlash(filepath.Join("Nord", "KVS", "K-1.hjson")),
+	}
+	for _, suffix := range wantSuffixes {
+		found := false
+		for _, p := range gotPaths {
+			if strings.HasSuffix(p, suffix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("onFile paths %v missing an entry ending in %q", gotPaths, suffix)
+		}
+	}
+}
+
+// TestEmit_OnFileNotCalledForDuplicateContainerID covers the interaction
+// between Emit's duplicate-ID skip (TestEmit_DuplicateContainerID) and
+// onFile: neither of the two files sharing a container ID may trigger an
+// onFile call, since neither is actually parsed.
+func TestEmit_OnFileNotCalledForDuplicateContainerID(t *testing.T) {
+	dir := t.TempDir()
+	writeHJSONFile(t, dir, "Nord/ONS/S-1.hjson", minimalStationHJSON)
+	writeHJSONFile(t, dir, "Nord/KVS/S-1.hjson", minimalStationHJSON)
+
+	var calls int
+	_, errs, err := Emit(1, dir, func(path string) { calls++ })
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("got %d staging errors, want 1", len(errs))
+	}
+	if calls != 0 {
+		t.Errorf("onFile called %d times, want 0 (duplicate files must not be parsed)", calls)
+	}
+}
+
+// TestEmit_OnFileOmittedIsSafe verifies Emit works exactly as before when
+// no onFile argument is passed at all (the pre-existing, most common call
+// shape across the codebase).
+func TestEmit_OnFileOmittedIsSafe(t *testing.T) {
+	dir := t.TempDir()
+	writeHJSONFile(t, dir, "Nord/ONS/S-1.hjson", minimalStationHJSON)
+
+	records, errs, err := Emit(1, dir)
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	if len(errs) != 0 || len(records) == 0 {
+		t.Fatalf("got %d errs, %d records, want 0 errs and >0 records", len(errs), len(records))
 	}
 }

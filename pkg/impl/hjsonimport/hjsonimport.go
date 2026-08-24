@@ -52,6 +52,13 @@ type Options struct {
 	// cmd/hjsonwatch) never set this, so their full-rebuild behavior is
 	// completely unchanged.
 	KeepExistingFile bool
+	// OnFile, if set, is invoked with each Fachmodell file's path
+	// immediately before phase1 parses it (see
+	// pkg/importer/hjson.Emit's onFile parameter, which this is
+	// forwarded to verbatim). Intended for verbose "which file is being
+	// processed" reporting (e.g. jaggit's -verbose option); has no
+	// effect on the import itself and is nil (no reporting) by default.
+	OnFile func(path string)
 }
 
 // Summary is the aggregate result of one full import run, returned so
@@ -128,7 +135,7 @@ func Run(root, dbPath string, opts Options) (Summary, error) {
 	flags := store.Flags()
 
 	phase1Start := time.Now()
-	result, err := phase1.RunHJSONFiles(store, root)
+	result, err := phase1.RunHJSONFiles(store, root, opts.OnFile)
 	if err != nil {
 		return summary, fmt.Errorf("phase1: %w", err)
 	}

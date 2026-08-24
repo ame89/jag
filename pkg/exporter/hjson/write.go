@@ -27,7 +27,7 @@ import (
 // entirely and guarantees this exporter's own output can always be read
 // back by ParseFile.
 func Write(root string, outputs []FileOutput) error {
-	return WriteContext(context.Background(), root, outputs, nil)
+	return WriteContext(context.Background(), root, outputs, nil, nil)
 }
 
 // ProgressFunc is called by WriteContext after each FileOutput has been
@@ -38,9 +38,15 @@ type ProgressFunc func(done, total int)
 
 // WriteContext behaves exactly like Write, but additionally accepts a
 // context (checked before every file write, so a cancelled ctx aborts the
-// remaining writes and returns ctx.Err() — e.g. for Ctrl-C handling) and
-// an optional onProgress callback invoked after each file (may be nil).
-func WriteContext(ctx context.Context, root string, outputs []FileOutput, onProgress ProgressFunc) error {
+// remaining writes and returns ctx.Err() — e.g. for Ctrl-C handling), an
+// optional onProgress callback invoked after each file (may be nil), and
+// an optional onFile callback invoked with a file's destination path
+// immediately before it is written (may be nil; intended for verbose
+// "which file is being processed" reporting, e.g. jaggit's -verbose
+// option — kept as a separate callback from onProgress since one reports
+// counts/percentage and the other reports the actual path, and callers
+// may want either, both, or neither independently).
+func WriteContext(ctx context.Context, root string, outputs []FileOutput, onProgress ProgressFunc, onFile func(path string)) error {
 	total := len(outputs)
 	for i, o := range outputs {
 		if err := ctx.Err(); err != nil {
@@ -59,6 +65,9 @@ func WriteContext(ctx context.Context, root string, outputs []FileOutput, onProg
 			return fmt.Errorf("hjson export: creating %s: %w", dir, err)
 		}
 		path := filepath.Join(dir, sanitizeSegment(o.ID)+".hjson")
+		if onFile != nil {
+			onFile(path)
+		}
 		var b strings.Builder
 		writeFile(&b, o.File)
 		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {

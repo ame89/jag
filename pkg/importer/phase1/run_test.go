@@ -74,3 +74,104 @@ func TestRunCGMESFilesContinuesPastMalformedFile(t *testing.T) {
 		t.Fatalf("expected 1 persisted staging error, got %d", storedErrCount)
 	}
 }
+
+// TestRunHJSONFiles_OnFileForwardedToEmit covers RunHJSONFiles' variadic
+// onFile parameter (see its doc comment): it must be forwarded verbatim
+// to hjson.Emit, so a caller passing a callback observes exactly the
+// hjson file(s) that get parsed.
+func TestRunHJSONFiles_OnFileForwardedToEmit(t *testing.T) {
+	dir := t.TempDir()
+	stationPath := filepath.Join(dir, "Nord", "ONS", "S-1.hjson")
+	if err := os.MkdirAll(filepath.Dir(stationPath), 0o755); err != nil {
+		t.Fatalf("creating station dir: %v", err)
+	}
+	stationHJSON := `{
+  bays: [
+    {
+      id: A
+      equipments: [
+        {
+          id: @E1
+          class: Fuse
+          connects: [
+            @N1
+            @N2
+          ]
+        }
+      ]
+    }
+  ]
+}
+`
+	if err := os.WriteFile(stationPath, []byte(stationHJSON), 0o644); err != nil {
+		t.Fatalf("writing station file: %v", err)
+	}
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer store.Close()
+
+	var gotPaths []string
+	result, err := RunHJSONFiles(store, dir, func(path string) {
+		gotPaths = append(gotPaths, path)
+	})
+	if err != nil {
+		t.Fatalf("RunHJSONFiles: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected no errors, got %+v", result.Errors)
+	}
+	want := filepath.ToSlash(stationPath)
+	if len(gotPaths) != 1 || gotPaths[0] != want {
+		t.Fatalf("onFile calls = %v, want exactly [%q]", gotPaths, want)
+	}
+}
+
+// TestRunHJSONFiles_OnFileOmittedIsSafe verifies RunHJSONFiles works
+// exactly as before when called without an onFile argument (the
+// pre-existing call shape used by every caller before this parameter was
+// added).
+func TestRunHJSONFiles_OnFileOmittedIsSafe(t *testing.T) {
+	dir := t.TempDir()
+	stationPath := filepath.Join(dir, "Nord", "ONS", "S-1.hjson")
+	if err := os.MkdirAll(filepath.Dir(stationPath), 0o755); err != nil {
+		t.Fatalf("creating station dir: %v", err)
+	}
+	stationHJSON := `{
+  bays: [
+    {
+      id: A
+      equipments: [
+        {
+          id: @E1
+          class: Fuse
+          connects: [
+            @N1
+            @N2
+          ]
+        }
+      ]
+    }
+  ]
+}
+`
+	if err := os.WriteFile(stationPath, []byte(stationHJSON), 0o644); err != nil {
+		t.Fatalf("writing station file: %v", err)
+	}
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer store.Close()
+
+	result, err := RunHJSONFiles(store, dir)
+	if err != nil {
+		t.Fatalf("RunHJSONFiles: %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected no errors, got %+v", result.Errors)
+	}
+}

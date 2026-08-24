@@ -64,6 +64,16 @@ func FindFiles(root string) ([]FileInfo, error) {
 // InsertErrors exactly like the CGMES/NSC parsers (see
 // pkg/importer/cgmes/parser.go).
 //
+// onFile, if given (variadic purely so every existing call site — none of
+// which cared about per-file progress before this was added — keeps
+// compiling unchanged), is invoked with each file's path immediately
+// before it is parsed; a nil func value (as opposed to omitting the
+// argument) is equally accepted and simply not called, so callers like
+// hjsonimport.Options.OnFile can pass their own possibly-nil field
+// straight through without an extra nil check. Intended for verbose
+// "which file is being processed" reporting (see jaggit's -verbose
+// option), never anything load-bearing for the import itself.
+//
 // Container-level custom Attributes (e.g. a Substation's "region", or a
 // House's MaLo/MeLo) are parsed into File.Attributes and emitted as
 // ordinary Sachdaten owned by the container's own ID (see emitStation/
@@ -76,10 +86,14 @@ func FindFiles(root string) ([]FileInfo, error) {
 // (pass_a_pipeline.go) — no further change was needed here or in the
 // exporter, since both already used the generic, OwnerID-keyed Attribute
 // channel.
-func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingError, error) {
+func Emit(version uint64, root string, onFile ...func(string)) ([]model.StagingRecord, []model.StagingError, error) {
 	infos, err := FindFiles(root)
 	if err != nil {
 		return nil, nil, fmt.Errorf("hjson: walking %s: %w", root, err)
+	}
+	var notify func(string)
+	if len(onFile) > 0 {
+		notify = onFile[0]
 	}
 
 	// Pass 1: check for duplicate top-level container IDs across files
@@ -122,6 +136,9 @@ func Emit(version uint64, root string) ([]model.StagingRecord, []model.StagingEr
 	for _, fi := range infos {
 		if duplicate[fi.ContainerID] {
 			continue // duplicate, already reported above
+		}
+		if notify != nil {
+			notify(fi.Path)
 		}
 		f, err := ParseFile(fi.Path)
 		if err != nil {

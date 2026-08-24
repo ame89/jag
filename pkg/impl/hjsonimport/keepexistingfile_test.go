@@ -119,6 +119,44 @@ func TestRun_KeepExistingFile_PreservesPriorState(t *testing.T) {
 	assertContainerIDs(t, dbPath, []string{"MARKER", "S-1", "A"})
 }
 
+// TestRun_OptionsOnFileForwardedThroughPhase1 covers Options.OnFile (see
+// its doc comment): it must be forwarded all the way down to
+// phase1.RunHJSONFiles/hjson.Emit, so a caller observes the actual .hjson
+// source file(s) Run parses.
+func TestRun_OptionsOnFileForwardedThroughPhase1(t *testing.T) {
+	root := t.TempDir()
+	writeHJSONFile(t, root, "Nord/ONS/S-1.hjson", minimalStationHJSON)
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	opts := testOptions()
+	var gotPaths []string
+	opts.OnFile = func(path string) {
+		gotPaths = append(gotPaths, path)
+	}
+	if _, err := Run(root, dbPath, opts); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := filepath.ToSlash(filepath.Join(root, "Nord", "ONS", "S-1.hjson"))
+	if len(gotPaths) != 1 || gotPaths[0] != want {
+		t.Fatalf("OnFile calls = %v, want exactly [%q]", gotPaths, want)
+	}
+}
+
+// TestRun_OptionsOnFileNilIsSafe verifies Run works exactly as before
+// when Options.OnFile is left at its nil zero value (the default for
+// every pre-existing caller, e.g. cmd/hjsonimport/cmd/hjsonwatch).
+func TestRun_OptionsOnFileNilIsSafe(t *testing.T) {
+	root := t.TempDir()
+	writeHJSONFile(t, root, "Nord/ONS/S-1.hjson", minimalStationHJSON)
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	if _, err := Run(root, dbPath, testOptions()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertContainerIDs(t, dbPath, []string{"S-1", "A"})
+}
+
 // testOptions returns Options with explicit, small non-zero ChunkSize/
 // BatchSize/worker counts, used by the KeepExistingFile tests below purely
 // to keep their in-test datasets fast/deterministic — no longer required
