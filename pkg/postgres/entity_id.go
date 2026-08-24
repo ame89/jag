@@ -70,6 +70,37 @@ func (c *entityIDCache) resolve(tx *sql.Tx, externalID string) (int64, error) {
 	return id2, nil
 }
 
+// lookup is resolve's read-only counterpart: it reports whether
+// externalID already has an entity_id row, without creating one when it
+// doesn't — see pkg/sqlite/entity_id.go's identical lookup for the full
+// rationale (used by deletion paths such as DeleteContainers, which only
+// ever want to act on IDs that already own attribute_value/geometry_value
+// rows).
+func (c *entityIDCache) lookup(tx *sql.Tx, externalID string) (int64, bool, error) {
+	c.mu.RLock()
+	id, ok := c.byID[externalID]
+	c.mu.RUnlock()
+	if ok {
+		return id, true, nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if id, ok := c.byID[externalID]; ok {
+		return id, true, nil
+	}
+	var id2 int64
+	err := tx.QueryRow(rebind(`SELECT id FROM entity_id WHERE external_id = ?`), externalID).Scan(&id2)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("postgres: looking up entity_id for %q: %w", externalID, err)
+	}
+	c.byID[externalID] = id2
+	return id2, true, nil
+}
+
 // resolveMany resolves a batch of external IDs at once, deduplicating and
 // only round-tripping to the database for IDs not already cached. This is
 // the write path's bulk equivalent of resolve — used by upsertGeometryTx/

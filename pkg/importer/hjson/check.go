@@ -278,6 +278,9 @@ func classifyAllTolerant(root string, res *CheckResult) ([]FileInfo, error) {
 		if fi.IsDir() || !strings.HasSuffix(path, ".hjson") {
 			return nil
 		}
+		if filepath.Dir(path) == filepath.Clean(root) && filepath.Base(path) == "metadata.hjson" {
+			return nil
+		}
 		info, cerr := ClassifyPath(root, path)
 		if cerr != nil {
 			res.Findings = append(res.Findings, Finding{Severity: SeverityError, File: relCheckPath(root, path), Message: cerr.Error()})

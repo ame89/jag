@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 
+	coremodel "github.com/ame89/jag/pkg/core/model"
 	importerhjson "github.com/ame89/jag/pkg/importer/hjson"
-	"github.com/ame89/jag/pkg/sqlite"
+	"github.com/ame89/jag/pkg/jagdb"
+	"github.com/ame89/jag/pkg/jagstore"
 )
 
 // PruneRemoved removes every container from the SQLite file at dbPath
@@ -42,15 +44,19 @@ import (
 // SPEC.md); moved here so any caller with the same "incremental hjson
 // re-import" need (e.g. cmd/hjsonwatch, which currently only supports
 // full rebuilds) can reuse it instead of reimplementing it.
-func PruneRemoved(srcRoot, dbPath string) (sqlite.ContainerDeleteSummary, error) {
-	var summary sqlite.ContainerDeleteSummary
+//
+// backend selects which storage backend dbPath addresses (see
+// pkg/jagdb's doc comment) — jagdb.Unknown is treated like jagdb.SQLite,
+// matching Run's Options.Backend zero-value convention.
+func PruneRemoved(srcRoot string, backend jagdb.Backend, dbPath string) (coremodel.ContainerDeleteSummary, error) {
+	var summary coremodel.ContainerDeleteSummary
 
 	sourceIDs, err := EnumerateSourceContainerIDs(srcRoot)
 	if err != nil {
 		return summary, fmt.Errorf("scanning source containers: %w", err)
 	}
 
-	store, err := sqlite.Open(dbPath)
+	store, err := jagstore.OpenBackend(backend, dbPath)
 	if err != nil {
 		return summary, fmt.Errorf("opening %s: %w", dbPath, err)
 	}
@@ -103,6 +109,9 @@ func EnumerateSourceContainerIDs(root string) ([]string, error) {
 			return err
 		}
 		if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".hjson") {
+			return nil
+		}
+		if filepath.Dir(path) == filepath.Clean(root) && filepath.Base(path) == "metadata.hjson" {
 			return nil
 		}
 		info, err := importerhjson.ClassifyPath(root, path)

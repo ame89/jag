@@ -4,13 +4,27 @@ import (
 	"fmt"
 
 	coremodel "github.com/ame89/jag/pkg/core/model"
-	"github.com/ame89/jag/pkg/sqlite"
 )
 
 // pageLimit bounds each ModelStore.AllX call — see pkg/sqlite/
 // model_export.go's doc comment for the cursor-pagination shape this
 // mirrors.
 const pageLimit = 5000
+
+// ModelStore is the subset of *sqlite.ModelStore/*postgres.ModelStore
+// that Load needs (the paginated AllX read methods) — declared as an
+// interface here (rather than importing pkg/sqlite directly) so Load
+// works against either backend; both concrete types already implement
+// this method set structurally (see pkg/sqlite/model_export.go and its
+// pkg/postgres counterpart), so every existing caller passing a
+// *sqlite.ModelStore keeps compiling unchanged.
+type ModelStore interface {
+	AllContainers(afterID string, limit int) ([]coremodel.Container, error)
+	AllEquipment(afterID string, limit int) ([]coremodel.Equipment, error)
+	AllEdges(afterID string, limit int) ([]coremodel.Edge, error)
+	AllAttributes(afterID string, limit int) ([]coremodel.Attribute, error)
+	AllGeometry(afterID string, limit int) ([]coremodel.Geometry, error)
+}
 
 // Snapshot holds one whole persisted model, read back out of ModelStore
 // via its paginated AllX methods, indexed for the grouping/lookup this
@@ -31,7 +45,7 @@ type Snapshot struct {
 }
 
 // Load reads the entire model out of store into a Snapshot.
-func Load(store *sqlite.ModelStore) (*Snapshot, error) {
+func Load(store ModelStore) (*Snapshot, error) {
 	s := &Snapshot{
 		Containers:           map[string]coremodel.Container{},
 		ChildrenByParent:     map[string][]coremodel.Container{},

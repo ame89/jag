@@ -49,5 +49,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Mirror the current global Metadata record (see pkg/core/metadata)
+	// into metadata.hjson at the export root, if one has ever been
+	// recorded for this database (a database that has never completed an
+	// import via cmd/phase2check/cmd/hjsonimport has no Metadata yet, in
+	// which case no metadata.hjson is written).
+	if meta, ok, err := store.Metadata().Get(); err != nil {
+		fmt.Fprintf(os.Stderr, "reading metadata: %v\n", err)
+		os.Exit(1)
+	} else if ok {
+		if err := exporthjson.WriteMetadata(outRoot, meta); err != nil {
+			fmt.Fprintf(os.Stderr, "writing metadata.hjson: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	fmt.Printf("wrote %d files under %s\n", len(outputs), outRoot)
 }

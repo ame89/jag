@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/ame89/jag/pkg/jagdb"
 )
 
 // --- EnumerateSourceContainerIDs --------------------------------------
@@ -145,7 +147,7 @@ func TestPruneRemoved_DeletesContainerWhoseFileWasRemoved(t *testing.T) {
 		t.Fatalf("removing S-2.hjson: %v", err)
 	}
 
-	summary, err := PruneRemoved(root, dbPath)
+	summary, err := PruneRemoved(root, jagdb.SQLite, dbPath)
 	if err != nil {
 		t.Fatalf("PruneRemoved: %v", err)
 	}
@@ -174,7 +176,7 @@ func TestPruneRemoved_TopLevelContainerSurvivesWhenSourceUnchanged(t *testing.T)
 		t.Fatalf("initial Run: %v", err)
 	}
 
-	summary, err := PruneRemoved(root, dbPath)
+	summary, err := PruneRemoved(root, jagdb.SQLite, dbPath)
 	if err != nil {
 		t.Fatalf("PruneRemoved: %v", err)
 	}
@@ -204,7 +206,7 @@ func TestPruneRemoved_ThenKeepExistingFileRunReproducesApplyWorkflow(t *testing.
 		t.Fatalf("removing S-2.hjson: %v", err)
 	}
 
-	if _, err := PruneRemoved(root, dbPath); err != nil {
+	if _, err := PruneRemoved(root, jagdb.SQLite, dbPath); err != nil {
 		t.Fatalf("PruneRemoved: %v", err)
 	}
 

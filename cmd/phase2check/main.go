@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coremodel "github.com/ame89/jag/pkg/core/model"
+	"github.com/ame89/jag/pkg/core/metadata"
 	"github.com/ame89/jag/pkg/core/staging"
 	"github.com/ame89/jag/pkg/impl/common"
 	"github.com/ame89/jag/pkg/importer/phase1"
@@ -271,6 +272,11 @@ func main() {
 	// entire database file, so very large databases may want to skip it
 	// for a given import and run it separately/later instead.
 	skipVacuum := os.Getenv("JAG_SKIP_VACUUM") == "1"
+	// JAG_IMPORT_LABEL is an optional, free-text label recorded alongside
+	// the global Metadata record (see pkg/core/metadata) once this import
+	// completes successfully — purely descriptive, e.g.
+	// "reimport after bugfix X"; empty is fine.
+	importLabel := os.Getenv("JAG_IMPORT_LABEL")
 
 	// JAG_CHUNK_SIZE controls the cursor-based batch size (staging.Store.
 	// GetByClass "limit" argument) used by every per-class scan below
@@ -372,6 +378,7 @@ func main() {
 	var store storeCloser
 	var modelStore modelWriter
 	var flags common.FlagStore
+	var metadataStore metadata.Store
 	switch backend {
 	case jagdb.Postgres:
 		pg, err := postgres.Open(dbConn)
@@ -382,6 +389,7 @@ func main() {
 		store = pg
 		modelStore = pg.Model()
 		flags = pg.Flags()
+		metadataStore = pg.Metadata()
 		fmt.Println("using postgres backend")
 	case jagdb.SQLite:
 		sq, err := sqlite.Open(dbConn)
@@ -392,6 +400,7 @@ func main() {
 		store = sq
 		modelStore = sq.Model()
 		flags = sq.Flags()
+		metadataStore = sq.Metadata()
 		fmt.Printf("using sqlite file: %s\n", dbConn)
 	}
 	defer store.Close()
@@ -587,6 +596,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
+
+	// Import completed without a fatal error: overwrite the single global
+	// Metadata record (see pkg/core/metadata) with a freshly allocated
+	// Number, the current UTC timestamp, and the optional
+	// JAG_IMPORT_LABEL. This is deliberately independent of
+	// result.Version (see metadata.Store's doc comment) and only ever
+	// advances on a successful import, never on a failed/aborted one.
+	meta, err := metadataStore.Record(importLabel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "recording metadata: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("metadata: number=%d timestamp=%s label=%q\n", meta.Number, meta.Timestamp.Format(time.RFC3339), meta.Label)
 
 	byOwner := sink.byOwner
 	if len(byOwner) > 0 {

@@ -3,17 +3,18 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
+
+	coremodel "github.com/ame89/jag/pkg/core/model"
 )
 
 // ContainerDeleteSummary reports what one DeleteContainers call actually
 // removed, so callers (e.g. jaggit's incremental import, see its SPEC.md)
-// can log/verify the outcome.
-type ContainerDeleteSummary struct {
-	Containers int
-	Equipment  int
-	Edges      int
-	Nodes      int
-}
+// can log/verify the outcome. Aliased to the shared coremodel type (see
+// pkg/core/model/container_delete.go) so backend-agnostic callers (see
+// pkg/jagstore) can work with either backend's DeleteContainers without a
+// conversion — pkg/postgres's identical type aliases the same underlying
+// type.
+type ContainerDeleteSummary = coremodel.ContainerDeleteSummary
 
 // ListContainerIDs returns every model_container.id currently stored.
 // Intended for callers that need to diff "containers currently in the DB"

@@ -28,15 +28,10 @@ func main() {
 	}
 
 	// JAG_DATABASE selects backend + connection string/path (see
-	// pkg/jagdb's doc comment). hjsonimport.Run is SQLite-only for now,
-	// so a postgres:// value is a hard error here.
+	// pkg/jagdb's doc comment).
 	backend, dbPath, err := jagdb.FromEnv()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if backend != jagdb.SQLite {
-		fmt.Fprintf(os.Stderr, "hjsonimport: only sqlite:// is supported, got backend %q\n", backend)
 		os.Exit(1)
 	}
 
@@ -45,6 +40,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	opts.Backend = backend
 
 	if _, err := hjsonimport.Run(root, dbPath, opts); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -84,5 +80,6 @@ func optionsFromEnv() (hjsonimport.Options, error) {
 	}
 	opts.KeepStaging = os.Getenv("JAG_KEEP_STAGING") == "1"
 	opts.SkipVacuum = os.Getenv("JAG_SKIP_VACUUM") == "1"
+	opts.Label = os.Getenv("JAG_IMPORT_LABEL")
 	return opts, nil
 }

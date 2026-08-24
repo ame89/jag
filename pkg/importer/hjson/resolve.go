@@ -44,6 +44,13 @@ func FindFiles(root string) ([]FileInfo, error) {
 		if fi.IsDir() || !strings.HasSuffix(path, ".hjson") {
 			return nil
 		}
+		// metadata.hjson at the export root (see
+		// pkg/exporter/hjson.WriteMetadata) is not a Fachmodell element
+		// file — pkg/impl/hjsonimport reads it separately (see
+		// ParseMetadataFile) — so it must not be classified/emitted here.
+		if filepath.Dir(path) == filepath.Clean(root) && filepath.Base(path) == "metadata.hjson" {
+			return nil
+		}
 		info, err := ClassifyPath(root, path)
 		if err != nil {
 			return err

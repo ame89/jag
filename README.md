@@ -18,16 +18,16 @@ Umgebungsvariablen, um die Verarbeitung zu steuern, ohne den Code anzufassen:
 | `JAG_CPU_PROFILE` | Pfad, unter dem ein `pprof`-CPU-Profil des gesamten Laufs geschrieben wird. | unset (kein Profil) |
 | `JAG_KEEP_STAGING` | `1` überspringt das automatische Aufräumen von `staging_records`/`staging_errors` (und `import_flag`), das sonst nach einem erfolgreich abgeschlossenen Import läuft (`common.FinalizeImport`) — Staging ist reine, versionsscoped Phase-1-Zwischenablage, die Phase 2/3 nach erfolgreichem Lauf nicht mehr braucht. Setzen, falls dieselbe Datenbank auch mit `internal/jag2nsc`s Postgres-only `NSC_SUPPORT`-Feature (`BuildTopology`/`BuildNetworkGroup`/`BuildCircuits`) genutzt wird, das `staging_records` direkt liest. | unset (Staging wird nach Erfolg gelöscht) |
 | `JAG_SKIP_VACUUM` | `1` überspringt das automatische `VACUUM`, das sonst nach einem erfolgreich abgeschlossenen Import per Default läuft (`common.FinalizeImport`/`staging.Store.Vacuum`) — SQLite/Postgres geben durch `DeleteVersion` bzw. Pass A/B's Delete-dann-Insert-Re-Upsert-Muster frei gewordene Seiten nie ans Dateisystem zurück, sondern verwalten sie intern in einer Freelist; ohne `VACUUM` besteht die Datenbankdatei dadurch zu einem großen Teil (am `lasttest-200`-Datensatz gemessen: ~76 %) aus ungenutzten Freelist-Seiten. `VACUUM` schreibt dafür die gesamte Datei neu (Laufzeit-/temporärer-Speicherplatz-Kosten) — bei sehr großen Datenbanken ggf. bewusst überspringen und separat/später laufen lassen. | unset (VACUUM läuft nach Erfolg) |
+| `JAG_IMPORT_LABEL` | Optionales, frei wählbares Label, das nach einem erfolgreich abgeschlossenen Import zusammen mit dem globalen Metadata-Datensatz (`pkg/core/metadata`, ein einzelner, bei jedem erfolgreichen Import überschriebener Datensatz mit `Number`/`Timestamp`/`Label`) gespeichert wird (`metadata.Store.Record`). Bleibt es leer, wird automatisch `"v"+Number` verwendet (siehe `pkg/core/metadata`'s Doc-Kommentar). | unset (Default-Label `"v"+Number`) |
 
 **`cmd/hjsonimport`/`cmd/hjsonwatch`/`cmd/hjsonimport-deprecated`** (die Fachmodell-HJSON-Treiber,
-siehe Konzept.md's "HJSON Fachmodell"-Abschnitt) lesen dieselben sieben Variablen `JAG_DATABASE`,
+siehe Konzept.md's "HJSON Fachmodell"-Abschnitt) lesen dieselben acht Variablen `JAG_DATABASE`,
 `JAG_CHUNK_SIZE`, `JAG_STATION_BATCH_SIZE`, `JAG_STATION_WORKERS`, `JAG_PASS_B_WORKERS`,
-`JAG_PASS_B_BATCH_SIZE`, `JAG_KEEP_STAGING` und `JAG_SKIP_VACUUM` mit identischen Defaults —
-`JAG_FORCE_NSC` (HJSON hat keine CIM/CGMES/NSC-Dialekterkennung) und `JAG_CPU_PROFILE` (kein
-CPU-Profiling) gelten dort nicht. **Wichtige Einschränkung**: diese drei HJSON-Treiber
-unterstützen aktuell ausschließlich das SQLite-Backend — `JAG_DATABASE` muss dort mit
-`sqlite://` beginnen, ein `postgres://`-Wert wird mit einem Fehler abgelehnt (das
-PostgreSQL-Backend ist dort (noch) nicht verdrahtet). `cmd/hjsonexport` liest keine
+`JAG_PASS_B_BATCH_SIZE`, `JAG_KEEP_STAGING`, `JAG_SKIP_VACUUM` und `JAG_IMPORT_LABEL` mit
+identischen Defaults — `JAG_FORCE_NSC` (HJSON hat keine CIM/CGMES/NSC-Dialekterkennung) und
+`JAG_CPU_PROFILE` (kein CPU-Profiling) gelten dort nicht. Diese drei HJSON-Treiber unterstützen
+inzwischen sowohl das SQLite- als auch das PostgreSQL-Backend (`JAG_DATABASE` mit `sqlite://`
+oder `postgres://`-Präfix, siehe `pkg/jagstore`). `cmd/hjsonexport` liest keine
 `JAG_*`-Variablen; es wird ausschließlich über Positionsargumente (`<db-path> <output-root>
 [default-netzregion]`) gesteuert.
 

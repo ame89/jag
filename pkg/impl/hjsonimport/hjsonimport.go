@@ -7,13 +7,17 @@ package hjsonimport
 
 import (
 	"fmt"
-	"os"
 	"time"
 
+	"path/filepath"
+
+	coremetadata "github.com/ame89/jag/pkg/core/metadata"
 	coremodel "github.com/ame89/jag/pkg/core/model"
 	"github.com/ame89/jag/pkg/impl/common"
 	"github.com/ame89/jag/pkg/importer/phase1"
-	"github.com/ame89/jag/pkg/sqlite"
+	importerhjson "github.com/ame89/jag/pkg/importer/hjson"
+	"github.com/ame89/jag/pkg/jagdb"
+	"github.com/ame89/jag/pkg/jagstore"
 )
 
 const persistChunkSize = 1000
@@ -52,6 +56,19 @@ type Options struct {
 	// cmd/hjsonwatch) never set this, so their full-rebuild behavior is
 	// completely unchanged.
 	KeepExistingFile bool
+	// Backend selects which storage backend dbPath addresses (see
+	// pkg/jagdb's doc comment for the concrete values) — the zero value
+	// (jagdb.Unknown) is treated exactly like jagdb.SQLite, so every
+	// existing caller that never sets this field keeps its previous
+	// SQLite-only behavior unchanged. dbPath itself is always the raw
+	// connection string/path (no "sqlite://"/"postgres://" prefix) —
+	// callers that start from a prefixed JAG_DATABASE-style value should
+	// resolve it via jagdb.Parse first (see cmd/hjsonimport/main.go).
+	Backend jagdb.Backend
+	// Label is an optional, free-text label recorded alongside the
+	// global Metadata record (see pkg/core/metadata) once this import
+	// completes successfully — purely descriptive; empty is fine.
+	Label string
 	// OnFile, if set, is invoked with each Fachmodell file's path
 	// immediately before phase1 parses it (see
 	// pkg/importer/hjson.Emit's onFile parameter, which this is
@@ -68,6 +85,11 @@ type Summary struct {
 	Containers, Equipment, Nodes, Edges int
 	Attributes, Geometries              int
 	Elapsed                             time.Duration
+	// Metadata is the global Metadata record (see pkg/core/metadata) as
+	// it stood immediately after this run recorded/adopted it — callers
+	// (e.g. jaggit's apply command) can print it without having to
+	// re-open the store themselves.
+	Metadata coremetadata.Metadata
 }
 
 func chunkUpsert[T any](items []T, upsert func([]T) error) error {
@@ -83,11 +105,23 @@ func chunkUpsert[T any](items []T, upsert func([]T) error) error {
 	return nil
 }
 
+// backendLabel returns a human-readable backend name for Run's "using ...
+// store" log line — jagdb.Backend.String() already returns "sqlite"/
+// "postgres"/"unknown", but Options.Backend's zero value (jagdb.Unknown)
+// means "SQLite" here (see its doc comment), so that case is special-
+// cased rather than printing the misleading "unknown".
+func backendLabel(b jagdb.Backend) string {
+	if b == jagdb.Unknown {
+		return jagdb.SQLite.String()
+	}
+	return b.String()
+}
+
 // countingSink is common.Sink's minimal implementation: it persists
 // straight into ModelStore and only keeps small running counts for the
 // final summary, never a whole-model slice.
 type countingSink struct {
-	model     *sqlite.ModelStore
+	model     jagstore.ModelStore
 	attrCount int
 	geomCount int
 }
@@ -108,29 +142,33 @@ func (s *countingSink) WriteGeometries(batch []coremodel.Geometry) error {
 	return nil
 }
 
-// Run parses the *.hjson tree under root and persists it into a SQLite
-// file at dbPath. By default (opts.KeepExistingFile == false, matching
-// every existing caller's behavior) any existing file at dbPath is
-// deleted first, same as cmd/hjsonimport has always done — a full
-// rebuild, not an incremental update. If opts.KeepExistingFile is set, an
-// existing file is instead opened and built on top of via the same
-// Upsert* calls (see Options.KeepExistingFile's doc comment for the
-// intended use case). Progress lines are printed to stdout as the
-// pipeline runs, matching cmd/hjsonimport's existing CLI output.
+// Run parses the *.hjson tree under root and persists it into the store
+// addressed by dbPath/opts.Backend (a SQLite file path by default, or a
+// PostgreSQL DSN if opts.Backend is jagdb.Postgres — see Options.Backend's
+// doc comment). By default (opts.KeepExistingFile == false, matching
+// every existing caller's behavior) any existing data at dbPath is wiped
+// first (see jagstore.ResetBackend) — a full rebuild, not an incremental
+// update. If opts.KeepExistingFile is set, the existing store is instead
+// opened and built on top of via the same Upsert* calls (see
+// Options.KeepExistingFile's doc comment for the intended use case).
+// Progress lines are printed to stdout as the pipeline runs, matching
+// cmd/hjsonimport's existing CLI output.
 func Run(root, dbPath string, opts Options) (Summary, error) {
 	var summary Summary
 
 	if !opts.KeepExistingFile {
-		os.Remove(dbPath)
+		if err := jagstore.ResetBackend(opts.Backend, dbPath); err != nil {
+			return summary, fmt.Errorf("clearing existing store: %w", err)
+		}
 	}
 
 	overallStart := time.Now()
-	store, err := sqlite.Open(dbPath)
+	store, err := jagstore.OpenBackend(opts.Backend, dbPath)
 	if err != nil {
 		return summary, fmt.Errorf("opening store: %w", err)
 	}
 	defer store.Close()
-	fmt.Printf("using sqlite file: %s\n", dbPath)
+	fmt.Printf("using %s store: %s\n", backendLabel(opts.Backend), dbPath)
 	modelStore := store.Model()
 	flags := store.Flags()
 
@@ -276,7 +314,59 @@ func Run(root, dbPath string, opts Options) (Summary, error) {
 		return summary, err
 	}
 
+	// Import completed without a fatal error: update the single global
+	// Metadata record (see pkg/core/metadata). Two cases:
+	//   - This database has no Metadata yet (the common case: Run's
+	//     default behavior deletes any pre-existing dbPath first) AND
+	//     root/metadata.hjson exists (e.g. re-importing a tree exported
+	//     by cmd/hjsonexport from another database): adopt that file's
+	//     Number/Timestamp/Label verbatim via Set — this restores the
+	//     original database's Metadata unchanged rather than minting a
+	//     new one, so a plain export->import round-trip doesn't silently
+	//     reset Number back to 1.
+	//   - Otherwise (no metadata.hjson, or this database already has a
+	//     Metadata record — e.g. opts.KeepExistingFile): fall back to the
+	//     normal Record flow, allocating a fresh Number, the current UTC
+	//     timestamp, and opts.Label.
+	meta, err := recordOrAdoptMetadata(store, root, opts.Label)
+	if err != nil {
+		return summary, fmt.Errorf("recording metadata: %w", err)
+	}
+	summary.Metadata = meta
+	fmt.Printf("metadata: number=%d timestamp=%s label=%q\n", meta.Number, meta.Timestamp.Format(time.RFC3339), meta.Label)
+
 	fmt.Printf("total: %s\n", summary.Elapsed)
 
 	return summary, nil
+}
+
+// recordOrAdoptMetadata implements the two-case Metadata update Run's
+// doc comment above describes: adopt root/metadata.hjson verbatim (via
+// Set) if this store has no Metadata record yet and that file exists,
+// otherwise fall back to the normal Record flow (allocating a fresh
+// Number, the current UTC timestamp, and label).
+func recordOrAdoptMetadata(store jagstore.Store, root, label string) (coremetadata.Metadata, error) {
+	metaStore := store.Metadata()
+	_, hasExisting, err := metaStore.Get()
+	if err != nil {
+		return coremetadata.Metadata{}, fmt.Errorf("reading existing metadata: %w", err)
+	}
+	if !hasExisting {
+		mf, err := importerhjson.ParseMetadataFile(filepath.Join(root, "metadata.hjson"))
+		if err != nil {
+			return coremetadata.Metadata{}, fmt.Errorf("parsing metadata.hjson: %w", err)
+		}
+		if mf != nil {
+			ts, err := time.Parse(time.RFC3339Nano, mf.Timestamp)
+			if err != nil {
+				return coremetadata.Metadata{}, fmt.Errorf("parsing metadata.hjson timestamp %q: %w", mf.Timestamp, err)
+			}
+			adopted := coremetadata.Metadata{Number: mf.Number, Timestamp: ts, Label: mf.Label}
+			if err := metaStore.Set(adopted); err != nil {
+				return coremetadata.Metadata{}, fmt.Errorf("adopting metadata.hjson: %w", err)
+			}
+			return adopted, nil
+		}
+	}
+	return metaStore.Record(label)
 }

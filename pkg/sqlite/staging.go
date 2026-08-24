@@ -144,6 +144,12 @@ func Open(path string) (*StagingStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("sqlite: creating model schema: %w", err)
 	}
+	// Global Metadata record schema (see metadata.go) — created here too
+	// so a freshly opened database is always ready for MetadataStore.
+	if _, err := db.Exec(metadataSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite: creating metadata schema: %w", err)
+	}
 
 	return &StagingStore{db: db}, nil
 }

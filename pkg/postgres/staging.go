@@ -137,6 +137,12 @@ func Open(dsn string) (*StagingStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("postgres: creating model schema: %w", err)
 	}
+	// Global Metadata record schema (see metadata.go) — created here too
+	// so a freshly opened database is always ready for MetadataStore.
+	if err := execSchema(db, metadataSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("postgres: creating metadata schema: %w", err)
+	}
 
 	return &StagingStore{db: db}, nil
 }
