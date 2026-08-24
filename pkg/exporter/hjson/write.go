@@ -1,6 +1,7 @@
 package hjson
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -26,7 +27,25 @@ import (
 // entirely and guarantees this exporter's own output can always be read
 // back by ParseFile.
 func Write(root string, outputs []FileOutput) error {
-	for _, o := range outputs {
+	return WriteContext(context.Background(), root, outputs, nil)
+}
+
+// ProgressFunc is called by WriteContext after each FileOutput has been
+// successfully written, with done being the number of files written so
+// far (1-based) and total the overall number of files (len(outputs)).
+// Callers can use it to render a progress bar/percentage.
+type ProgressFunc func(done, total int)
+
+// WriteContext behaves exactly like Write, but additionally accepts a
+// context (checked before every file write, so a cancelled ctx aborts the
+// remaining writes and returns ctx.Err() — e.g. for Ctrl-C handling) and
+// an optional onProgress callback invoked after each file (may be nil).
+func WriteContext(ctx context.Context, root string, outputs []FileOutput, onProgress ProgressFunc) error {
+	total := len(outputs)
+	for i, o := range outputs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		segs := []string{root, sanitizeSegment(o.Netzregion)}
 		for _, part := range strings.Split(o.SubNetzregion, "/") {
 			if part == "" {
@@ -44,6 +63,9 @@ func Write(root string, outputs []FileOutput) error {
 		writeFile(&b, o.File)
 		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 			return fmt.Errorf("hjson export: writing %s: %w", path, err)
+		}
+		if onProgress != nil {
+			onProgress(i+1, total)
 		}
 	}
 	return nil
